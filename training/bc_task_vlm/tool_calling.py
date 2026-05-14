@@ -114,7 +114,6 @@ def build_assistant_tool_call_message(
     return {
         "role": "assistant",
         "content": "",
-        "reasoning_content": "",
         "tool_calls": [
             {
                 "type": "function",

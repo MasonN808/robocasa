@@ -66,10 +66,39 @@ def build_user_prompt(
     observation_views: list[str],
     history_steps: list[dict[str, Any]],
     allowed_tool_specs: dict[str, dict[str, Any]],
+    sft_format: str = "tool_call",
 ) -> str:
     """Builds the text block that accompanies the current image observation."""
 
     observations_text = ", ".join(observation_views) if observation_views else "unknown"
+    if sft_format == "plain":
+        output_rules = (
+            "Rules:\n"
+            "- Predict exactly one next action.\n"
+            "- Use symbolic IDs only, never concrete simulator IDs.\n"
+            "- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n"
+            "- The tool must be one of the allowed tools listed above.\n"
+            "- Supply exactly the arguments required by the selected tool.\n"
+            "- Prefer the most immediate executable next action.\n\n"
+            "Output format:\n"
+            '- Return exactly one compact JSON object with keys "tool" and "args".\n'
+            "- Do not emit markdown or narrative outside the JSON object."
+        )
+    elif sft_format == "tool_call":
+        output_rules = (
+            "The tool schemas are provided separately as function definitions.\n\n"
+            "Rules:\n"
+            "- Predict exactly one next tool call.\n"
+            "- Use symbolic IDs only, never concrete simulator IDs.\n"
+            "- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n"
+            "- The tool must be one of the allowed tools listed above.\n"
+            "- Supply exactly the arguments required by the selected tool.\n"
+            "- Prefer the most immediate executable next action.\n"
+            "- Do not emit markdown or narrative after the tool call."
+        )
+    else:
+        raise ValueError(f"Unsupported SFT format: {sft_format!r}")
+
     return (
         f"Task family: {composite_task}\n"
         f"Task instruction: {task_instruction}\n"
@@ -80,15 +109,7 @@ def build_user_prompt(
         f"{format_history_steps(history_steps)}\n\n"
         "Available tools for this task:\n"
         f"{format_allowed_tool_block(allowed_tool_specs)}\n\n"
-        "The tool schemas are provided separately as function definitions.\n\n"
-        "Rules:\n"
-        "- Predict exactly one next tool call.\n"
-        "- Use symbolic IDs only, never concrete simulator IDs.\n"
-        "- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n"
-        "- The tool must be one of the allowed tools listed above.\n"
-        "- Supply exactly the arguments required by the selected tool.\n"
-        "- Prefer the most immediate executable next action.\n"
-        "- Do not emit markdown or narrative after the tool call."
+        f"{output_rules}"
     )
 
 
@@ -112,19 +133,34 @@ def build_user_message(*, user_prompt: str, num_images: int) -> dict[str, Any]:
     }
 
 
+def build_assistant_text_message(*, target_text: str) -> dict[str, Any]:
+    """Builds one assistant text message for plain SFT supervision."""
+
+    return {
+        "role": "assistant",
+        "content": target_text,
+    }
+
+
 def build_messages(
     *,
     user_prompt: str,
     num_images: int,
     target_tool_call: dict[str, Any] | None = None,
+    target_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """Builds one chat conversation for training or generation."""
+
+    if target_tool_call is not None and target_text is not None:
+        raise ValueError("Provide either target_tool_call or target_text, not both.")
 
     messages: list[dict[str, Any]] = [
         build_system_message(),
         build_user_message(user_prompt=user_prompt, num_images=num_images),
     ]
-    if target_tool_call is not None:
+    if target_text is not None:
+        messages.append(build_assistant_text_message(target_text=target_text))
+    elif target_tool_call is not None:
         from training.bc_task_vlm.tool_calling import build_assistant_tool_call_message
 
         messages.append(

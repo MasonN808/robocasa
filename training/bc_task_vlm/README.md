@@ -14,18 +14,20 @@
 This directory contains a multi-GPU supervised fine-tuning pipeline for image-conditioned next-step prediction on the rendered task-level dataset.
 
 The default checkpoint is `Qwen/Qwen3.5-0.8B`, not `Qwen/Qwen3.5-0.8B-Base`. This
-pipeline uses chat-formatted supervision with tool schemas and assistant
-tool-call targets, so the post-trained checkpoint is the better default when
-you need structured outputs during SFT and evaluation.
+pipeline uses chat-formatted supervision and can train either plain assistant
+text targets or Qwen/Hugging Face tool-call targets.
 
-Training uses task-local JSON Schema tool definitions passed through
-`apply_chat_template(..., tools=...)`. By default, each joint two-agent
-demonstration is converted into two training conversations, one per agent. The
-global mixed-agent execution history stays in the user prompt, but only the
-selected agent's assistant tool-call turns contribute to the loss. Validation
-still uses one-step next-tool prediction, and the predicted action itself is
-trained as an actual Qwen/Hugging Face tool call rather than a custom
-`{"steps":[...]}` blob.
+`--sft-format plain` is the default. It trains direct assistant text token
+prediction with compact JSON targets such as `{"tool":"...","args":{...}}` and
+does not pass tool schemas into `apply_chat_template(...)`. Use
+`--sft-format tool_call` to train actual Qwen/Hugging Face function-call
+messages and enable structured generation evaluation.
+
+By default, each joint two-agent demonstration is converted into two training
+conversations, one per agent. The global mixed-agent execution history stays in
+the user prompt, but only the selected agent's assistant turns contribute to the
+loss. Validation remains step-level in both SFT formats; structured action
+accuracy metrics are only emitted for `--sft-format tool_call`.
 
 ## Training Modes
 
@@ -73,6 +75,7 @@ Useful flags:
 
 - `--use-example-cache` / `--no-use-example-cache`
 - `--training-samples-cache-dir /path/to/cache`
+- `--sft-format plain` / `--sft-format tool_call`
 
 Use the post-trained checkpoint for launches unless you have a specific reason
 to compare against the pre-trained-only base model:

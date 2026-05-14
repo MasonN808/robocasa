@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -73,6 +74,9 @@ class DecentralizedExampleTests(unittest.TestCase):
                 roles[1:],
                 ["user", "assistant"] * example.num_target_steps,
             )
+            for message in example.messages:
+                if message["role"] == "assistant":
+                    self.assertNotIn("reasoning_content", message)
 
             num_image_placeholders = sum(
                 1
@@ -81,6 +85,50 @@ class DecentralizedExampleTests(unittest.TestCase):
                 if isinstance(item, dict) and item.get("type") == "image"
             )
             self.assertEqual(num_image_placeholders, len(example.image_paths))
+
+    def test_plain_sft_centralized_examples_use_text_targets(self):
+        dataset_root = self._build_single_trajectory_dataset_root()
+        examples = build_centralized_examples(
+            dataset_root=dataset_root,
+            task_names=["hot_dog_setup"],
+            sft_format="plain",
+        )
+
+        self.assertTrue(examples)
+        example = examples[0]
+        assistant_message = example.messages[-1]
+        target = json.loads(example.target_text)
+
+        self.assertEqual(example.response_schema, {})
+        self.assertEqual(set(target), {"tool", "args"})
+        self.assertNotIn("reasoning", target)
+        self.assertNotIn("reasoning", example.target_payload["steps"][0])
+        self.assertEqual(assistant_message["role"], "assistant")
+        self.assertEqual(assistant_message["content"], example.target_text)
+        self.assertNotIn("tool_calls", assistant_message)
+        self.assertNotIn("reasoning_content", assistant_message)
+
+    def test_plain_sft_decentralized_examples_use_text_targets(self):
+        dataset_root = self._build_single_trajectory_dataset_root()
+        examples = build_decentralized_examples(
+            dataset_root=dataset_root,
+            task_names=["hot_dog_setup"],
+            sft_format="plain",
+        )
+
+        self.assertTrue(examples)
+        for example in examples:
+            assistant_messages = [
+                message
+                for message in example.messages
+                if message["role"] == "assistant"
+            ]
+            self.assertEqual(len(assistant_messages), example.num_target_steps)
+            for message in assistant_messages:
+                target = json.loads(message["content"])
+                self.assertNotIn("reasoning", target)
+                self.assertNotIn("tool_calls", message)
+                self.assertNotIn("reasoning_content", message)
 
     def test_decentralized_examples_round_trip_through_cache(self):
         dataset_root = self._build_single_trajectory_dataset_root()
@@ -113,6 +161,26 @@ class DecentralizedExampleTests(unittest.TestCase):
         )
 
         self.assertEqual(cached_examples, decentralized_examples)
+
+    def test_cache_fingerprint_includes_sft_format(self):
+        dataset_root = self._build_single_trajectory_dataset_root()
+
+        tool_call_fingerprint = build_example_cache_fingerprint(
+            dataset_root=dataset_root,
+            task_name="hot_dog_setup",
+            granularity="decentralized",
+            sft_format="tool_call",
+        )
+        plain_fingerprint = build_example_cache_fingerprint(
+            dataset_root=dataset_root,
+            task_name="hot_dog_setup",
+            granularity="decentralized",
+            sft_format="plain",
+        )
+
+        self.assertNotEqual(tool_call_fingerprint, plain_fingerprint)
+        self.assertEqual(tool_call_fingerprint["sft_format"], "tool_call")
+        self.assertEqual(plain_fingerprint["sft_format"], "plain")
 
     def test_cache_invalidates_when_trajectory_inputs_change(self):
         dataset_root = self._build_single_trajectory_dataset_root()

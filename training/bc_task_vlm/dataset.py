@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - optional in lightweight test envs
     tqdm = None
 
 from training.bc_task_vlm.prompting import (
+    build_assistant_text_message,
     build_messages,
     build_system_message,
     build_user_message,
@@ -60,6 +61,9 @@ _TRAJECTORY_METADATA_FILENAMES = (
     "plan.json",
     "metadata.json",
 )
+SFT_FORMAT_PLAIN = "plain"
+SFT_FORMAT_TOOL_CALL = "tool_call"
+SUPPORTED_SFT_FORMATS = (SFT_FORMAT_PLAIN, SFT_FORMAT_TOOL_CALL)
 _EXAMPLE_CACHE_FORMAT_VERSION = 1
 _EXAMPLE_CACHE_DEPENDENCY_PATHS = (
     Path(__file__).resolve(),
@@ -308,23 +312,54 @@ def _ensure_image_paths_exist(
     )
 
 
+def _validate_sft_format(sft_format: str) -> str:
+    if sft_format not in SUPPORTED_SFT_FORMATS:
+        raise ValueError(f"Unsupported SFT format: {sft_format!r}")
+    return sft_format
+
+
+def _raw_step_payload(
+    raw_step: dict[str, Any],
+    *,
+    include_reasoning: bool = True,
+) -> dict[str, Any]:
+    step = {
+        "step": raw_step["step"],
+        "agent": raw_step["agent"],
+        "tool": raw_step["tool"],
+        "args": dict(raw_step["args"]),
+    }
+    if include_reasoning:
+        step["reasoning"] = raw_step["reasoning"]
+    return {"steps": [step]}
+
+
+def _plain_target_text(raw_step: dict[str, Any]) -> str:
+    return compact_json_dumps(
+        {
+            "tool": raw_step["tool"],
+            "args": dict(raw_step["args"]),
+        }
+    )
+
+
 def _build_target_metadata(
     *,
     raw_step: dict[str, Any],
     allowed_tool_specs: dict[str, dict[str, Any]],
+    sft_format: str = SFT_FORMAT_TOOL_CALL,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
+    sft_format = _validate_sft_format(sft_format)
+    if sft_format == SFT_FORMAT_PLAIN:
+        target_payload = _raw_step_payload(raw_step, include_reasoning=False)
+        target_tool_call = {
+            "name": raw_step["tool"],
+            "arguments": dict(raw_step["args"]),
+        }
+        return target_payload, target_tool_call, _plain_target_text(raw_step)
+
     target_payload = validate_single_step_payload(
-        {
-            "steps": [
-                {
-                    "step": raw_step["step"],
-                    "agent": raw_step["agent"],
-                    "tool": raw_step["tool"],
-                    "args": raw_step["args"],
-                    "reasoning": raw_step["reasoning"],
-                }
-            ]
-        },
+        _raw_step_payload(raw_step),
         agent_ids=AGENT_IDS,
         allowed_tool_specs=allowed_tool_specs,
     )
@@ -342,9 +377,11 @@ def build_centralized_examples(
     task_names: list[str],
     show_progress: bool = False,
     progress_description: str | None = None,
+    sft_format: str = SFT_FORMAT_TOOL_CALL,
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step."""
 
+    sft_format = _validate_sft_format(sft_format)
     examples: list[CentralizedExample] = []
 
     for task_name in task_names:
@@ -353,10 +390,13 @@ def build_centralized_examples(
         if not task_root.is_dir():
             raise FileNotFoundError(f"Task directory does not exist: {task_root}")
 
-        response_schema = build_single_step_response_schema(
-            agent_ids=AGENT_IDS,
-            allowed_tool_specs=task_metadata.allowed_tool_specs,
-        )
+        if sft_format == SFT_FORMAT_TOOL_CALL:
+            response_schema = build_single_step_response_schema(
+                agent_ids=AGENT_IDS,
+                allowed_tool_specs=task_metadata.allowed_tool_specs,
+            )
+        else:
+            response_schema = {}
         tool_schemas = build_tool_schemas(
             agent_ids=AGENT_IDS,
             allowed_tool_specs=task_metadata.allowed_tool_specs,
@@ -407,6 +447,7 @@ def build_centralized_examples(
                 target_payload, target_tool_call, target_text = _build_target_metadata(
                     raw_step=raw_step,
                     allowed_tool_specs=task_metadata.allowed_tool_specs,
+                    sft_format=sft_format,
                 )
                 user_prompt = build_user_prompt(
                     composite_task=task_metadata.composite_task,
@@ -416,7 +457,13 @@ def build_centralized_examples(
                     observation_views=observation_views,
                     history_steps=history_steps,
                     allowed_tool_specs=task_metadata.allowed_tool_specs,
+                    sft_format=sft_format,
                 )
+                message_kwargs: dict[str, Any]
+                if sft_format == SFT_FORMAT_PLAIN:
+                    message_kwargs = {"target_text": target_text}
+                else:
+                    message_kwargs = {"target_tool_call": target_tool_call}
                 sample_id = f"{task_metadata.dataset_name}/{trajectory_id}/step_{raw_step['step']:06d}"
                 examples.append(
                     CentralizedExample(
@@ -439,7 +486,7 @@ def build_centralized_examples(
                         messages=build_messages(
                             user_prompt=user_prompt,
                             num_images=len(image_paths),
-                            target_tool_call=target_tool_call,
+                            **message_kwargs,
                         ),
                     )
                 )
@@ -454,9 +501,11 @@ def build_decentralized_examples(
     task_names: list[str],
     show_progress: bool = False,
     progress_description: str | None = None,
+    sft_format: str = SFT_FORMAT_TOOL_CALL,
 ) -> list[DecentralizedExample]:
     """Builds one conversation per `(trajectory, agent)` training example."""
 
+    sft_format = _validate_sft_format(sft_format)
     examples: list[DecentralizedExample] = []
 
     for task_name in task_names:
@@ -522,9 +571,10 @@ def build_decentralized_examples(
                     image_paths=image_paths,
                 )
 
-                _, target_tool_call, _ = _build_target_metadata(
+                _, target_tool_call, target_text = _build_target_metadata(
                     raw_step=raw_step,
                     allowed_tool_specs=task_metadata.allowed_tool_specs,
+                    sft_format=sft_format,
                 )
                 user_prompt = build_user_prompt(
                     composite_task=task_metadata.composite_task,
@@ -534,6 +584,7 @@ def build_decentralized_examples(
                     observation_views=observation_views,
                     history_steps=history_steps,
                     allowed_tool_specs=task_metadata.allowed_tool_specs,
+                    sft_format=sft_format,
                 )
                 acting_agent = raw_step["agent"]
                 messages_by_agent[acting_agent].append(
@@ -542,12 +593,17 @@ def build_decentralized_examples(
                         num_images=len(image_paths),
                     )
                 )
-                messages_by_agent[acting_agent].append(
-                    build_assistant_tool_call_message(
-                        tool_name=target_tool_call["name"],
-                        arguments=target_tool_call["arguments"],
+                if sft_format == SFT_FORMAT_PLAIN:
+                    messages_by_agent[acting_agent].append(
+                        build_assistant_text_message(target_text=target_text)
                     )
-                )
+                else:
+                    messages_by_agent[acting_agent].append(
+                        build_assistant_tool_call_message(
+                            tool_name=target_tool_call["name"],
+                            arguments=target_tool_call["arguments"],
+                        )
+                    )
                 image_paths_by_agent[acting_agent].extend(image_paths)
                 target_step_indices_by_agent[acting_agent].append(raw_step["step"])
                 history_steps.append(_normalize_history_step(raw_step))
@@ -590,9 +646,11 @@ def build_example_cache_fingerprint(
     dataset_root: Path,
     task_name: str,
     granularity: str,
+    sft_format: str = SFT_FORMAT_TOOL_CALL,
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
 
+    sft_format = _validate_sft_format(sft_format)
     task_metadata = get_task_metadata(task_name)
     task_root = dataset_root / task_metadata.dataset_name
     if not task_root.is_dir():
@@ -604,6 +662,7 @@ def build_example_cache_fingerprint(
         "dataset_root": str(dataset_root.resolve()),
         "task_name": task_metadata.dataset_name,
         "granularity": granularity,
+        "sft_format": sft_format,
         "agent_ids": list(AGENT_IDS),
         "task_metadata": {
             "dataset_name": task_metadata.dataset_name,
@@ -793,10 +852,12 @@ class LazyVisionSFTCollator:
         processor_name_or_path: str,
         max_length: int | None,
         trust_remote_code: bool,
+        sft_format: str = SFT_FORMAT_TOOL_CALL,
     ) -> None:
         self.processor_name_or_path = processor_name_or_path
         self.max_length = max_length
         self.trust_remote_code = trust_remote_code
+        self.sft_format = _validate_sft_format(sft_format)
         self._processor = None
 
     def _get_processor(self):
@@ -820,6 +881,19 @@ class LazyVisionSFTCollator:
             with image_module.open(image_path) as image:
                 images.append(image.convert("RGB"))
         return images
+
+    def _apply_chat_template(
+        self,
+        template_owner,
+        *,
+        feature: dict[str, Any],
+        messages: list[dict[str, Any]],
+        **kwargs,
+    ):
+        template_kwargs = dict(kwargs)
+        if self.sft_format == SFT_FORMAT_TOOL_CALL:
+            template_kwargs["tools"] = feature["tool_schemas"]
+        return template_owner.apply_chat_template(messages, **template_kwargs)
 
     def _tokenize_texts(
         self,
@@ -892,9 +966,10 @@ class LazyVisionSFTCollator:
                 continue
 
             try:
-                template_output = template_owner.apply_chat_template(
-                    feature["messages"],
-                    tools=feature["tool_schemas"],
+                template_output = self._apply_chat_template(
+                    template_owner,
+                    feature=feature,
+                    messages=feature["messages"],
                     tokenize=True,
                     add_generation_prompt=False,
                     return_dict=True,
@@ -949,9 +1024,10 @@ class LazyVisionSFTCollator:
         for message in feature["messages"]:
             prefix_messages.append(message)
             prefix_image_count += self._count_images_in_message(message)
-            prefix_text = processor.apply_chat_template(
-                prefix_messages,
-                tools=feature["tool_schemas"],
+            prefix_text = self._apply_chat_template(
+                processor,
+                feature=feature,
+                messages=prefix_messages,
                 tokenize=False,
                 add_generation_prompt=False,
             )
@@ -1005,9 +1081,10 @@ class LazyVisionSFTCollator:
         images = [self._load_images(feature["image_paths"]) for feature in features]
 
         full_texts = [
-            processor.apply_chat_template(
-                message,
-                tools=feature["tool_schemas"],
+            self._apply_chat_template(
+                processor,
+                feature=feature,
+                messages=message,
                 tokenize=False,
                 add_generation_prompt=False,
             )
@@ -1028,9 +1105,10 @@ class LazyVisionSFTCollator:
         ):
             prompt_messages = [message[:-1] for message in messages]
             prompt_texts = [
-                processor.apply_chat_template(
-                    message,
-                    tools=feature["tool_schemas"],
+                self._apply_chat_template(
+                    processor,
+                    feature=feature,
+                    messages=message,
                     tokenize=False,
                     add_generation_prompt=True,
                     enable_thinking=False,

@@ -28,6 +28,9 @@ from training.bc_task_vlm.dataset import (
     CentralizedDataset,
     DecentralizedDataset,
     LazyVisionSFTCollator,
+    SFT_FORMAT_PLAIN,
+    SFT_FORMAT_TOOL_CALL,
+    SUPPORTED_SFT_FORMATS,
     build_example_cache_fingerprint,
     build_example_cache_path,
     build_centralized_examples,
@@ -52,6 +55,7 @@ class RunConfiguration:
     train_tasks: list[str]
     val_tasks: list[str]
     train_example_granularity: str
+    sft_format: str
     use_example_cache: bool
     training_samples_cache_dir: str
     output_dir: str
@@ -132,7 +136,17 @@ def parse_args() -> argparse.Namespace:
             "Training example format. 'centralized' is one next-action "
             "prediction per global step. 'decentralized' turns each joint "
             "two-agent episode into one conversation per agent and only "
-            "supervises that agent's assistant tool-call turns."
+            "supervises that agent's assistant turns."
+        ),
+    )
+    parser.add_argument(
+        "--sft-format",
+        choices=SUPPORTED_SFT_FORMATS,
+        default=SFT_FORMAT_PLAIN,
+        help=(
+            "'plain' trains assistant text tokens directly. 'tool_call' trains "
+            "Qwen/Hugging Face function-call messages and enables structured "
+            "generation evaluation."
         ),
     )
     parser.add_argument(
@@ -333,6 +347,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         train_tasks=train_tasks,
         val_tasks=val_tasks,
         train_example_granularity=args.train_example_granularity,
+        sft_format=args.sft_format,
         use_example_cache=args.use_example_cache,
         training_samples_cache_dir=str(
             _resolve_training_samples_cache_dir(
@@ -516,6 +531,7 @@ def _build_examples_for_tasks(
     task_names: list[str],
     split_name: str,
     granularity: str,
+    sft_format: str,
     use_example_cache: bool,
     training_samples_cache_dir: Path,
     state: PartialState,
@@ -544,6 +560,7 @@ def _build_examples_for_tasks(
                 dataset_root=dataset_root,
                 task_name=task_name,
                 granularity=granularity,
+                sft_format=sft_format,
             )
             cache_path = build_example_cache_path(
                 cache_dir=training_samples_cache_dir,
@@ -578,6 +595,7 @@ def _build_examples_for_tasks(
                     task_names=[task_name],
                     show_progress=state.is_main_process,
                     progress_description=progress_description,
+                    sft_format=sft_format,
                 )
                 if (
                     use_example_cache
@@ -605,6 +623,7 @@ def _build_examples_for_tasks(
                     task_names=[task_name],
                     show_progress=False,
                     progress_description=progress_description,
+                    sft_format=sft_format,
                 )
 
         examples.extend(task_examples)
@@ -683,6 +702,7 @@ def main() -> None:
         f"Using precision {_selected_mixed_precision(config)}",
         state=distributed_state,
     )
+    _log_startup(f"Using SFT format {config.sft_format}", state=distributed_state)
 
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -693,6 +713,7 @@ def main() -> None:
         task_names=config.train_tasks,
         split_name="train",
         granularity=config.train_example_granularity,
+        sft_format=config.sft_format,
         use_example_cache=config.use_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
         state=distributed_state,
@@ -706,6 +727,7 @@ def main() -> None:
         task_names=config.val_tasks,
         split_name="validation",
         granularity="centralized",
+        sft_format=config.sft_format,
         use_example_cache=config.use_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
         state=distributed_state,
@@ -752,6 +774,7 @@ def main() -> None:
         processor_name_or_path=config.processor_name_or_path,
         max_length=config.max_length,
         trust_remote_code=config.trust_remote_code,
+        sft_format=config.sft_format,
     )
 
     evaluation_strategy = "steps" if len(val_dataset) > 0 else "no"
@@ -793,30 +816,33 @@ def main() -> None:
         trainer.save_metrics("eval", eval_metrics)
 
     trainer.accelerator.wait_for_everyone()
-    if trainer.is_world_process_zero() and len(val_dataset) > 0:
-        _log_startup(
-            "Running structured generation evaluation",
-            state=distributed_state,
-        )
-        unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
-        structured_metrics = evaluate_structured_generation(
-            model=unwrapped_model,
-            eval_dataset=val_dataset,
-            processor_name_or_path=config.processor_name_or_path,
-            output_dir=output_dir,
-            max_length=config.max_length,
-            max_new_tokens=config.eval_max_new_tokens,
-            batch_size=config.eval_generation_batch_size,
-            trust_remote_code=config.trust_remote_code,
-            max_samples=config.eval_generation_max_samples,
-        )
-        trainer.log(structured_metrics)
-        _save_json(
-            output_dir / "final_metrics.json",
-            train_result.metrics | eval_metrics | structured_metrics,
-        )
-    elif trainer.is_world_process_zero():
-        _save_json(output_dir / "final_metrics.json", train_result.metrics)
+    if trainer.is_world_process_zero():
+        final_metrics = train_result.metrics | eval_metrics
+        if len(val_dataset) > 0 and config.sft_format == SFT_FORMAT_TOOL_CALL:
+            _log_startup(
+                "Running structured generation evaluation",
+                state=distributed_state,
+            )
+            unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
+            structured_metrics = evaluate_structured_generation(
+                model=unwrapped_model,
+                eval_dataset=val_dataset,
+                processor_name_or_path=config.processor_name_or_path,
+                output_dir=output_dir,
+                max_length=config.max_length,
+                max_new_tokens=config.eval_max_new_tokens,
+                batch_size=config.eval_generation_batch_size,
+                trust_remote_code=config.trust_remote_code,
+                max_samples=config.eval_generation_max_samples,
+            )
+            trainer.log(structured_metrics)
+            final_metrics |= structured_metrics
+        elif len(val_dataset) > 0:
+            _log_startup(
+                "Skipping structured generation evaluation for plain SFT",
+                state=distributed_state,
+            )
+        _save_json(output_dir / "final_metrics.json", final_metrics)
     trainer.accelerator.wait_for_everyone()
     _log_startup("Run complete", state=distributed_state)
 
