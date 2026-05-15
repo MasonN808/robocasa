@@ -7,6 +7,11 @@ from data_generation.task_level.pipeline.few_shot import load_few_shot_examples
 from data_generation.task_level.tasks import get_task_definition
 from data_generation.task_level.tasks.specs import load_all_task_specs, load_task_spec
 from data_generation.task_level.tasks.specs.runtime import _set_machine_path
+from training.bc_task_vlm.task_registry import (
+    get_task_metadata,
+    resolve_task_name,
+    supported_task_names as supported_bc_task_names,
+)
 
 
 class TaskSpecTests(unittest.TestCase):
@@ -16,6 +21,23 @@ class TaskSpecTests(unittest.TestCase):
             {"HotDogSetup", "PrepareCoffee", "PrepareSandwichStation"}.issubset(
                 spec_names
             )
+        )
+
+    def test_bc_task_vlm_registry_includes_selected_verified_tasks(self):
+        expected_tasks = {
+            "veggie_dip_prep",
+            "tong_buffet_setup",
+            "spicy_marinade",
+            "sweeten_coffee",
+            "setup_wine_glasses",
+        }
+
+        self.assertTrue(expected_tasks.issubset(set(supported_bc_task_names())))
+        self.assertEqual(resolve_task_name("VeggieDipPrep"), "veggie_dip_prep")
+        self.assertEqual(resolve_task_name("veggiedipprep"), "veggie_dip_prep")
+        self.assertEqual(
+            get_task_metadata("setup_wine_glasses").composite_task,
+            "SetupWineGlasses",
         )
 
     def test_hot_dog_setup_spec_builds_runtime_definition(self):

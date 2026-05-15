@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoProcessor
 
+from training.bc_task_vlm.metrics import build_structured_eval_metrics
 from training.bc_task_vlm.schema_utils import (
     canonicalize_for_comparison,
     compact_json_dumps,
@@ -156,6 +157,7 @@ def evaluate_structured_generation(
     valid_tool_calls = 0
     exact_tool_matches = 0
     exact_args_matches = 0
+    exact_tool_call_matches = 0
     exact_action_matches = 0
 
     previous_use_cache = getattr(unwrapped_model.config, "use_cache", None)
@@ -196,6 +198,10 @@ def evaluate_structured_generation(
                     normalized_prediction = None
                     parse_error = None
                     validation_error = None
+                    exact_tool_match = False
+                    exact_args_match = False
+                    exact_tool_call_match = False
+                    exact_action_match = False
 
                     try:
                         parsed_tool_call = parse_first_qwen_tool_call(decoded_text)
@@ -223,13 +229,12 @@ def evaluate_structured_generation(
                     if normalized_prediction is not None:
                         predicted_step = normalized_prediction["steps"][0]
                         target_step = target_payload["steps"][0]
-                        if predicted_step["tool"] == target_step["tool"]:
-                            exact_tool_matches += 1
-                        if canonicalize_for_comparison(
+                        exact_tool_match = predicted_step["tool"] == target_step["tool"]
+                        exact_args_match = canonicalize_for_comparison(
                             predicted_step["args"]
-                        ) == canonicalize_for_comparison(target_step["args"]):
-                            exact_args_matches += 1
-                        if canonicalize_for_comparison(
+                        ) == canonicalize_for_comparison(target_step["args"])
+                        exact_tool_call_match = exact_tool_match and exact_args_match
+                        exact_action_match = canonicalize_for_comparison(
                             {
                                 "step": predicted_step["step"],
                                 "agent": predicted_step["agent"],
@@ -243,7 +248,14 @@ def evaluate_structured_generation(
                                 "tool": target_step["tool"],
                                 "args": target_step["args"],
                             }
-                        ):
+                        )
+                        if exact_tool_match:
+                            exact_tool_matches += 1
+                        if exact_args_match:
+                            exact_args_matches += 1
+                        if exact_tool_call_match:
+                            exact_tool_call_matches += 1
+                        if exact_action_match:
                             exact_action_matches += 1
 
                     handle.write(
@@ -259,6 +271,10 @@ def evaluate_structured_generation(
                                 "parsed_tool_call": parsed_tool_call,
                                 "parse_error": parse_error,
                                 "validation_error": validation_error,
+                                "exact_tool_match": exact_tool_match,
+                                "exact_args_match": exact_args_match,
+                                "exact_tool_call_match": exact_tool_call_match,
+                                "exact_action_step_match": exact_action_match,
                             },
                             ensure_ascii=True,
                         )
@@ -268,19 +284,15 @@ def evaluate_structured_generation(
     if previous_use_cache is not None:
         unwrapped_model.config.use_cache = previous_use_cache
 
-    def rate(count: int) -> float:
-        if total_samples == 0:
-            return 0.0
-        return count / total_samples
-
-    metrics = {
-        "structured_eval_num_samples": float(total_samples),
-        "structured_eval_tool_call_parse_rate": rate(parsed_tool_calls),
-        "structured_eval_tool_call_valid_rate": rate(valid_tool_calls),
-        "structured_eval_exact_tool_accuracy": rate(exact_tool_matches),
-        "structured_eval_exact_args_match_rate": rate(exact_args_matches),
-        "structured_eval_exact_action_step_match_rate": rate(exact_action_matches),
-    }
+    metrics = build_structured_eval_metrics(
+        total_samples=total_samples,
+        parsed_tool_calls=parsed_tool_calls,
+        valid_tool_calls=valid_tool_calls,
+        exact_tool_matches=exact_tool_matches,
+        exact_args_matches=exact_args_matches,
+        exact_tool_call_matches=exact_tool_call_matches,
+        exact_action_matches=exact_action_matches,
+    )
     metrics_path = output_dir / "structured_eval_metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, indent=2, sort_keys=True),

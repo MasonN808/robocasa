@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from data_generation.task_level.tasks.specs import load_task_spec
+from data_generation.task_level.tasks.specs import load_all_task_specs
 
 AGENT_IDS: tuple[str, ...] = ("agent_0", "agent_1")
 
@@ -17,29 +17,47 @@ class TaskMetadata:
 
     dataset_name: str
     composite_task: str
+    task_goal: str
     allowed_tool_specs: dict[str, dict[str, Any]]
 
 
-TASK_METADATA_REGISTRY: dict[str, TaskMetadata] = {
-    "hot_dog_setup": TaskMetadata(
-        dataset_name="hot_dog_setup",
-        composite_task="HotDogSetup",
-        allowed_tool_specs=deepcopy(load_task_spec("HotDogSetup").allowed_tool_specs),
-    ),
-    "prepare_coffee": TaskMetadata(
-        dataset_name="prepare_coffee",
-        composite_task="PrepareCoffee",
-        allowed_tool_specs=deepcopy(load_task_spec("PrepareCoffee").allowed_tool_specs),
-    ),
-    "prepare_sandwich_station": TaskMetadata(
-        dataset_name="prepare_sandwich_station",
-        composite_task="PrepareSandwichStation",
-        allowed_tool_specs=deepcopy(
-            load_task_spec("PrepareSandwichStation").allowed_tool_specs
-        ),
-    ),
-}
+def _camel_to_snake_case(name: str) -> str:
+    characters: list[str] = []
+    for index, character in enumerate(name):
+        if character.isupper() and index > 0:
+            previous = name[index - 1]
+            next_character = name[index + 1] if index + 1 < len(name) else ""
+            if previous.islower() or previous.isdigit() or next_character.islower():
+                characters.append("_")
+        characters.append(character.lower())
+    return "".join(characters)
 
+
+def _build_task_metadata_registry() -> dict[str, TaskMetadata]:
+    registry: dict[str, TaskMetadata] = {}
+    for task_spec in load_all_task_specs():
+        dataset_name = _camel_to_snake_case(task_spec.composite_task)
+        registry[dataset_name] = TaskMetadata(
+            dataset_name=dataset_name,
+            composite_task=task_spec.composite_task,
+            task_goal=task_spec.task_goal,
+            allowed_tool_specs=deepcopy(task_spec.allowed_tool_specs),
+        )
+    return registry
+
+
+TASK_METADATA_REGISTRY: dict[str, TaskMetadata] = _build_task_metadata_registry()
+
+TASK_NAME_ALIASES: dict[str, str] = {
+    dataset_name.replace("_", ""): dataset_name
+    for dataset_name in TASK_METADATA_REGISTRY
+}
+TASK_NAME_ALIASES.update(
+    {
+        metadata.composite_task.lower(): dataset_name
+        for dataset_name, metadata in TASK_METADATA_REGISTRY.items()
+    }
+)
 COMPOSITE_TO_DATASET_NAME: dict[str, str] = {
     metadata.composite_task.lower(): dataset_name
     for dataset_name, metadata in TASK_METADATA_REGISTRY.items()
@@ -61,6 +79,9 @@ def resolve_task_name(task_name: str) -> str:
     snake_case = normalized.lower()
     if snake_case in TASK_METADATA_REGISTRY:
         return snake_case
+    alias_match = TASK_NAME_ALIASES.get(snake_case.replace("_", ""))
+    if alias_match is not None:
+        return alias_match
     composite_match = COMPOSITE_TO_DATASET_NAME.get(snake_case)
     if composite_match is not None:
         return composite_match

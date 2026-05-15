@@ -196,3 +196,4 @@ training/bc_task_vlm/runs/
 training/bc_task_vlm/preprocessed/*
 
 PROGRESS.md
+training/bc_task_vlm/staged_hf

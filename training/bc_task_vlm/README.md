@@ -26,8 +26,10 @@ messages and enable structured generation evaluation.
 By default, each joint two-agent demonstration is converted into two training
 conversations, one per agent. The global mixed-agent execution history stays in
 the user prompt, but only the selected agent's assistant turns contribute to the
-loss. Validation remains step-level in both SFT formats; structured action
-accuracy metrics are only emitted for `--sft-format tool_call`.
+loss. Validation remains step-level in both SFT formats. For
+`--sft-format tool_call`, structured generation evaluation logs exact tool-call
+accuracy, including both the predicted tool name and every argument, plus
+stricter action-step accuracy.
 
 ## Training Modes
 

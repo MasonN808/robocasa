@@ -132,7 +132,8 @@ class StructuredEvalMetricTests(unittest.TestCase):
             valid_tool_calls=6,
             exact_tool_matches=5,
             exact_args_matches=4,
-            exact_action_matches=3,
+            exact_tool_call_matches=3,
+            exact_action_matches=2,
         )
 
         self.assertEqual(metrics["structured_eval_num_samples"], 8.0)
@@ -141,18 +142,27 @@ class StructuredEvalMetricTests(unittest.TestCase):
         self.assertEqual(metrics["structured_eval_valid_tool_call_count"], 6.0)
         self.assertEqual(metrics["structured_eval_exact_tool_match_count"], 5.0)
         self.assertEqual(metrics["structured_eval_exact_args_match_count"], 4.0)
-        self.assertEqual(metrics["structured_eval_exact_action_step_match_count"], 3.0)
+        self.assertEqual(metrics["structured_eval_exact_tool_call_match_count"], 3.0)
+        self.assertEqual(metrics["structured_eval_exact_action_step_match_count"], 2.0)
         self.assertAlmostEqual(metrics["structured_eval_tool_call_parse_rate"], 7 / 8)
         self.assertAlmostEqual(metrics["structured_eval_tool_call_valid_rate"], 6 / 8)
         self.assertAlmostEqual(metrics["structured_eval_exact_tool_accuracy"], 5 / 8)
         self.assertAlmostEqual(metrics["structured_eval_exact_args_match_rate"], 4 / 8)
         self.assertAlmostEqual(
-            metrics["structured_eval_exact_action_step_match_rate"],
+            metrics["structured_eval_exact_tool_call_match_rate"],
             3 / 8,
         )
         self.assertAlmostEqual(
-            metrics["structured_eval_action_prediction_accuracy"],
+            metrics["structured_eval_tool_call_accuracy"],
             3 / 8,
+        )
+        self.assertAlmostEqual(
+            metrics["structured_eval_exact_action_step_match_rate"],
+            2 / 8,
+        )
+        self.assertAlmostEqual(
+            metrics["structured_eval_action_prediction_accuracy"],
+            2 / 8,
         )
 
     def test_handles_empty_eval_split(self):
@@ -162,10 +172,12 @@ class StructuredEvalMetricTests(unittest.TestCase):
             valid_tool_calls=0,
             exact_tool_matches=0,
             exact_args_matches=0,
+            exact_tool_call_matches=0,
             exact_action_matches=0,
         )
 
         self.assertEqual(metrics["structured_eval_action_prediction_accuracy"], 0.0)
+        self.assertEqual(metrics["structured_eval_tool_call_accuracy"], 0.0)
         self.assertEqual(metrics["structured_eval_tool_call_parse_rate"], 0.0)
         self.assertEqual(metrics["structured_eval_exact_action_step_match_count"], 0.0)
 

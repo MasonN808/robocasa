@@ -126,7 +126,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--val-tasks",
         default="prepare_coffee",
-        help="Comma-separated task names for the validation split.",
+        help=(
+            "Comma-separated task names for the validation split. Pass an empty "
+            "string to disable validation."
+        ),
     )
     parser.add_argument(
         "--train-example-granularity",
@@ -250,9 +253,11 @@ def _split_csv(raw_value: str) -> list[str]:
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
-def _resolve_task_list(raw_value: str) -> list[str]:
+def _resolve_task_list(raw_value: str, *, allow_empty: bool = False) -> list[str]:
     resolved = [resolve_task_name(task_name) for task_name in _split_csv(raw_value)]
     if not resolved:
+        if allow_empty:
+            return []
         supported = ", ".join(supported_task_names())
         raise ValueError(
             f"At least one task is required. Supported tasks: {supported}."
@@ -333,7 +338,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
     processor_name_or_path = args.processor_name_or_path or args.model_name_or_path
     report_targets = _resolve_report_targets(args.report_to)
     train_tasks = _resolve_task_list(args.train_tasks)
-    val_tasks = _resolve_task_list(args.val_tasks)
+    val_tasks = _resolve_task_list(args.val_tasks, allow_empty=True)
     overlapping_tasks = sorted(set(train_tasks).intersection(val_tasks))
     if overlapping_tasks:
         overlap_text = ", ".join(overlapping_tasks)
