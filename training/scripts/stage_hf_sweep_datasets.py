@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Future,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -36,6 +42,14 @@ IMAGE_COLUMNS = (
     "agentview_left",
     "agentview_right",
     "wrist",
+)
+
+REQUIRED_STAGE_FILES = (
+    "original_trajectory.json",
+    "adapted_trajectory.json",
+    "plan.json",
+    "metadata.json",
+    "trajectory_execution_metadata.json",
 )
 
 
@@ -68,15 +82,25 @@ class EpisodeStagingResult:
     task_dir: str
 
 
+@dataclass(frozen=True)
+class EpisodeSource:
+    source_row: dict[str, Any]
+    row_indices: tuple[int, ...]
+    episode_index: int
+
+
 @dataclass
 class RepoStageState:
     repo_id: str
     split: str
     revision: str | None
     sidecar_root: Path | None
-    episodes: Iterator[tuple[dict[str, Any], list[StepRecord], Path | None, int]]
+    dataset: Any
+    row_granularity: str
+    episodes: Iterator[EpisodeSource]
     submitted: int = 0
     staged: int = 0
+    skipped_existing: int = 0
     exhausted: bool = False
     finished_logged: bool = False
     tasks: set[str] | None = None
@@ -125,6 +149,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--load-workers",
+        type=int,
+        default=1,
+        help=(
+            "Repository loading workers. Values above 1 parallelize "
+            "datasets.load_dataset() downloads and Arrow cache generation across "
+            "source repos."
+        ),
+    )
+    parser.add_argument(
         "--max-in-flight",
         type=int,
         default=None,
@@ -138,6 +172,25 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=25,
         help="Print progress after this many completed episodes per repo.",
+    )
+    parser.add_argument(
+        "--resume",
+        "--resume-existing",
+        dest="resume_existing",
+        action="store_true",
+        help=(
+            "Resume an interrupted staging run by skipping complete existing "
+            "trajectory directories in --output-root."
+        ),
+    )
+    parser.add_argument(
+        "--resume-validation",
+        choices=("validated", "unchecked"),
+        default="validated",
+        help=(
+            "When resuming, validate existing JSON files and staged image paths "
+            "before skipping them, or only check that required files exist."
+        ),
     )
     return parser.parse_args()
 
@@ -483,18 +536,60 @@ def _stage_episode(
         image_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _iter_episodes(ds, *, sidecar_root: Path | None):
+def _metadata_scan_dataset(ds):
+    image_columns = [
+        column_name
+        for column_name in IMAGE_COLUMNS
+        if column_name in set(ds.column_names)
+    ]
+    if not image_columns:
+        return ds
+    remove_columns = getattr(ds, "remove_columns", None)
+    if remove_columns is None:
+        return ds
+    return remove_columns(image_columns)
+
+
+def _iter_episode_sources(ds) -> Iterator[EpisodeSource]:
     column_names = set(ds.column_names)
+    scan_ds = _metadata_scan_dataset(ds)
     if "adapted_trajectory" in column_names or "original_trajectory" in column_names:
-        for index, row in enumerate(ds):
-            yield row, _rows_from_trajectory_row(row), sidecar_root, index
+        for index, row in enumerate(scan_ds):
+            yield EpisodeSource(
+                source_row=row,
+                row_indices=(index,),
+                episode_index=index,
+            )
         return
 
-    grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for index, row in enumerate(ds):
-        grouped_rows[_episode_id_for_row(row, index)].append(row)
+    grouped_rows: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    for index, row in enumerate(scan_ds):
+        grouped_rows[_episode_id_for_row(row, index)].append((index, row))
     for index, (_episode_id, rows) in enumerate(sorted(grouped_rows.items())):
-        yield rows[0], _rows_from_step_rows(rows), sidecar_root, index
+        yield EpisodeSource(
+            source_row=rows[0][1],
+            row_indices=tuple(row_index for row_index, _row in rows),
+            episode_index=index,
+        )
+
+
+def _row_granularity_for_dataset(ds) -> str:
+    column_names = set(ds.column_names)
+    if "adapted_trajectory" in column_names or "original_trajectory" in column_names:
+        return "trajectory"
+    return "step"
+
+
+def _records_for_episode_source(
+    *,
+    dataset,
+    row_granularity: str,
+    source: EpisodeSource,
+) -> list[StepRecord]:
+    if row_granularity == "trajectory":
+        return _rows_from_trajectory_row(dataset[source.row_indices[0]])
+    rows = [dataset[row_index] for row_index in source.row_indices]
+    return _rows_from_step_rows(rows)
 
 
 def _load_repo_state(
@@ -521,8 +616,123 @@ def _load_repo_state(
         split=split,
         revision=revision,
         sidecar_root=sidecar_root,
-        episodes=iter(_iter_episodes(ds, sidecar_root=sidecar_root)),
+        dataset=ds,
+        row_granularity=_row_granularity_for_dataset(ds),
+        episodes=iter(_iter_episode_sources(ds)),
     )
+
+
+def _next_task_trajectory_id(
+    *,
+    source_row: dict[str, Any],
+    repo_id: str,
+    counters_by_task: dict[str, int],
+) -> tuple[str, str]:
+    task_dir = _task_dir_for_row(source_row, repo_id)
+    trajectory_index = counters_by_task[task_dir]
+    counters_by_task[task_dir] += 1
+    return task_dir, f"traj_{trajectory_index:06d}"
+
+
+def _load_json_for_resume(path: Path) -> Any | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _existing_trajectory_is_complete(
+    trajectory_dir: Path,
+    *,
+    validate: bool,
+) -> bool:
+    if not trajectory_dir.is_dir():
+        return False
+    for file_name in REQUIRED_STAGE_FILES:
+        if not (trajectory_dir / file_name).is_file():
+            return False
+    if not validate:
+        return True
+
+    parsed_json: dict[str, Any] = {}
+    for file_name in REQUIRED_STAGE_FILES:
+        parsed_value = _load_json_for_resume(trajectory_dir / file_name)
+        if parsed_value is None:
+            return False
+        parsed_json[file_name] = parsed_value
+
+    image_dir = trajectory_dir / "images" / trajectory_dir.name
+    if not image_dir.is_dir():
+        return False
+
+    plan_steps = parsed_json.get("plan.json")
+    if not isinstance(plan_steps, list):
+        return False
+    for step in plan_steps:
+        if not isinstance(step, dict):
+            return False
+        metadata = step.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        image_paths = metadata.get("image_paths")
+        if image_paths is None:
+            continue
+        if not isinstance(image_paths, list):
+            return False
+        for image_relpath in image_paths:
+            if not isinstance(image_relpath, str) or not image_relpath:
+                return False
+            if not (trajectory_dir / image_relpath).is_file():
+                return False
+
+    return True
+
+
+def _load_repo_states(
+    *,
+    repo_ids: list[str],
+    split: str,
+    revision: str | None,
+    trust_remote_code: bool,
+    load_workers: int,
+) -> list[RepoStageState]:
+    if load_workers == 1 or len(repo_ids) == 1:
+        return [
+            _load_repo_state(
+                repo_id=repo_id,
+                split=split,
+                revision=revision,
+                trust_remote_code=trust_remote_code,
+            )
+            for repo_id in repo_ids
+        ]
+
+    print(
+        f"Loading {len(repo_ids)} repos with {load_workers} load workers",
+        flush=True,
+    )
+    states: list[RepoStageState | None] = [None] * len(repo_ids)
+    with ThreadPoolExecutor(max_workers=load_workers) as executor:
+        futures_by_index = {
+            executor.submit(
+                _load_repo_state,
+                repo_id=repo_id,
+                split=split,
+                revision=revision,
+                trust_remote_code=trust_remote_code,
+            ): index
+            for index, repo_id in enumerate(repo_ids)
+        }
+        try:
+            for future in as_completed(futures_by_index):
+                index = futures_by_index[future]
+                states[index] = future.result()
+        except BaseException:
+            for future in futures_by_index:
+                future.cancel()
+            raise
+
+    return [state for state in states if state is not None]
 
 
 def _prepare_episode_staging_job(
@@ -533,9 +743,9 @@ def _prepare_episode_staging_job(
     records: list[StepRecord],
     sidecar_root: Path | None,
     episode_index: int,
-    counters_by_task: dict[str, int],
+    task_dir: str,
+    trajectory_id: str,
 ) -> EpisodeStagingJob:
-    task_dir = _task_dir_for_row(source_row, repo_id)
     task_metadata = get_task_metadata(task_dir)
     source_label = f"{repo_id}:{_episode_id_for_row(source_row, episode_index)}"
     original_trajectory = _sidecar_json(
@@ -560,9 +770,6 @@ def _prepare_episode_staging_job(
         or task_metadata.task_goal
     )
 
-    trajectory_index = counters_by_task[task_dir]
-    counters_by_task[task_dir] += 1
-    trajectory_id = f"traj_{trajectory_index:06d}"
     return EpisodeStagingJob(
         repo_id=repo_id,
         output_root=output_root,
@@ -611,7 +818,17 @@ def _log_finished_repos(states: list[RepoStageState]) -> None:
             continue
         if state.staged < state.submitted:
             continue
-        print(f"Finished {state.repo_id}: staged {state.staged} episodes", flush=True)
+        if state.skipped_existing:
+            print(
+                f"Finished {state.repo_id}: staged {state.staged} new episodes, "
+                f"skipped {state.skipped_existing} existing episodes",
+                flush=True,
+            )
+        else:
+            print(
+                f"Finished {state.repo_id}: staged {state.staged} episodes",
+                flush=True,
+            )
         state.finished_logged = True
 
 
@@ -623,19 +840,20 @@ def stage_repos(
     revision: str | None,
     trust_remote_code: bool,
     counters_by_task: dict[str, int],
+    load_workers: int,
     workers: int,
     max_in_flight: int,
     progress_interval: int,
+    resume_existing: bool = False,
+    resume_validation: str = "validated",
 ) -> list[dict[str, Any]]:
-    states = [
-        _load_repo_state(
-            repo_id=repo_id,
-            split=split,
-            revision=revision,
-            trust_remote_code=trust_remote_code,
-        )
-        for repo_id in repo_ids
-    ]
+    states = _load_repo_states(
+        repo_ids=repo_ids,
+        split=split,
+        revision=revision,
+        trust_remote_code=trust_remote_code,
+        load_workers=load_workers,
+    )
 
     futures_by_state: dict[Future[EpisodeStagingResult], RepoStageState] = {}
     next_state_index = 0
@@ -648,9 +866,7 @@ def stage_repos(
                     state = active_states[next_state_index % len(active_states)]
                     next_state_index += 1
                     try:
-                        source_row, records, sidecar_root, episode_index = next(
-                            state.episodes
-                        )
+                        source = next(state.episodes)
                     except StopIteration:
                         state.exhausted = True
                         active_states = [
@@ -659,14 +875,43 @@ def stage_repos(
                         next_state_index = 0
                         continue
 
+                    task_dir, trajectory_id = _next_task_trajectory_id(
+                        source_row=source.source_row,
+                        repo_id=state.repo_id,
+                        counters_by_task=counters_by_task,
+                    )
+                    state.tasks.add(task_dir)
+                    if resume_existing and _existing_trajectory_is_complete(
+                        output_root / task_dir / trajectory_id,
+                        validate=resume_validation == "validated",
+                    ):
+                        state.skipped_existing += 1
+                        if (
+                            progress_interval > 0
+                            and state.skipped_existing % progress_interval == 0
+                        ):
+                            print(
+                                "  skipped "
+                                f"{state.skipped_existing} existing episodes from "
+                                f"{state.repo_id}",
+                                flush=True,
+                            )
+                        continue
+
+                    records = _records_for_episode_source(
+                        dataset=state.dataset,
+                        row_granularity=state.row_granularity,
+                        source=source,
+                    )
                     job = _prepare_episode_staging_job(
                         output_root=output_root,
                         repo_id=state.repo_id,
-                        source_row=source_row,
+                        source_row=source.source_row,
                         records=records,
-                        sidecar_root=sidecar_root,
-                        episode_index=episode_index,
-                        counters_by_task=counters_by_task,
+                        sidecar_root=state.sidecar_root,
+                        episode_index=source.episode_index,
+                        task_dir=task_dir,
+                        trajectory_id=trajectory_id,
                     )
                     future = executor.submit(_stage_episode_job, job)
                     futures_by_state[future] = state
@@ -701,7 +946,9 @@ def stage_repos(
             "repo_id": state.repo_id,
             "split": state.split,
             "revision": state.revision,
-            "num_episodes": state.staged,
+            "num_episodes": state.staged + state.skipped_existing,
+            "num_staged_new_episodes": state.staged,
+            "num_skipped_existing": state.skipped_existing,
             "tasks": sorted(state.tasks),
         }
         for state in states
@@ -716,9 +963,12 @@ def stage_repo(
     revision: str | None,
     trust_remote_code: bool,
     counters_by_task: dict[str, int],
+    load_workers: int = 1,
     workers: int = 1,
     max_in_flight: int | None = None,
     progress_interval: int = 25,
+    resume_existing: bool = False,
+    resume_validation: str = "validated",
 ) -> dict[str, Any]:
     max_in_flight = max_in_flight or max(1, workers * 2)
     return stage_repos(
@@ -728,9 +978,12 @@ def stage_repo(
         revision=revision,
         trust_remote_code=trust_remote_code,
         counters_by_task=counters_by_task,
+        load_workers=load_workers,
         workers=workers,
         max_in_flight=max_in_flight,
         progress_interval=progress_interval,
+        resume_existing=resume_existing,
+        resume_validation=resume_validation,
     )[0]
 
 
@@ -738,6 +991,8 @@ def main() -> None:
     args = parse_args()
     if args.workers < 1:
         raise ValueError("--workers must be at least 1.")
+    if args.load_workers < 1:
+        raise ValueError("--load-workers must be at least 1.")
     if args.max_in_flight is not None and args.max_in_flight < 1:
         raise ValueError("--max-in-flight must be at least 1.")
     max_in_flight = args.max_in_flight or max(1, args.workers * 2)
@@ -752,9 +1007,12 @@ def main() -> None:
         revision=args.revision,
         trust_remote_code=args.trust_remote_code,
         counters_by_task=counters_by_task,
+        load_workers=args.load_workers,
         workers=args.workers,
         max_in_flight=max_in_flight,
         progress_interval=args.progress_interval,
+        resume_existing=args.resume_existing,
+        resume_validation=args.resume_validation,
     )
 
     manifest = {

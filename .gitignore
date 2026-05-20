@@ -197,3 +197,4 @@ training/bc_task_vlm/preprocessed/*
 
 PROGRESS.md
 training/bc_task_vlm/staged_hf
+*hf_cache/

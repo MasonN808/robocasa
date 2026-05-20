@@ -50,6 +50,9 @@ if [[ "${SKIP_HF_STAGING:-true}" != "true" ]]; then
   if [[ -n "${HF_STAGE_MAX_IN_FLIGHT:-}" ]]; then
     stage_args+=(--max-in-flight "${HF_STAGE_MAX_IN_FLIGHT}")
   fi
+  if [[ "${HF_STAGE_RESUME:-false}" == "true" ]]; then
+    stage_args+=(--resume --resume-validation "${HF_STAGE_RESUME_VALIDATION:-validated}")
+  fi
   if [[ -n "${HF_DATASET_REVISION:-}" ]]; then
     stage_args+=(--revision "${HF_DATASET_REVISION}")
   fi

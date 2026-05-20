@@ -17,8 +17,12 @@ mkdir -p slurm_logs
 
 python_bin="${PYTHON_BIN:-/work/hdd/bgjs/mnakamura/robocasa/.venv_d/bin/python}"
 staged_dataset_root="${STAGED_DATASET_ROOT:-/work/hdd/bgjs/mnakamura/robocasa/training/bc_task_vlm/staged_hf/robocasa_20260430T030150Z_full_run_selected}"
+hf_cache_root="${HF_STAGE_CACHE_ROOT:-/work/hdd/bgjs/mnakamura/robocasa/training/bc_task_vlm/hf_cache}"
+load_workers="${HF_STAGE_LOAD_WORKERS:-5}"
 stage_workers="${HF_STAGE_WORKERS:-32}"
 progress_interval="${HF_STAGE_PROGRESS_INTERVAL:-25}"
+resume_existing="${HF_STAGE_RESUME:-false}"
+resume_validation="${HF_STAGE_RESUME_VALIDATION:-validated}"
 
 default_hf_dataset_repos=(
   "DorianAtSchool/robocasa_20260430T030150Z_full_run_veggie_dip_prep"
@@ -60,12 +64,49 @@ if [[ ! "${stage_workers}" =~ ^[0-9]+$ || "${stage_workers}" -lt 1 ]]; then
   exit 1
 fi
 
+if [[ ! "${load_workers}" =~ ^[0-9]+$ || "${load_workers}" -lt 1 ]]; then
+  echo "HF_STAGE_LOAD_WORKERS must be a positive integer; got ${load_workers}" >&2
+  exit 1
+fi
+
 if [[ ! "${progress_interval}" =~ ^[0-9]+$ ]]; then
   echo "HF_STAGE_PROGRESS_INTERVAL must be a non-negative integer; got ${progress_interval}" >&2
   exit 1
 fi
 
+if [[ "${resume_existing}" != "true" && "${resume_existing}" != "false" ]]; then
+  echo "HF_STAGE_RESUME must be true or false; got ${resume_existing}" >&2
+  exit 1
+fi
+
+if [[ "${resume_validation}" != "validated" && "${resume_validation}" != "unchecked" ]]; then
+  echo "HF_STAGE_RESUME_VALIDATION must be validated or unchecked; got ${resume_validation}" >&2
+  exit 1
+fi
+
 export PATH="$(dirname "${python_bin}"):${PATH}"
+
+if [[ -z "${HF_HUB_CACHE:-}" && -n "${HUGGINGFACE_HUB_CACHE:-}" ]]; then
+  hf_hub_cache="${HUGGINGFACE_HUB_CACHE}"
+else
+  hf_hub_cache="${HF_HUB_CACHE:-${hf_cache_root}/hub}"
+fi
+hf_datasets_cache="${HF_DATASETS_CACHE:-${hf_cache_root}/datasets}"
+hf_assets_cache="${HF_ASSETS_CACHE:-${hf_cache_root}/assets}"
+hf_modules_cache="${HF_MODULES_CACHE:-${hf_cache_root}/modules}"
+
+export HF_HUB_CACHE="${hf_hub_cache}"
+export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-${hf_hub_cache}}"
+export HF_DATASETS_CACHE="${hf_datasets_cache}"
+export HF_ASSETS_CACHE="${hf_assets_cache}"
+export HF_MODULES_CACHE="${hf_modules_cache}"
+
+mkdir -p \
+  "${HF_HUB_CACHE}" \
+  "${HUGGINGFACE_HUB_CACHE}" \
+  "${HF_DATASETS_CACHE}" \
+  "${HF_ASSETS_CACHE}" \
+  "${HF_MODULES_CACHE}"
 
 "${python_bin}" -c "import datasets, huggingface_hub, PIL" >/dev/null 2>&1 || {
   echo "Missing staging dependencies in ${python_bin}." >&2
@@ -76,12 +117,17 @@ export PATH="$(dirname "${python_bin}"):${PATH}"
 stage_args=(
   --output-root "${staged_dataset_root}"
   --split "${HF_DATASET_SPLIT:-train}"
+  --load-workers "${load_workers}"
   --workers "${stage_workers}"
   --progress-interval "${progress_interval}"
 )
 
 if [[ -n "${HF_STAGE_MAX_IN_FLIGHT:-}" ]]; then
   stage_args+=(--max-in-flight "${HF_STAGE_MAX_IN_FLIGHT}")
+fi
+
+if [[ "${resume_existing}" == "true" ]]; then
+  stage_args+=(--resume --resume-validation "${resume_validation}")
 fi
 
 if [[ -n "${HF_DATASET_REVISION:-}" ]]; then
@@ -100,7 +146,14 @@ done
 
 echo "Staging HF datasets on CPU"
 echo "Output root: ${staged_dataset_root}"
+echo "HF datasets cache: ${HF_DATASETS_CACHE}"
+echo "HF hub cache: ${HF_HUB_CACHE}"
+echo "Load workers: ${load_workers}"
 echo "Workers: ${stage_workers}"
+echo "Resume existing: ${resume_existing}"
+if [[ "${resume_existing}" == "true" ]]; then
+  echo "Resume validation: ${resume_validation}"
+fi
 if [[ -n "${HF_STAGE_MAX_IN_FLIGHT:-}" ]]; then
   echo "Max in-flight episodes: ${HF_STAGE_MAX_IN_FLIGHT}"
 fi
