@@ -14,6 +14,7 @@ from data_generation.task_level.generation.raw.config import (
     DATASET_RUN_TIMESTAMP_FORMAT,
     DEFAULT_OUTPUT_DIR,
     ERROR_SUMMARY_OUTPUT_FILENAME,
+    MULTI_SAMPLE_SAMPLING_STRATEGIES,
     RuntimeConfig,
     SUMMARY_OUTPUT_FILENAME,
     TRAJECTORY_DIRECTORY_NAME,
@@ -260,7 +261,7 @@ def _payload_trajectories_per_run(payload: dict[str, Any]) -> int:
     sampling_payload = model_config.get("sampling", {})
     if not isinstance(sampling_payload, dict):
         return 1
-    if sampling_payload.get("strategy") != "verbalized":
+    if sampling_payload.get("strategy") not in MULTI_SAMPLE_SAMPLING_STRATEGIES:
         return 1
     verbalized_k = coerce_int(sampling_payload.get("verbalized_k")) or 1
     return max(verbalized_k, 1)

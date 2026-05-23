@@ -30,6 +30,7 @@ TRAJECTORY_ID_DIGITS = 6
 BATCH_DIRECTORY_NAME = "batch"
 RETRY_PROGRESS_ERROR_MESSAGE_MAX_LENGTH = 96
 THINKING_LEVEL_CHOICES = ("minimal", "low", "medium", "high")
+MULTI_SAMPLE_SAMPLING_STRATEGIES = ("verbalized",)
 GENERATION_ERROR_EXIT_CODE = 1
 BATCH_POLL_INTERVAL_SECONDS = 10
 GOOGLE_CLOUD_BATCH_GCS_PREFIX_ENV_VAR = "GOOGLE_CLOUD_BATCH_GCS_PREFIX"
@@ -179,13 +180,19 @@ def _validate_runtime_config(runtime_config: RuntimeConfig) -> None:
         raise TrajectoryGenerationError("--max-workers must be greater than 0.")
     if runtime_config.max_retries <= 0:
         raise TrajectoryGenerationError("--max-retries must be greater than 0.")
-    if runtime_config.sampling == "verbalized" and runtime_config.verbalized_k <= 0:
+    if (
+        runtime_config.sampling in MULTI_SAMPLE_SAMPLING_STRATEGIES
+        and runtime_config.verbalized_k <= 0
+    ):
         raise TrajectoryGenerationError(
-            "--verbalized-k must be greater than 0 when --sampling verbalized is enabled."
+            "--verbalized-k must be greater than 0 when verbalized sampling is enabled."
         )
-    if runtime_config.sampling != "verbalized" and runtime_config.verbalized_k != 1:
+    if (
+        runtime_config.sampling not in MULTI_SAMPLE_SAMPLING_STRATEGIES
+        and runtime_config.verbalized_k != 1
+    ):
         raise TrajectoryGenerationError(
-            "--verbalized-k may only be used when --sampling verbalized is enabled."
+            "--verbalized-k may only be used with verbalized sampling."
         )
     if runtime_config.batch_processing and not runtime_config.batch_gcs_prefix:
         raise TrajectoryGenerationError(

@@ -59,7 +59,7 @@ def generate_single_trajectory(
         attempt_prompts=attempt_prompts,
         attempt_prompts_lock=attempt_prompts_lock,
     )
-    if runtime_config.sampling == "verbalized" and runtime_config.verbalized_k > 1:
+    if _runtime_support._trajectories_per_run(runtime_config) > 1:
         return trajectory_records
     return trajectory_records[0]
 
@@ -96,22 +96,21 @@ def generate_single_run(
     task_instance = task_definition.build_task_instance(run_index, runtime_config)
     validator = task_definition.validator_factory(task_instance)
     sampling_strategy = _runtime_support._sampling_strategy_for_runtime(runtime_config)
+    target_candidate_count = _runtime_support._trajectories_per_run(runtime_config)
     last_error: Exception | None = None
     trajectory_started = False
     retry_feedback: str | None = None
-    greedy_verbalized_validation = (
-        not runtime_config.disable_validation
-        and runtime_config.sampling == "verbalized"
-        and runtime_config.verbalized_k > 1
+    greedy_multi_sample_validation = (
+        not runtime_config.disable_validation and target_candidate_count > 1
     )
     run_completed = False
     # Track actual retry usage so the failure display can distinguish
     # "exhausted all retries" from "hit a non-retryable error early".
     attempts_run = 0
     non_retryable_stop = False
-    accumulated_valid_results: list[tuple[Any, dict[str, Any], dict[str, Any], str]] = (
-        []
-    )
+    accumulated_valid_results: list[
+        tuple[Any, dict[str, Any], dict[str, Any], str]
+    ] = []
     accumulated_generation_usages: list[dict[str, Any]] = []
     reserved_run_signatures: set[str] = set()
     previous_invalid_summary: str | None = None
@@ -211,16 +210,14 @@ def generate_single_run(
                 status="running",
                 accumulated_cost_text=accumulated_cost_text,
             )
-            if greedy_verbalized_validation:
-                # Greedily keep valid verbalized candidates from each attempt so
-                # retries only need to fill the remaining quota.
+            if greedy_multi_sample_validation:
+                # Greedily keep valid candidates from each attempt so retries
+                # only need to fill the remaining quota.
                 invalid_validations: list[dict[str, Any]] = []
                 valid_results_this_attempt: list[
                     tuple[Any, dict[str, Any], dict[str, Any], str]
                 ] = []
-                needed_count = runtime_config.verbalized_k - len(
-                    accumulated_valid_results
-                )
+                needed_count = target_candidate_count - len(accumulated_valid_results)
 
                 for sampled_candidate in sampled_candidates:
                     (
@@ -278,7 +275,7 @@ def generate_single_run(
                             retryable=(
                                 len(accumulated_valid_results)
                                 + len(valid_results_this_attempt)
-                                < runtime_config.verbalized_k
+                                < target_candidate_count
                                 and attempt_index + 1 < runtime_config.max_retries
                             ),
                         ),
@@ -289,10 +286,11 @@ def generate_single_run(
                     accumulated_generation_usages.append(shared_generation_usage)
                     accumulated_valid_results.extend(valid_results_this_attempt)
 
-                if len(accumulated_valid_results) < runtime_config.verbalized_k:
+                if len(accumulated_valid_results) < target_candidate_count:
                     last_error = (
-                        _runtime_support._build_verbalized_insufficient_results_error(
-                            required_count=runtime_config.verbalized_k,
+                        _runtime_support._build_multi_sample_insufficient_results_error(
+                            sampling_name=runtime_config.sampling,
+                            required_count=target_candidate_count,
                             collected_count=len(accumulated_valid_results),
                             invalid_validations=invalid_validations,
                         )
@@ -343,17 +341,17 @@ def generate_single_run(
                 )
                 aggregate_generation_usage = dict(accumulated_generation_usages[0])
                 aggregate_generation_usage["prompt_tokens"] = total_prompt_tokens
-                aggregate_generation_usage["cached_input_tokens"] = (
-                    total_cached_input_tokens
-                )
+                aggregate_generation_usage[
+                    "cached_input_tokens"
+                ] = total_cached_input_tokens
                 aggregate_generation_usage["output_tokens"] = total_output_tokens
                 aggregate_generation_usage["reasoning_tokens"] = total_reasoning_tokens
                 aggregate_generation_usage["total_tokens"] = (
                     total_prompt_tokens + total_output_tokens + total_reasoning_tokens
                 )
-                aggregate_generation_usage["observed_cost_usd"] = (
-                    total_observed_cost_usd
-                )
+                aggregate_generation_usage[
+                    "observed_cost_usd"
+                ] = total_observed_cost_usd
                 aggregate_generation_usage["successful_attempt_number"] = (
                     attempt_index + 1
                 )
@@ -398,13 +396,16 @@ def generate_single_run(
                             task_definition=task_definition,
                         )
                     )
-                    if sampled_candidate.probability is not None:
-                        trajectory_record["sampling_metadata"] = {
-                            "strategy": runtime_config.sampling,
-                            "probability": sampled_candidate.probability,
-                            "candidate_index": candidate_index,
-                            "run_index": run_index,
-                        }
+                    sampling_metadata = (
+                        _runtime_support._sampling_metadata_for_candidate(
+                            runtime_config=runtime_config,
+                            sampled_candidate=sampled_candidate,
+                            candidate_index=candidate_index,
+                            run_index=run_index,
+                        )
+                    )
+                    if sampling_metadata is not None:
+                        trajectory_record["sampling_metadata"] = sampling_metadata
                     trajectory_record["prompt"] = candidate_prompt
                     trajectory_record["raw_output"] = sampled_candidate.raw_output
                     trajectory_records.append(trajectory_record)

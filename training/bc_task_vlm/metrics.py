@@ -110,11 +110,18 @@ def build_structured_eval_metrics(
         "structured_eval_tool_call_parse_rate": float(rate(parsed_tool_calls)),
         "structured_eval_tool_call_valid_rate": float(rate(valid_tool_calls)),
         "structured_eval_exact_tool_accuracy": float(rate(exact_tool_matches)),
+        "structured_eval_tool_name_accuracy": float(rate(exact_tool_matches)),
         "structured_eval_exact_args_match_rate": float(rate(exact_args_matches)),
         "structured_eval_exact_tool_call_match_rate": float(
             rate(exact_tool_call_matches)
         ),
         "structured_eval_tool_call_accuracy": float(rate(exact_tool_call_matches)),
+        "structured_eval_exact_tool_call_accuracy": float(
+            rate(exact_tool_call_matches)
+        ),
+        "structured_eval_tool_call_prediction_accuracy": float(
+            rate(exact_tool_call_matches)
+        ),
         "structured_eval_exact_action_step_match_rate": float(
             rate(exact_action_matches)
         ),

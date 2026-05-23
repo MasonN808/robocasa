@@ -34,6 +34,10 @@ from data_generation.task_level.sampling.random_number import (
     RandomNumberSamplingStrategy,
     RandomSamplingStrategy,
 )
+from data_generation.task_level.sampling.structured_random import (
+    StructuredRandomSamplingStrategy,
+    _structured_random_seed_and_configuration,
+)
 from data_generation.task_level.sampling.verbalized import (
     VerbalizedSamplingStrategy,
     VerbalizedSamplingValidationError,
@@ -1615,6 +1619,12 @@ class DotenvLoadingTests(unittest.TestCase):
 
         self.assertEqual(runtime_config.sampling, "verbalized")
         self.assertEqual(runtime_config.verbalized_k, 3)
+
+    def test_parse_args_accepts_structured_random_sampling(self):
+        runtime_config = parse_args(["--sampling", "structured_random"])
+
+        self.assertEqual(runtime_config.sampling, "structured_random")
+        self.assertEqual(runtime_config.verbalized_k, 1)
 
     def test_parse_args_accepts_random_number_sampling(self):
         runtime_config = parse_args(["--sampling", "random_number"])
@@ -3712,6 +3722,112 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
                 runtime_config=runtime_config,
             )
 
+    def test_structured_random_sampling_strategy_prompt_assigns_configurations(self):
+        strategy = StructuredRandomSamplingStrategy()
+
+        with mock.patch(
+            "data_generation.task_level.sampling.structured_random."
+            "_structured_random_seed_and_configuration",
+            return_value=(
+                12345,
+                {
+                    "communication_message_length": "low",
+                    "communication_message_complexity": "medium",
+                    "tool_call_diversity": "high",
+                },
+            ),
+        ):
+            prompt = strategy.build_prompt(
+                task_definition=PREPARE_COFFEE_TASK,
+                runtime_config=RuntimeConfig(
+                    composite_task="PrepareCoffee",
+                    num_runs=1,
+                    model="gemini-3-flash-preview",
+                    sdk="google-genai",
+                    project="demo-project",
+                    location="global",
+                    temperature=0.5,
+                    max_workers=1,
+                    max_retries=1,
+                    sampling="structured_random",
+                ),
+                task_instance=make_prepare_coffee_task_instance(0),
+                variation_key="traj-000000-attempt-00",
+            )
+
+        self.assertIn("Structured random configuration", prompt)
+        self.assertNotIn("Structured random generator seed", prompt)
+        self.assertIn("communication_message_length=low", prompt)
+        self.assertIn("communication_message_complexity=medium", prompt)
+        self.assertIn("tool_call_diversity=high", prompt)
+        self.assertIn("Return exactly one trajectory", prompt)
+        self.assertIn("Do not return a samples array", prompt)
+
+    def test_structured_random_sampling_strategy_preserves_base_schema(self):
+        strategy = StructuredRandomSamplingStrategy()
+
+        response_schema = strategy.response_schema(
+            task_definition=PREPARE_COFFEE_TASK,
+            runtime_config=RuntimeConfig(
+                composite_task="PrepareCoffee",
+                num_runs=1,
+                model="gemini-3-flash-preview",
+                sdk="google-genai",
+                project="demo-project",
+                location="global",
+                temperature=0.5,
+                max_workers=1,
+                max_retries=1,
+                sampling="structured_random",
+            ),
+        )
+
+        self.assertEqual(response_schema, PREPARE_COFFEE_TASK.response_schema)
+
+    def test_structured_random_sampling_strategy_extracts_base_candidate(self):
+        strategy = StructuredRandomSamplingStrategy()
+        raw_response = make_valid_candidate(include_agents=False)
+
+        sampled_candidates = strategy.extract_candidates(
+            raw_response=json.dumps(raw_response),
+            task_definition=PREPARE_COFFEE_TASK,
+            runtime_config=RuntimeConfig(
+                composite_task="PrepareCoffee",
+                num_runs=1,
+                model="gemini-3-flash-preview",
+                sdk="google-genai",
+                project="demo-project",
+                location="global",
+                temperature=0.5,
+                max_workers=1,
+                max_retries=1,
+                sampling="structured_random",
+            ),
+        )
+
+        self.assertEqual(len(sampled_candidates), 1)
+        self.assertIsNone(sampled_candidates[0].probability)
+        self.assertIsNone(sampled_candidates[0].sampling_configuration)
+        self.assertEqual(sampled_candidates[0].candidate["steps"][0]["step"], 0)
+
+    def test_structured_random_configuration_is_seeded_by_run(self):
+        first_seed, first_configuration = _structured_random_seed_and_configuration(
+            task_definition=PREPARE_COFFEE_TASK,
+            variation_key="traj-000000-attempt-00",
+        )
+        retry_seed, retry_configuration = _structured_random_seed_and_configuration(
+            task_definition=PREPARE_COFFEE_TASK,
+            variation_key="traj-000000-attempt-01",
+        )
+        second_seed, second_configuration = _structured_random_seed_and_configuration(
+            task_definition=PREPARE_COFFEE_TASK,
+            variation_key="traj-000001-attempt-00",
+        )
+
+        self.assertEqual(first_seed, retry_seed)
+        self.assertEqual(first_configuration, retry_configuration)
+        self.assertNotEqual(first_seed, second_seed)
+
 
 class GenerationTests(unittest.TestCase):
     def test_resolve_pricing_tier_supports_gemini_31_flash_lite_preview(self):
@@ -4927,6 +5043,44 @@ class GenerationTests(unittest.TestCase):
             "counted once per model response",
             payload["cost_summary"]["notes"][-1],
         )
+
+    def test_structured_random_sampling_saves_single_base_trajectory(self):
+        runtime_config = RuntimeConfig(
+            composite_task="PrepareCoffee",
+            num_runs=1,
+            model="gemini-3-flash-preview",
+            sdk="google-genai",
+            project="demo-project",
+            location="global",
+            temperature=0.5,
+            max_workers=1,
+            max_retries=1,
+            sampling="structured_random",
+        )
+        raw_response = make_prepare_coffee_runtime_candidate(
+            runtime_config,
+            include_agents=False,
+        )
+
+        payload = generate_trajectories(
+            runtime_config,
+            client_factory=lambda: SequencedFakeClient([raw_response]),
+            show_progress=False,
+        )
+
+        self.assertEqual(payload["num_trajectories"], 1)
+        self.assertEqual(
+            payload["model_config"]["sampling"]["strategy"],
+            "structured_random",
+        )
+        self.assertNotIn("verbalized_k", payload["model_config"]["sampling"])
+        self.assertNotIn("samples_per_run", payload["model_config"]["sampling"])
+        self.assertNotIn("sampling_metadata", payload["trajectories"][0])
+        self.assertIn(
+            "Structured random configuration:",
+            payload["trajectory_prompts"][0]["prompt"],
+        )
+        self.assertNotIn("generator seed", payload["trajectory_prompts"][0]["prompt"])
 
     def test_verbalized_sampling_split_usage_recomputes_total_tokens(self):
         runtime_config = RuntimeConfig(

@@ -9,6 +9,12 @@ Set the output root first:
 export ROBOCASA_TASK_LEVEL_DATA_ROOT="$PWD/data_generation/task_level/data"
 ```
 
+For runs meant to sit alongside the existing k3 sampling-method dataset, use:
+
+```bash
+export ROBOCASA_TASK_LEVEL_DATA_ROOT="$PWD/data_generation/task_level/data_k3"
+```
+
 ## All Analysis Methods
 
 This runs `base`, `random`, `verbalized`, and `high_temperature` into sibling
@@ -23,6 +29,24 @@ bash scripts/generate_raw_sampling_methods.sh \
   --max-retries 5 \
   -- --enable-validation
 ```
+
+## Strategies
+
+- `base`: one trajectory per model call using the task's native prompt and
+  response schema.
+- `random`: one trajectory per model call with a UUID sample ID prepended to
+  perturb the prompt.
+- `verbalized`: K trajectories per model call using a structured
+  `responses[]` output where each item contains `probability` and `trajectory`.
+- `structured_random`: one base-style trajectory per model call. The code
+  derives one deterministic random seed per task/run and uses it to select one
+  low/medium/high configuration for
+  `communication_message_length`, `communication_message_complexity`, and
+  `tool_call_diversity` before prompting the model. The model returns the
+  normal single-trajectory JSON shape; the seed stays internal, and the prompt
+  only includes the selected levels.
+- `high_temperature`: one trajectory per model call using the base prompt shape
+  with a higher sampling temperature.
 
 ## Individual Methods
 
@@ -75,6 +99,22 @@ python -m data_generation.task_level.generation.raw.cli \
   --enable-validation \
   --resume "$ROBOCASA_TASK_LEVEL_DATA_ROOT/raw/sampling_methods/verbalized"
 
+# Structured random: one base-style trajectory per run. Increase --num-runs
+# to draw more seeded control configurations through separate model calls.
+python -m data_generation.task_level.generation.raw.cli \
+  --tasks verified \
+  --num-runs 30 \
+  --random-start-location true \
+  --sampling structured_random \
+  --temperature 0.6 \
+  --model gemini-3-flash-preview \
+  --location global \
+  --thinking-level low \
+  --max-workers 4 \
+  --max-retries 5 \
+  --enable-validation \
+  --resume "$ROBOCASA_TASK_LEVEL_DATA_ROOT/raw/sampling_methods/structured_random"
+
 # High temperature: base prompt shape with temperature 1.0.
 python -m data_generation.task_level.generation.raw.cli \
   --tasks verified \
@@ -93,6 +133,27 @@ python -m data_generation.task_level.generation.raw.cli \
 
 If a method directory does not exist yet, replace `--resume ...` with
 `--summary-path "$ROBOCASA_TASK_LEVEL_DATA_ROOT/raw/sampling_methods/<method>/summary.json"`.
+
+## Delta CPU Slurm
+
+Submit structured random sampling on a Delta CPU node with:
+
+```bash
+sbatch scripts/generate_structured_random_delta_cpu.sh
+```
+
+Common overrides:
+
+```bash
+NUM_RUNS=20 MAX_WORKERS=8 \
+sbatch scripts/generate_structured_random_delta_cpu.sh
+```
+
+The structured-random Delta wrapper defaults to the k3 dataset root:
+`data_generation/task_level/data_k3/raw/sampling_methods/structured_random`.
+It also defaults to `NUM_RUNS=30`, matching the existing base/random/verbalized
+sampling-method trajectory count convention of 30 trajectories per verified
+task.
 
 ## Validity Checks
 

@@ -20,6 +20,7 @@ class SampledTrajectoryCandidate:
     candidate: dict[str, Any]
     raw_output: Any
     probability: float | None = None
+    sampling_configuration: dict[str, str] | None = None
 
 
 class SamplingStrategy(Protocol):

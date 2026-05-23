@@ -511,6 +511,109 @@ def embed_with_vllm_openai(
     return np.asarray(vectors, dtype=np.float32)
 
 
+def parse_torch_dtype(dtype: str | None):
+    import torch
+
+    if dtype is None or dtype == "auto":
+        return "auto"
+    dtype_map = {
+        "float16": torch.float16,
+        "fp16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+        "float32": torch.float32,
+        "fp32": torch.float32,
+    }
+    if dtype not in dtype_map:
+        raise ValueError(f"Unsupported torch dtype for transformers provider: {dtype}")
+    return dtype_map[dtype]
+
+
+def last_token_pool(
+    hidden_states: Any,
+    attention_mask: Any,
+) -> Any:
+    import torch
+
+    sequence_lengths = attention_mask.sum(dim=1) - 1
+    batch_indices = torch.arange(
+        hidden_states.shape[0],
+        device=hidden_states.device,
+    )
+    return hidden_states[batch_indices, sequence_lengths]
+
+
+def embed_with_transformers(
+    texts: list[str],
+    *,
+    model_name: str,
+    batch_size: int,
+    dtype: str | None,
+    max_model_len: int | None,
+    progress_interval: int,
+) -> np.ndarray:
+    try:
+        import torch
+        import torch.nn.functional as functional
+        from transformers import AutoModel, AutoTokenizer
+    except ImportError as exc:
+        raise ImportError(
+            "Embedding provider 'transformers' requires torch and transformers."
+        ) from exc
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "Embedding provider 'transformers' requires a CUDA-visible GPU for "
+            "this Qwen3 analysis run."
+        )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.padding_side = "right"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModel.from_pretrained(
+        model_name,
+        torch_dtype=parse_torch_dtype(dtype),
+        attn_implementation="sdpa",
+    )
+    model.eval()
+    model.to("cuda")
+
+    vectors: list[np.ndarray] = []
+    started_at = perf_counter()
+    for batch_index, (_start, end, batch) in enumerate(
+        indexed_batches(texts, batch_size),
+        start=1,
+    ):
+        tokenize_kwargs: dict[str, Any] = {
+            "padding": True,
+            "truncation": max_model_len is not None,
+            "return_tensors": "pt",
+        }
+        if max_model_len is not None:
+            tokenize_kwargs["max_length"] = max_model_len
+        tokenized = tokenizer(batch, **tokenize_kwargs)
+        tokenized = {key: value.to("cuda") for key, value in tokenized.items()}
+        with torch.inference_mode():
+            outputs = model(**tokenized)
+            pooled = last_token_pool(
+                outputs.last_hidden_state,
+                tokenized["attention_mask"],
+            )
+            pooled = functional.normalize(pooled, p=2, dim=1)
+        vectors.extend(pooled.detach().cpu().to(torch.float32).numpy())
+        maybe_log_embedding_progress(
+            completed=end,
+            total=len(texts),
+            batch_index=batch_index,
+            progress_interval=progress_interval,
+            started_at=started_at,
+        )
+
+    return np.asarray(vectors, dtype=np.float32)
+
+
 def embedding_items_sha256(items: list[EmbeddingItem]) -> str:
     hasher = hashlib.sha256()
     for item in items:
@@ -821,11 +924,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--embedding-provider",
-        choices=("none", "vllm", "vllm-openai"),
+        choices=("none", "vllm", "vllm-openai", "transformers"),
         default="none",
         help=(
             "'vllm' uses vLLM's Python LLM.embed API. 'vllm-openai' calls a "
-            "running vLLM OpenAI-compatible /v1/embeddings endpoint."
+            "running vLLM OpenAI-compatible /v1/embeddings endpoint. "
+            "'transformers' runs the Qwen3 embedding model directly with "
+            "last-token pooling on a CUDA-visible GPU."
         ),
     )
     parser.add_argument("--embedding-model", default=QWEN3_EMBEDDING_MODEL)
@@ -978,13 +1083,22 @@ def main(argv: list[str] | None = None) -> int:
                     gpu_memory_utilization=args.gpu_memory_utilization,
                     progress_interval=args.embedding_progress_interval,
                 )
-            else:
+            elif args.embedding_provider == "vllm-openai":
                 embeddings = embed_with_vllm_openai(
                     texts,
                     model_name=args.embedding_model,
                     batch_size=args.embedding_batch_size,
                     base_url=args.vllm_base_url,
                     api_key=args.vllm_api_key,
+                    progress_interval=args.embedding_progress_interval,
+                )
+            else:
+                embeddings = embed_with_transformers(
+                    texts,
+                    model_name=args.embedding_model,
+                    batch_size=args.embedding_batch_size,
+                    dtype=args.dtype,
+                    max_model_len=args.max_model_len,
                     progress_interval=args.embedding_progress_interval,
                 )
             log_timing(

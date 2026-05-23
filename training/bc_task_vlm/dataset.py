@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -72,6 +73,7 @@ _EXAMPLE_CACHE_DEPENDENCY_PATHS = (
     Path(__file__).with_name("tool_calling.py").resolve(),
     Path(__file__).with_name("task_registry.py").resolve(),
 )
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 
 
 def _missing_dependency_error(module_name: str) -> ImportError:
@@ -209,8 +211,13 @@ def _iter_trajectory_dirs(
     *,
     show_progress: bool,
     progress_description: str | None,
+    include_trajectory_ids: set[str] | None = None,
 ):
     trajectory_dirs = sorted(path for path in task_root.iterdir() if path.is_dir())
+    if include_trajectory_ids is not None:
+        trajectory_dirs = [
+            path for path in trajectory_dirs if path.name in include_trajectory_ids
+        ]
     if not show_progress or tqdm is None:
         return trajectory_dirs
     return tqdm(
@@ -220,6 +227,16 @@ def _iter_trajectory_dirs(
         leave=False,
         unit="traj",
     )
+
+
+def list_task_trajectory_ids(*, dataset_root: Path, task_name: str) -> list[str]:
+    """Returns sorted trajectory directory names for one dataset task."""
+
+    task_metadata = get_task_metadata(task_name)
+    task_root = dataset_root / task_metadata.dataset_name
+    if not task_root.is_dir():
+        raise FileNotFoundError(f"Task directory does not exist: {task_root}")
+    return sorted(path.name for path in task_root.iterdir() if path.is_dir())
 
 
 def _normalize_history_step(step: dict[str, Any]) -> dict[str, Any]:
@@ -301,6 +318,10 @@ def _ensure_image_paths_exist(
     trajectory_id: str,
     image_paths: list[str],
 ) -> None:
+    validate_paths = os.environ.get("ROBOCASA_VALIDATE_IMAGE_PATHS", "true")
+    if validate_paths.strip().lower() in _FALSE_ENV_VALUES:
+        return
+
     missing_images = [
         image_path for image_path in image_paths if not Path(image_path).exists()
     ]
@@ -310,6 +331,50 @@ def _ensure_image_paths_exist(
     raise FileNotFoundError(
         f"Missing rendered images for {task_name}/{trajectory_id}: {missing}"
     )
+
+
+def _record_latest_observation(
+    *,
+    latest_observations_by_agent: dict[str, tuple[list[str], list[str]]],
+    plan_step: dict[str, Any],
+    task_name: str,
+    trajectory_id: str,
+) -> None:
+    if plan_step.get("tool") != "get_image":
+        return
+
+    metadata = plan_step.get("metadata", {})
+    source_agent = metadata.get("source_agent")
+    if source_agent is None:
+        return
+
+    args = plan_step.get("args", {})
+    image_paths = list(args.get("image_paths", ()))
+    views = list(args.get("views", ()))
+    if not image_paths:
+        return
+
+    _ensure_image_paths_exist(
+        task_name=task_name,
+        trajectory_id=trajectory_id,
+        image_paths=image_paths,
+    )
+    latest_observations_by_agent[source_agent] = (image_paths, views)
+
+
+def _require_latest_observation(
+    *,
+    latest_observations_by_agent: dict[str, tuple[list[str], list[str]]],
+    agent_id: str,
+    before_index: int,
+) -> tuple[list[str], list[str]]:
+    try:
+        return latest_observations_by_agent[agent_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"Missing preceding observation image for agent {agent_id!r} "
+            f"before step {before_index}."
+        ) from exc
 
 
 def _validate_sft_format(sft_format: str) -> str:
@@ -378,6 +443,7 @@ def build_centralized_examples(
     show_progress: bool = False,
     progress_description: str | None = None,
     sft_format: str = SFT_FORMAT_TOOL_CALL,
+    trajectory_ids_by_task: dict[str, set[str]] | None = None,
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step."""
 
@@ -401,11 +467,17 @@ def build_centralized_examples(
             agent_ids=AGENT_IDS,
             allowed_tool_specs=task_metadata.allowed_tool_specs,
         )
+        include_trajectory_ids = None
+        if trajectory_ids_by_task is not None:
+            include_trajectory_ids = trajectory_ids_by_task.get(
+                task_metadata.dataset_name, set()
+            )
 
         for trajectory_dir in _iter_trajectory_dirs(
             task_root,
             show_progress=show_progress,
             progress_description=progress_description or task_metadata.dataset_name,
+            include_trajectory_ids=include_trajectory_ids,
         ):
             original_trajectory = _load_json(
                 trajectory_dir / "original_trajectory.json"
@@ -426,22 +498,29 @@ def build_centralized_examples(
             )
 
             history_steps: list[dict[str, Any]] = []
-            for raw_step, executed_step in zip(raw_steps, executed_steps, strict=True):
+            latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
+            for raw_step, plan_step, executed_step in zip(
+                raw_steps,
+                plan_steps,
+                executed_steps,
+                strict=True,
+            ):
+                _record_latest_observation(
+                    latest_observations_by_agent=latest_observations_by_agent,
+                    plan_step=plan_step,
+                    task_name=task_name,
+                    trajectory_id=trajectory_id,
+                )
                 if raw_step["tool"] == "get_image":
                     continue
 
                 if not executed_step.get("success", False):
                     continue
 
-                image_paths, observation_views = _find_latest_same_agent_observation(
-                    plan_steps,
+                image_paths, observation_views = _require_latest_observation(
+                    latest_observations_by_agent=latest_observations_by_agent,
                     before_index=raw_step["step"],
                     agent_id=raw_step["agent"],
-                )
-                _ensure_image_paths_exist(
-                    task_name=task_name,
-                    trajectory_id=trajectory_id,
-                    image_paths=image_paths,
                 )
 
                 target_payload, target_tool_call, target_text = _build_target_metadata(
@@ -502,6 +581,7 @@ def build_decentralized_examples(
     show_progress: bool = False,
     progress_description: str | None = None,
     sft_format: str = SFT_FORMAT_TOOL_CALL,
+    trajectory_ids_by_task: dict[str, set[str]] | None = None,
 ) -> list[DecentralizedExample]:
     """Builds one conversation per `(trajectory, agent)` training example."""
 
@@ -518,11 +598,17 @@ def build_decentralized_examples(
             agent_ids=AGENT_IDS,
             allowed_tool_specs=task_metadata.allowed_tool_specs,
         )
+        include_trajectory_ids = None
+        if trajectory_ids_by_task is not None:
+            include_trajectory_ids = trajectory_ids_by_task.get(
+                task_metadata.dataset_name, set()
+            )
 
         for trajectory_dir in _iter_trajectory_dirs(
             task_root,
             show_progress=show_progress,
             progress_description=progress_description or task_metadata.dataset_name,
+            include_trajectory_ids=include_trajectory_ids,
         ):
             original_trajectory = _load_json(
                 trajectory_dir / "original_trajectory.json"
@@ -552,23 +638,30 @@ def build_decentralized_examples(
             target_step_indices_by_agent: dict[str, list[int]] = {
                 agent_id: [] for agent_id in AGENT_IDS
             }
+            latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
 
-            for raw_step, executed_step in zip(raw_steps, executed_steps, strict=True):
+            for raw_step, plan_step, executed_step in zip(
+                raw_steps,
+                plan_steps,
+                executed_steps,
+                strict=True,
+            ):
+                _record_latest_observation(
+                    latest_observations_by_agent=latest_observations_by_agent,
+                    plan_step=plan_step,
+                    task_name=task_name,
+                    trajectory_id=trajectory_id,
+                )
                 if raw_step["tool"] == "get_image":
                     continue
 
                 if not executed_step.get("success", False):
                     continue
 
-                image_paths, observation_views = _find_latest_same_agent_observation(
-                    plan_steps,
+                image_paths, observation_views = _require_latest_observation(
+                    latest_observations_by_agent=latest_observations_by_agent,
                     before_index=raw_step["step"],
                     agent_id=raw_step["agent"],
-                )
-                _ensure_image_paths_exist(
-                    task_name=task_name,
-                    trajectory_id=trajectory_id,
-                    image_paths=image_paths,
                 )
 
                 _, target_tool_call, target_text = _build_target_metadata(
@@ -717,10 +810,10 @@ def _example_type_for_granularity(
 def load_examples_from_cache(
     *,
     cache_path: Path,
-    expected_fingerprint: dict[str, Any],
+    expected_fingerprint: dict[str, Any] | None,
     granularity: str,
 ) -> list[ManifestExample] | None:
-    """Loads cached task examples when the cache fingerprint matches."""
+    """Loads cached task examples, optionally requiring a fingerprint match."""
 
     try:
         payload = _load_json(cache_path)
@@ -729,7 +822,10 @@ def load_examples_from_cache(
 
     if payload.get("cache_format_version") != _EXAMPLE_CACHE_FORMAT_VERSION:
         return None
-    if payload.get("fingerprint") != expected_fingerprint:
+    if (
+        expected_fingerprint is not None
+        and payload.get("fingerprint") != expected_fingerprint
+    ):
         return None
 
     raw_examples = payload.get("examples")
@@ -851,11 +947,25 @@ class LazyVisionSFTCollator:
         *,
         processor_name_or_path: str,
         max_length: int | None,
+        max_images_per_sample: int | None = None,
+        max_history_steps_per_prompt: int | None = None,
+        supervise_last_assistant_turn_only: bool = False,
         trust_remote_code: bool,
         sft_format: str = SFT_FORMAT_TOOL_CALL,
     ) -> None:
         self.processor_name_or_path = processor_name_or_path
         self.max_length = max_length
+        self.max_images_per_sample = (
+            max_images_per_sample
+            if max_images_per_sample and max_images_per_sample > 0
+            else None
+        )
+        self.max_history_steps_per_prompt = (
+            max_history_steps_per_prompt
+            if max_history_steps_per_prompt and max_history_steps_per_prompt > 0
+            else None
+        )
+        self.supervise_last_assistant_turn_only = supervise_last_assistant_turn_only
         self.trust_remote_code = trust_remote_code
         self.sft_format = _validate_sft_format(sft_format)
         self._processor = None
@@ -882,6 +992,70 @@ class LazyVisionSFTCollator:
                 images.append(image.convert("RGB"))
         return images
 
+    @staticmethod
+    def _message_text_for_plain_fallback(
+        template_owner,
+        message: dict[str, Any],
+    ) -> str:
+        tokenizer = getattr(template_owner, "tokenizer", None)
+        image_token = (
+            getattr(template_owner, "image_token", None)
+            or getattr(tokenizer, "image_token", None)
+            or "<|image|>"
+        )
+        audio_token = (
+            getattr(template_owner, "audio_token", None)
+            or getattr(tokenizer, "audio_token", None)
+            or "<|audio|>"
+        )
+
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return str(content).strip()
+
+        chunks: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "text":
+                chunks.append(str(item.get("text", "")).strip())
+            elif item_type == "image":
+                chunks.append(image_token)
+            elif item_type == "audio":
+                chunks.append(audio_token)
+        return "".join(chunks).strip()
+
+    def _apply_plain_fallback_template(
+        self,
+        template_owner,
+        *,
+        messages: list[dict[str, Any]],
+        add_generation_prompt: bool = False,
+    ) -> str:
+        tokenizer = getattr(template_owner, "tokenizer", None) or template_owner
+        bos_token = getattr(tokenizer, "bos_token", None) or ""
+        chunks = [bos_token]
+
+        for message in messages:
+            role = message.get("role", "user")
+            if role == "assistant":
+                role = "model"
+            elif role == "developer":
+                role = "system"
+
+            chunks.append(f"<|turn>{role}\n")
+            chunks.append(
+                self._message_text_for_plain_fallback(template_owner, message)
+            )
+            chunks.append("<turn|>\n")
+
+        if add_generation_prompt:
+            chunks.append("<|turn>model\n")
+        return "".join(chunks)
+
     def _apply_chat_template(
         self,
         template_owner,
@@ -893,6 +1067,20 @@ class LazyVisionSFTCollator:
         template_kwargs = dict(kwargs)
         if self.sft_format == SFT_FORMAT_TOOL_CALL:
             template_kwargs["tools"] = feature["tool_schemas"]
+
+        if self.sft_format == SFT_FORMAT_PLAIN and not getattr(
+            template_owner, "chat_template", None
+        ):
+            if template_kwargs.get("tokenize"):
+                raise TypeError("Plain fallback chat template only renders text.")
+            return self._apply_plain_fallback_template(
+                template_owner,
+                messages=messages,
+                add_generation_prompt=bool(
+                    template_kwargs.get("add_generation_prompt", False)
+                ),
+            )
+
         return template_owner.apply_chat_template(messages, **template_kwargs)
 
     def _tokenize_texts(
@@ -927,6 +1115,194 @@ class LazyVisionSFTCollator:
             for item in content
             if isinstance(item, dict) and item.get("type") == "image"
         )
+
+    def _trim_feature_to_image_budget(self, feature: dict[str, Any]) -> dict[str, Any]:
+        if self.max_images_per_sample is None:
+            return feature
+
+        image_paths = list(feature["image_paths"])
+        if len(image_paths) <= self.max_images_per_sample:
+            return feature
+
+        messages = list(feature["messages"])
+        leading_message_count = 0
+        while (
+            leading_message_count < len(messages)
+            and messages[leading_message_count].get("role") in {"system", "developer"}
+            and self._count_images_in_message(messages[leading_message_count]) == 0
+        ):
+            leading_message_count += 1
+
+        selected_start = len(messages)
+        selected_image_count = 0
+        for message_index in range(len(messages) - 1, leading_message_count - 1, -1):
+            message_image_count = self._count_images_in_message(messages[message_index])
+            if (
+                message_image_count > 0
+                and selected_image_count + message_image_count
+                > self.max_images_per_sample
+            ):
+                break
+            selected_image_count += message_image_count
+            selected_start = message_index
+
+        while (
+            selected_start < len(messages)
+            and messages[selected_start].get("role") == "assistant"
+        ):
+            selected_start += 1
+
+        selected_image_count = sum(
+            self._count_images_in_message(message)
+            for message in messages[selected_start:]
+        )
+        if selected_start >= len(messages) or selected_image_count == 0:
+            return feature
+
+        dropped_image_count = sum(
+            self._count_images_in_message(message)
+            for message in messages[:selected_start]
+        )
+        selected_image_paths = image_paths[
+            dropped_image_count : dropped_image_count + selected_image_count
+        ]
+        if len(selected_image_paths) != selected_image_count:
+            return feature
+
+        trimmed_feature = dict(feature)
+        trimmed_feature["messages"] = (
+            messages[:leading_message_count] + messages[selected_start:]
+        )
+        trimmed_feature["image_paths"] = selected_image_paths
+        return trimmed_feature
+
+    def _trim_prompt_history_text(self, text: str) -> str:
+        if self.max_history_steps_per_prompt is None:
+            return text
+
+        history_header = "Previous executed symbolic action history:\n"
+        tools_header = "\n\nAvailable tools for this task:\n"
+        history_start = text.find(history_header)
+        if history_start < 0:
+            return text
+        history_body_start = history_start + len(history_header)
+        history_end = text.find(tools_header, history_body_start)
+        if history_end < 0:
+            return text
+
+        history_lines = [
+            line
+            for line in text[history_body_start:history_end].splitlines()
+            if line.strip()
+        ]
+        if len(history_lines) <= self.max_history_steps_per_prompt:
+            return text
+
+        kept_history_lines = history_lines[-self.max_history_steps_per_prompt :]
+        omitted_count = len(history_lines) - len(kept_history_lines)
+        trimmed_history = "\n".join(
+            [f"- {omitted_count} earlier steps omitted"] + kept_history_lines
+        )
+        return text[:history_body_start] + trimmed_history + text[history_end:]
+
+    def _trim_feature_prompt_history(
+        self,
+        feature: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.max_history_steps_per_prompt is None:
+            return feature
+
+        messages: list[dict[str, Any]] = []
+        changed = False
+        for message in feature["messages"]:
+            content = message.get("content")
+            if not isinstance(content, list):
+                messages.append(message)
+                continue
+
+            trimmed_content: list[Any] = []
+            for item in content:
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "text"
+                    and isinstance(item.get("text"), str)
+                ):
+                    trimmed_text = self._trim_prompt_history_text(item["text"])
+                    if trimmed_text != item["text"]:
+                        changed = True
+                        trimmed_item = dict(item)
+                        trimmed_item["text"] = trimmed_text
+                        trimmed_content.append(trimmed_item)
+                    else:
+                        trimmed_content.append(item)
+                else:
+                    trimmed_content.append(item)
+
+            if trimmed_content != content:
+                trimmed_message = dict(message)
+                trimmed_message["content"] = trimmed_content
+                messages.append(trimmed_message)
+            else:
+                messages.append(message)
+
+        if not changed:
+            return feature
+        trimmed_feature = dict(feature)
+        trimmed_feature["messages"] = messages
+        return trimmed_feature
+
+    def _trim_feature_to_last_assistant_turn(
+        self,
+        feature: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.supervise_last_assistant_turn_only:
+            return feature
+
+        messages = list(feature["messages"])
+        assistant_indices = [
+            index
+            for index, message in enumerate(messages)
+            if message.get("role") == "assistant"
+        ]
+        if len(assistant_indices) <= 1:
+            return feature
+
+        final_assistant_index = assistant_indices[-1]
+        user_index = None
+        for index in range(final_assistant_index - 1, -1, -1):
+            if messages[index].get("role") == "user":
+                user_index = index
+                break
+        if user_index is None:
+            return feature
+
+        leading_messages = [
+            message
+            for message in messages[:user_index]
+            if message.get("role") in {"system", "developer"}
+            and self._count_images_in_message(message) == 0
+        ]
+        kept_messages = (
+            leading_messages + messages[user_index : final_assistant_index + 1]
+        )
+
+        image_paths = list(feature["image_paths"])
+        dropped_image_count = sum(
+            self._count_images_in_message(message) for message in messages[:user_index]
+        )
+        kept_image_count = sum(
+            self._count_images_in_message(message) for message in kept_messages
+        )
+        kept_image_paths = image_paths[
+            dropped_image_count : dropped_image_count + kept_image_count
+        ]
+        if len(kept_image_paths) != kept_image_count:
+            return feature
+
+        trimmed_feature = dict(feature)
+        trimmed_feature["messages"] = kept_messages
+        trimmed_feature["image_paths"] = kept_image_paths
+        return trimmed_feature
 
     @staticmethod
     def _has_single_final_assistant_message(messages: list[dict[str, Any]]) -> bool:
@@ -1074,9 +1450,31 @@ class LazyVisionSFTCollator:
             sequence_width=sequence_width,
         )
 
+    @staticmethod
+    def _raise_if_any_empty_labels(labels, features: list[dict[str, Any]]) -> None:
+        supervised_counts = (labels != -100).sum(dim=1).tolist()
+        empty_sample_ids = [
+            str(feature.get("sample_id", row_index))
+            for row_index, count in enumerate(supervised_counts)
+            if int(count) == 0
+        ]
+        if empty_sample_ids:
+            sample_text = ", ".join(empty_sample_ids[:8])
+            raise ValueError(
+                "Collator produced no supervised assistant tokens after "
+                f"truncation for samples: {sample_text}. Reduce "
+                "--max-history-steps-per-prompt, reduce --max-images-per-sample, "
+                "or increase --max-length."
+            )
+
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         torch_module = _require_dependency(torch, "torch")
         processor = self._get_processor()
+        features = [self._trim_feature_to_image_budget(feature) for feature in features]
+        features = [
+            self._trim_feature_to_last_assistant_turn(feature) for feature in features
+        ]
+        features = [self._trim_feature_prompt_history(feature) for feature in features]
         messages = [feature["messages"] for feature in features]
         images = [self._load_images(feature["image_paths"]) for feature in features]
 
@@ -1123,6 +1521,7 @@ class LazyVisionSFTCollator:
             prompt_lengths = prompt_batch["attention_mask"].sum(dim=1).tolist()
             for row_index, prompt_length in enumerate(prompt_lengths):
                 labels[row_index, :prompt_length] = -100
+            self._raise_if_any_empty_labels(labels, features)
             batch["labels"] = labels
             return batch
 
@@ -1139,5 +1538,6 @@ class LazyVisionSFTCollator:
             valid_positions = assistant_mask & batch["attention_mask"][row_index].bool()
             labels[row_index, ~valid_positions] = -100
 
+        self._raise_if_any_empty_labels(labels, features)
         batch["labels"] = labels
         return batch

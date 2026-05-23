@@ -9,6 +9,7 @@ from typing import Any
 from data_generation.task_level.generation.raw.config import (
     COST_SUMMARY_OUTPUT_FILENAME,
     DEFAULT_OUTPUT_DIR,
+    MULTI_SAMPLE_SAMPLING_STRATEGIES,
     RuntimeConfig,
 )
 from data_generation.task_level.generation.raw.runtime_support import (
@@ -203,11 +204,11 @@ def _append_sampling_cost_note(
 ) -> dict[str, Any]:
     """Adds sampling-specific cost notes when totals are shared across candidates."""
 
-    if runtime_config.sampling != "verbalized":
+    if runtime_config.sampling not in MULTI_SAMPLE_SAMPLING_STRATEGIES:
         return summary
     verbalized_note = (
-        "For verbalized sampling, token and cost totals are counted once per "
-        "model response and apportioned across the saved trajectories from "
+        "For verbalized sampling, token and cost totals are counted once "
+        "per model response and apportioned across the saved trajectories from "
         "that response."
     )
     if verbalized_note not in summary["notes"]:

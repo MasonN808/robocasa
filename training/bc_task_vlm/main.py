@@ -6,10 +6,14 @@ import argparse
 import inspect
 import importlib.util
 import json
+import math
 import os
+import random
 import sys
+import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +40,7 @@ from training.bc_task_vlm.dataset import (
     build_centralized_examples,
     build_decentralized_examples,
     build_split_manifest,
+    list_task_trajectory_ids,
     load_examples_from_cache,
     save_examples_to_cache,
 )
@@ -54,9 +59,13 @@ class RunConfiguration:
     processor_name_or_path: str
     train_tasks: list[str]
     val_tasks: list[str]
+    validation_trajectories_per_task: int
+    validation_trajectory_fraction: float
+    validation_split_seed: int
     train_example_granularity: str
     sft_format: str
     use_example_cache: bool
+    trust_example_cache: bool
     training_samples_cache_dir: str
     output_dir: str
     per_device_batch_size: int
@@ -64,6 +73,9 @@ class RunConfiguration:
     num_epochs: float
     learning_rate: float
     max_length: int | None
+    max_images_per_sample: int | None
+    max_history_steps_per_prompt: int | None
+    supervise_last_assistant_turn_only: bool
     num_workers: int
     bf16: bool
     fp16: bool
@@ -77,6 +89,7 @@ class RunConfiguration:
     save_steps: int
     eval_steps: int
     logging_steps: int
+    max_steps: int
     save_total_limit: int
     warmup_ratio: float
     lr_scheduler_type: str
@@ -121,15 +134,48 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--train-tasks",
         default="hot_dog_setup,prepare_sandwich_station",
-        help="Comma-separated task names for the training split.",
+        help=(
+            "Comma-separated task names for the training split. Use 'all' for "
+            "every task present in the dataset root."
+        ),
     )
     parser.add_argument(
         "--val-tasks",
         default="prepare_coffee",
         help=(
             "Comma-separated task names for the validation split. Pass an empty "
-            "string to disable validation."
+            "string to disable validation. Use 'all' for every task present in "
+            "the dataset root."
         ),
+    )
+    parser.add_argument(
+        "--validation-trajectories-per-task",
+        type=int,
+        default=0,
+        help=(
+            "If positive, evaluate on at most this many held-out trajectories "
+            "per validation task. Overlapping train/validation tasks are allowed "
+            "only in this mode, and selected validation trajectories are removed "
+            "from training."
+        ),
+    )
+    parser.add_argument(
+        "--validation-trajectory-fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "If positive, evaluate on this fraction of trajectories per "
+            "validation task. Overlapping train/validation tasks are allowed "
+            "only in held-out validation mode, and selected validation "
+            "trajectories are removed from training. Mutually exclusive with "
+            "--validation-trajectories-per-task."
+        ),
+    )
+    parser.add_argument(
+        "--validation-split-seed",
+        type=int,
+        default=None,
+        help="Seed for selecting held-out validation trajectories. Defaults to --seed.",
     )
     parser.add_argument(
         "--train-example-granularity",
@@ -165,6 +211,16 @@ def parse_args() -> argparse.Namespace:
         help="Reuse cached serialized training samples across training runs.",
     )
     parser.add_argument(
+        "--trust-example-cache",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Load existing task example caches without restatting source "
+            "trajectories. Use only when the dataset root and cache are known "
+            "to match."
+        ),
+    )
+    parser.add_argument(
         "--training-samples-cache-dir",
         dest="training_samples_cache_dir",
         type=Path,
@@ -189,6 +245,34 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Optional sequence truncation length. Leave unset for VLM training.",
+    )
+    parser.add_argument(
+        "--max-images-per-sample",
+        type=int,
+        default=None,
+        help=(
+            "Optional cap on recent image observations kept per multimodal SFT "
+            "sample before tokenization. Non-positive values disable the cap."
+        ),
+    )
+    parser.add_argument(
+        "--max-history-steps-per-prompt",
+        type=int,
+        default=None,
+        help=(
+            "Optional cap on previous symbolic history lines kept in each user "
+            "prompt before tokenization. Non-positive values disable the cap."
+        ),
+    )
+    parser.add_argument(
+        "--supervise-last-assistant-turn-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "For multi-turn conversation samples, keep only the final "
+            "user/assistant turn for loss computation. This avoids unstable "
+            "multi-assistant label masks in processor chat templates."
+        ),
     )
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
@@ -215,6 +299,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-steps", type=int, default=100)
     parser.add_argument("--eval-steps", type=int, default=100)
     parser.add_argument("--logging-steps", type=int, default=10)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=-1,
+        help="Maximum optimizer steps for short smoke/performance runs.",
+    )
     parser.add_argument("--save-total-limit", type=int, default=2)
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--lr-scheduler-type", default="cosine")
@@ -253,8 +343,51 @@ def _split_csv(raw_value: str) -> list[str]:
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
-def _resolve_task_list(raw_value: str, *, allow_empty: bool = False) -> list[str]:
-    resolved = [resolve_task_name(task_name) for task_name in _split_csv(raw_value)]
+def _available_dataset_task_names(dataset_root: Path) -> list[str]:
+    if not dataset_root.is_dir():
+        return list(supported_task_names())
+
+    task_names: list[str] = []
+    for path in dataset_root.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            task_names.append(resolve_task_name(path.name))
+        except ValueError:
+            continue
+    return sorted(set(task_names))
+
+
+def _resolve_task_list(
+    raw_value: str,
+    *,
+    allow_empty: bool = False,
+    dataset_root: Path | None = None,
+) -> list[str]:
+    raw_task_names = _split_csv(raw_value)
+    if not raw_task_names:
+        if allow_empty:
+            return []
+        supported = ", ".join(supported_task_names())
+        raise ValueError(
+            f"At least one task is required. Supported tasks: {supported}."
+        )
+
+    resolved: list[str] = []
+    for task_name in raw_task_names:
+        if task_name.strip().lower() in {"all", "*"}:
+            if dataset_root is None:
+                resolved.extend(supported_task_names())
+            else:
+                available_task_names = _available_dataset_task_names(dataset_root)
+                if not available_task_names:
+                    raise ValueError(
+                        f"No supported task directories found in {dataset_root}."
+                    )
+                resolved.extend(available_task_names)
+        else:
+            resolved.append(resolve_task_name(task_name))
+
     if not resolved:
         if allow_empty:
             return []
@@ -319,6 +452,58 @@ def _configure_wandb(
     os.environ.setdefault("WANDB_DIR", str((output_dir / "wandb").resolve()))
 
 
+def _initialize_wandb_run(
+    *,
+    args: argparse.Namespace,
+    config: RunConfiguration,
+    report_targets: list[str],
+    output_dir: Path,
+    state: PartialState,
+) -> None:
+    if "wandb" not in report_targets or args.wandb_mode == "disabled":
+        return
+    if not state.is_main_process:
+        return
+
+    import wandb
+
+    if wandb.run is not None:
+        return
+
+    wandb_dir = (output_dir / "wandb").resolve()
+    wandb_dir.mkdir(parents=True, exist_ok=True)
+    run = wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        name=args.wandb_run_name,
+        tags=config.wandb_tags,
+        mode=args.wandb_mode,
+        dir=str(wandb_dir),
+        config=asdict(config),
+    )
+    run_url = getattr(run, "url", None)
+    if run_url:
+        _log_startup(f"Initialized W&B run: {run_url}", state=state)
+    else:
+        _log_startup("Initialized W&B run", state=state)
+
+
+def _log_wandb_metrics(
+    metrics: dict[str, float | int],
+    *,
+    state: PartialState | None = None,
+) -> None:
+    if state is not None and not state.is_main_process:
+        return
+    try:
+        import wandb
+    except ImportError:
+        return
+    if wandb.run is None:
+        return
+    wandb.log(metrics)
+
+
 def _count_parameters(model) -> dict[str, int]:
     total_params = 0
     trainable_params = 0
@@ -337,23 +522,53 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         raise ValueError("Enable at most one of --bf16 or --fp16.")
     processor_name_or_path = args.processor_name_or_path or args.model_name_or_path
     report_targets = _resolve_report_targets(args.report_to)
-    train_tasks = _resolve_task_list(args.train_tasks)
-    val_tasks = _resolve_task_list(args.val_tasks, allow_empty=True)
+    dataset_root = args.dataset_root.resolve()
+    validation_trajectories_per_task = max(args.validation_trajectories_per_task, 0)
+    validation_trajectory_fraction = args.validation_trajectory_fraction
+    if validation_trajectory_fraction < 0.0 or validation_trajectory_fraction > 1.0:
+        raise ValueError("--validation-trajectory-fraction must be between 0 and 1.")
+    if validation_trajectories_per_task > 0 and validation_trajectory_fraction > 0.0:
+        raise ValueError(
+            "Set only one of --validation-trajectories-per-task or "
+            "--validation-trajectory-fraction."
+        )
+    uses_held_out_validation = (
+        validation_trajectories_per_task > 0 or validation_trajectory_fraction > 0.0
+    )
+    train_tasks = _resolve_task_list(args.train_tasks, dataset_root=dataset_root)
+    val_tasks = _resolve_task_list(
+        args.val_tasks,
+        allow_empty=True,
+        dataset_root=dataset_root,
+    )
+    if uses_held_out_validation and not val_tasks:
+        val_tasks = list(train_tasks)
     overlapping_tasks = sorted(set(train_tasks).intersection(val_tasks))
-    if overlapping_tasks:
+    if overlapping_tasks and not uses_held_out_validation:
         overlap_text = ", ".join(overlapping_tasks)
         raise ValueError(
-            f"Train and validation tasks must be disjoint. Overlap: {overlap_text}."
+            "Train and validation tasks must be disjoint unless "
+            "--validation-trajectories-per-task or "
+            "--validation-trajectory-fraction is positive. "
+            f"Overlap: {overlap_text}."
         )
     return RunConfiguration(
-        dataset_root=str(args.dataset_root.resolve()),
+        dataset_root=str(dataset_root),
         model_name_or_path=args.model_name_or_path,
         processor_name_or_path=processor_name_or_path,
         train_tasks=train_tasks,
         val_tasks=val_tasks,
+        validation_trajectories_per_task=validation_trajectories_per_task,
+        validation_trajectory_fraction=validation_trajectory_fraction,
+        validation_split_seed=(
+            args.validation_split_seed
+            if args.validation_split_seed is not None
+            else args.seed
+        ),
         train_example_granularity=args.train_example_granularity,
         sft_format=args.sft_format,
         use_example_cache=args.use_example_cache,
+        trust_example_cache=args.trust_example_cache,
         training_samples_cache_dir=str(
             _resolve_training_samples_cache_dir(
                 args.training_samples_cache_dir
@@ -365,6 +580,18 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         num_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         max_length=args.max_length,
+        max_images_per_sample=(
+            args.max_images_per_sample
+            if args.max_images_per_sample and args.max_images_per_sample > 0
+            else None
+        ),
+        max_history_steps_per_prompt=(
+            args.max_history_steps_per_prompt
+            if args.max_history_steps_per_prompt
+            and args.max_history_steps_per_prompt > 0
+            else None
+        ),
+        supervise_last_assistant_turn_only=args.supervise_last_assistant_turn_only,
         num_workers=args.num_workers,
         bf16=args.bf16,
         fp16=args.fp16,
@@ -378,6 +605,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         save_steps=args.save_steps,
         eval_steps=args.eval_steps,
         logging_steps=args.logging_steps,
+        max_steps=args.max_steps,
         save_total_limit=args.save_total_limit,
         warmup_ratio=args.warmup_ratio,
         lr_scheduler_type=args.lr_scheduler_type,
@@ -416,6 +644,38 @@ def _load_processor(
     return processor
 
 
+def _resolve_lora_target_modules(model, target_modules: list[str]) -> list[str]:
+    named_modules = list(model.named_modules())
+    requested_targets = tuple(target_modules)
+    resolved_targets: list[str] = []
+    for module_name, module in named_modules:
+        if type(module) is not torch.nn.Linear:
+            continue
+        for target_module in requested_targets:
+            if module_name == target_module or module_name.endswith(
+                f".{target_module}"
+            ):
+                resolved_targets.append(module_name)
+                break
+            wrapped_linear_target = f"{target_module}.linear"
+            if module_name == wrapped_linear_target or module_name.endswith(
+                f".{wrapped_linear_target}"
+            ):
+                resolved_targets.append(module_name)
+                break
+
+    if not resolved_targets:
+        return target_modules
+
+    resolved_targets = sorted(set(resolved_targets))
+    if resolved_targets != target_modules:
+        _log_startup(
+            "Resolved LoRA target modules to "
+            f"{len(resolved_targets)} supported Linear modules"
+        )
+    return resolved_targets
+
+
 def _load_model(config: RunConfiguration):
     torch_dtype = None
     if torch.cuda.is_available():
@@ -451,7 +711,10 @@ def _load_model(config: RunConfiguration):
         lora_dropout=config.lora_dropout,
         bias="none",
         task_type=TaskType.CAUSAL_LM,
-        target_modules=config.lora_target_modules,
+        target_modules=_resolve_lora_target_modules(
+            model,
+            config.lora_target_modules,
+        ),
     )
     model = get_peft_model(model, lora_config)
     return model
@@ -538,7 +801,9 @@ def _build_examples_for_tasks(
     granularity: str,
     sft_format: str,
     use_example_cache: bool,
+    trust_example_cache: bool,
     training_samples_cache_dir: Path,
+    trajectory_ids_by_task: dict[str, set[str]] | None = None,
     state: PartialState,
 ) -> list[Any]:
     if granularity == "decentralized":
@@ -551,6 +816,7 @@ def _build_examples_for_tasks(
     examples: list[Any] = []
     total_tasks = len(task_names)
     for task_index, task_name in enumerate(task_names, start=1):
+        task_start = time.perf_counter()
         task_label = (
             f"{split_name} {granularity} examples for task "
             f"{task_name} ({task_index}/{total_tasks})"
@@ -559,34 +825,65 @@ def _build_examples_for_tasks(
         fingerprint: dict[str, Any] | None = None
         cache_path: Path | None = None
         task_examples: list[Any] | None = None
+        task_source = "build"
+        trajectory_count: int | None = None
+        task_trajectory_ids: set[str] | None = None
+        if trajectory_ids_by_task is not None:
+            task_trajectory_ids = set(trajectory_ids_by_task.get(task_name, set()))
+            trajectory_count = len(task_trajectory_ids)
 
-        if use_example_cache:
-            fingerprint = build_example_cache_fingerprint(
-                dataset_root=dataset_root,
-                task_name=task_name,
-                granularity=granularity,
-                sft_format=sft_format,
-            )
+        cache_allowed = use_example_cache and task_trajectory_ids is None
+        if cache_allowed:
             cache_path = build_example_cache_path(
                 cache_dir=training_samples_cache_dir,
                 dataset_root=dataset_root,
                 task_name=task_name,
                 granularity=granularity,
             )
-            task_examples = load_examples_from_cache(
-                cache_path=cache_path,
-                expected_fingerprint=fingerprint,
-                granularity=granularity,
-            )
-            if task_examples is not None:
-                _log_startup(
-                    f"Loaded {task_label} from cache {cache_path}",
-                    state=state,
+            if trust_example_cache:
+                task_examples = load_examples_from_cache(
+                    cache_path=cache_path,
+                    expected_fingerprint=None,
+                    granularity=granularity,
                 )
+                if task_examples is not None:
+                    task_source = "trusted-cache"
+                    trajectory_count = len(
+                        {example.trajectory_id for example in task_examples}
+                    )
+                    _log_startup(
+                        f"Loaded {task_label} from trusted cache {cache_path}",
+                        state=state,
+                    )
+            if task_examples is None:
+                fingerprint = build_example_cache_fingerprint(
+                    dataset_root=dataset_root,
+                    task_name=task_name,
+                    granularity=granularity,
+                    sft_format=sft_format,
+                )
+                trajectory_count = len(fingerprint.get("trajectories", ()))
+                task_examples = load_examples_from_cache(
+                    cache_path=cache_path,
+                    expected_fingerprint=fingerprint,
+                    granularity=granularity,
+                )
+                if task_examples is not None:
+                    task_source = "cache"
+                    _log_startup(
+                        f"Loaded {task_label} from cache {cache_path}",
+                        state=state,
+                    )
 
         if task_examples is None:
-            _log_startup(f"Building {task_label}", state=state)
-            if use_example_cache and not state.is_main_process:
+            if task_trajectory_ids is not None and not task_trajectory_ids:
+                task_examples = []
+                task_source = "selected"
+            else:
+                _log_startup(f"Building {task_label}", state=state)
+            if task_examples is not None:
+                pass
+            elif cache_allowed and not state.is_main_process:
                 state.wait_for_everyone()
                 if cache_path is not None and fingerprint is not None:
                     task_examples = load_examples_from_cache(
@@ -594,6 +891,8 @@ def _build_examples_for_tasks(
                         expected_fingerprint=fingerprint,
                         granularity=granularity,
                     )
+                    if task_examples is not None:
+                        task_source = "cache"
             else:
                 task_examples = builder(
                     dataset_root=dataset_root,
@@ -601,12 +900,13 @@ def _build_examples_for_tasks(
                     show_progress=state.is_main_process,
                     progress_description=progress_description,
                     sft_format=sft_format,
+                    trajectory_ids_by_task=(
+                        None
+                        if task_trajectory_ids is None
+                        else {task_name: task_trajectory_ids}
+                    ),
                 )
-                if (
-                    use_example_cache
-                    and cache_path is not None
-                    and fingerprint is not None
-                ):
+                if cache_allowed and cache_path is not None and fingerprint is not None:
                     try:
                         save_examples_to_cache(
                             cache_path=cache_path,
@@ -619,7 +919,7 @@ def _build_examples_for_tasks(
                             f"{cache_path}: {exc}",
                             state=state,
                         )
-                if use_example_cache:
+                if cache_allowed:
                     state.wait_for_everyone()
 
             if task_examples is None:
@@ -629,15 +929,180 @@ def _build_examples_for_tasks(
                     show_progress=False,
                     progress_description=progress_description,
                     sft_format=sft_format,
+                    trajectory_ids_by_task=(
+                        None
+                        if task_trajectory_ids is None
+                        else {task_name: task_trajectory_ids}
+                    ),
                 )
 
         examples.extend(task_examples)
-        _log_startup(
+        elapsed_seconds = time.perf_counter() - task_start
+        example_rate = len(task_examples) / elapsed_seconds if elapsed_seconds else 0.0
+        log_message = (
             f"Finished {split_name} task {task_name}: {len(task_examples)} "
-            f"examples ({len(examples)} cumulative)",
+            f"examples ({len(examples)} cumulative) in {elapsed_seconds:.1f}s "
+            f"from {task_source} ({example_rate:.2f} examples/s)"
+        )
+        metrics: dict[str, float | int] = {
+            f"dataset/{split_name}/{task_name}/seconds": elapsed_seconds,
+            f"dataset/{split_name}/{task_name}/examples": len(task_examples),
+            f"dataset/{split_name}/{task_name}/examples_per_second": example_rate,
+            f"dataset/{split_name}/{task_name}/cache_hit": (
+                1 if task_source in {"cache", "trusted-cache"} else 0
+            ),
+            f"dataset/{split_name}/cumulative_examples": len(examples),
+        }
+        if trajectory_count is not None:
+            trajectory_rate = (
+                trajectory_count / elapsed_seconds if elapsed_seconds else 0.0
+            )
+            log_message += (
+                f", {trajectory_count} trajectories "
+                f"({trajectory_rate:.2f} trajectories/s)"
+            )
+            metrics[f"dataset/{split_name}/{task_name}/trajectories"] = trajectory_count
+            metrics[
+                f"dataset/{split_name}/{task_name}/trajectories_per_second"
+            ] = trajectory_rate
+        _log_startup(
+            log_message,
             state=state,
         )
+        _log_wandb_metrics(metrics, state=state)
     return examples
+
+
+def _task_split_seed(seed: int, task_name: str) -> int:
+    digest = sha256(f"{seed}:{task_name}".encode("utf-8")).hexdigest()
+    return int(digest[:16], 16)
+
+
+def _select_validation_trajectory_ids(
+    *,
+    dataset_root: Path,
+    val_tasks: list[str],
+    train_tasks: list[str],
+    trajectories_per_task: int,
+    trajectory_fraction: float,
+    seed: int,
+    state: PartialState,
+) -> dict[str, set[str]]:
+    if trajectories_per_task <= 0 and trajectory_fraction <= 0.0:
+        return {}
+
+    train_task_set = set(train_tasks)
+    selected_by_task: dict[str, set[str]] = {}
+    metrics: dict[str, float | int] = {}
+    for task_name in sorted(val_tasks):
+        task_trajectory_ids = list_task_trajectory_ids(
+            dataset_root=dataset_root,
+            task_name=task_name,
+        )
+        max_selectable = len(task_trajectory_ids)
+        if task_name in train_task_set:
+            max_selectable = max(max_selectable - 1, 0)
+        if trajectories_per_task > 0:
+            selected_count = min(trajectories_per_task, max_selectable)
+        else:
+            requested_count = math.ceil(len(task_trajectory_ids) * trajectory_fraction)
+            selected_count = min(max(requested_count, 1), max_selectable)
+        if selected_count <= 0:
+            _log_startup(
+                "Selected 0 validation trajectories for task "
+                f"{task_name}; not enough trajectories to hold out.",
+                state=state,
+            )
+            continue
+
+        sampler = random.Random(_task_split_seed(seed, task_name))
+        sampler.shuffle(task_trajectory_ids)
+        selected_ids = set(task_trajectory_ids[:selected_count])
+        selected_by_task[task_name] = selected_ids
+
+        _log_startup(
+            "Selected "
+            f"{selected_count}/{len(task_trajectory_ids)} validation "
+            f"trajectories for task {task_name}",
+            state=state,
+        )
+        metrics[f"dataset/validation_split/{task_name}/trajectories"] = selected_count
+        metrics[f"dataset/validation_split/{task_name}/available_trajectories"] = len(
+            task_trajectory_ids
+        )
+
+    if metrics:
+        if trajectories_per_task > 0:
+            metrics[
+                "dataset/validation_split/trajectories_per_task"
+            ] = trajectories_per_task
+        if trajectory_fraction > 0.0:
+            metrics[
+                "dataset/validation_split/trajectory_fraction"
+            ] = trajectory_fraction
+        _log_wandb_metrics(metrics, state=state)
+    return selected_by_task
+
+
+def _filter_examples_by_trajectory_ids(
+    examples: list[Any],
+    trajectory_ids_by_task: dict[str, set[str]],
+    *,
+    include_selected: bool,
+) -> list[Any]:
+    if not trajectory_ids_by_task:
+        return examples
+
+    filtered_examples: list[Any] = []
+    for example in examples:
+        selected_ids = trajectory_ids_by_task.get(example.task_name)
+        is_selected = selected_ids is not None and example.trajectory_id in selected_ids
+        if is_selected == include_selected:
+            filtered_examples.append(example)
+    return filtered_examples
+
+
+def _apply_validation_trajectory_split(
+    *,
+    train_examples: list[Any],
+    val_examples: list[Any],
+    selected_validation_trajectory_ids: dict[str, set[str]],
+    config: RunConfiguration,
+    state: PartialState,
+) -> tuple[list[Any], list[Any]]:
+    if (
+        config.validation_trajectories_per_task <= 0
+        and config.validation_trajectory_fraction <= 0.0
+    ):
+        return train_examples, val_examples
+
+    if not selected_validation_trajectory_ids:
+        return train_examples, []
+
+    filtered_train_examples = _filter_examples_by_trajectory_ids(
+        train_examples,
+        selected_validation_trajectory_ids,
+        include_selected=False,
+    )
+    removed_train_examples = len(train_examples) - len(filtered_train_examples)
+    _log_startup(
+        "Applied held-out validation split: "
+        f"{len(filtered_train_examples)} training examples "
+        f"({removed_train_examples} held out), "
+        f"{len(val_examples)} validation examples",
+        state=state,
+    )
+    _log_wandb_metrics(
+        {
+            "dataset/validation_split/train_examples": len(filtered_train_examples),
+            "dataset/validation_split/validation_examples": len(val_examples),
+            "dataset/validation_split/held_out_train_examples": (
+                removed_train_examples
+            ),
+        },
+        state=state,
+    )
+    return filtered_train_examples, val_examples
 
 
 def _build_training_arguments(
@@ -659,6 +1124,7 @@ def _build_training_arguments(
         "logging_steps": config.logging_steps,
         "save_steps": config.save_steps,
         "eval_steps": config.eval_steps,
+        "max_steps": config.max_steps,
         "save_strategy": "steps",
         "save_total_limit": config.save_total_limit,
         "remove_unused_columns": False,
@@ -697,6 +1163,13 @@ def main() -> None:
     _validate_runtime_environment()
     config = _resolve_precision_config(config, state=distributed_state)
     _synchronize_accelerate_precision_env(config)
+    _initialize_wandb_run(
+        args=args,
+        config=config,
+        report_targets=config.report_to,
+        output_dir=output_dir,
+        state=distributed_state,
+    )
     dataset_root = Path(config.dataset_root)
 
     _log_startup(
@@ -713,6 +1186,22 @@ def main() -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
+    selected_validation_trajectory_ids: dict[str, set[str]] = {}
+    uses_held_out_validation = (
+        config.validation_trajectories_per_task > 0
+        or config.validation_trajectory_fraction > 0.0
+    )
+    if uses_held_out_validation and config.val_tasks:
+        selected_validation_trajectory_ids = _select_validation_trajectory_ids(
+            dataset_root=dataset_root,
+            val_tasks=config.val_tasks,
+            train_tasks=config.train_tasks,
+            trajectories_per_task=config.validation_trajectories_per_task,
+            trajectory_fraction=config.validation_trajectory_fraction,
+            seed=config.validation_split_seed,
+            state=distributed_state,
+        )
+
     train_examples = _build_examples_for_tasks(
         dataset_root=dataset_root,
         task_names=config.train_tasks,
@@ -720,13 +1209,13 @@ def main() -> None:
         granularity=config.train_example_granularity,
         sft_format=config.sft_format,
         use_example_cache=config.use_example_cache,
+        trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
         state=distributed_state,
     )
-    if config.train_example_granularity == "decentralized":
-        train_dataset = DecentralizedDataset(train_examples)
-    else:
-        train_dataset = CentralizedDataset(train_examples)
+    validation_trajectory_ids_by_task = (
+        selected_validation_trajectory_ids if uses_held_out_validation else None
+    )
     val_examples = _build_examples_for_tasks(
         dataset_root=dataset_root,
         task_names=config.val_tasks,
@@ -734,9 +1223,24 @@ def main() -> None:
         granularity="centralized",
         sft_format=config.sft_format,
         use_example_cache=config.use_example_cache,
+        trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
+        trajectory_ids_by_task=validation_trajectory_ids_by_task,
         state=distributed_state,
     )
+    train_examples, val_examples = _apply_validation_trajectory_split(
+        train_examples=train_examples,
+        val_examples=val_examples,
+        selected_validation_trajectory_ids=selected_validation_trajectory_ids,
+        config=config,
+        state=distributed_state,
+    )
+    if not train_examples:
+        raise ValueError("Training split is empty after validation holdout filtering.")
+    if config.train_example_granularity == "decentralized":
+        train_dataset = DecentralizedDataset(train_examples)
+    else:
+        train_dataset = CentralizedDataset(train_examples)
     val_dataset = CentralizedDataset(val_examples)
 
     _log_startup("Building split manifest", state=distributed_state)
@@ -778,6 +1282,9 @@ def main() -> None:
     data_collator = LazyVisionSFTCollator(
         processor_name_or_path=config.processor_name_or_path,
         max_length=config.max_length,
+        max_images_per_sample=config.max_images_per_sample,
+        max_history_steps_per_prompt=config.max_history_steps_per_prompt,
+        supervise_last_assistant_turn_only=config.supervise_last_assistant_turn_only,
         trust_remote_code=config.trust_remote_code,
         sft_format=config.sft_format,
     )
@@ -811,21 +1318,23 @@ def main() -> None:
     train_result = trainer.train(resume_from_checkpoint=config.resume_from_checkpoint)
     trainer.save_model()
     trainer.save_state()
+    trainer.log(train_result.metrics)
     trainer.log_metrics("train", train_result.metrics)
     trainer.save_metrics("train", train_result.metrics)
 
     eval_metrics: dict[str, float] = {}
     if len(val_dataset) > 0:
         eval_metrics = trainer.evaluate()
+        trainer.log(eval_metrics)
         trainer.log_metrics("eval", eval_metrics)
         trainer.save_metrics("eval", eval_metrics)
 
     trainer.accelerator.wait_for_everyone()
     if trainer.is_world_process_zero():
         final_metrics = train_result.metrics | eval_metrics
-        if len(val_dataset) > 0 and config.sft_format == SFT_FORMAT_TOOL_CALL:
+        if len(val_dataset) > 0:
             _log_startup(
-                "Running structured generation evaluation",
+                "Running structured tool-call generation evaluation",
                 state=distributed_state,
             )
             unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
@@ -838,15 +1347,11 @@ def main() -> None:
                 max_new_tokens=config.eval_max_new_tokens,
                 batch_size=config.eval_generation_batch_size,
                 trust_remote_code=config.trust_remote_code,
+                sft_format=config.sft_format,
                 max_samples=config.eval_generation_max_samples,
             )
             trainer.log(structured_metrics)
             final_metrics |= structured_metrics
-        elif len(val_dataset) > 0:
-            _log_startup(
-                "Skipping structured generation evaluation for plain SFT",
-                state=distributed_state,
-            )
         _save_json(output_dir / "final_metrics.json", final_metrics)
     trainer.accelerator.wait_for_everyone()
     _log_startup("Run complete", state=distributed_state)

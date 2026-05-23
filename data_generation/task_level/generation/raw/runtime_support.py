@@ -340,6 +340,33 @@ def _global_trajectory_index(
     return (run_index * _trajectories_per_run(runtime_config)) + candidate_index
 
 
+def _sampling_metadata_for_candidate(
+    *,
+    runtime_config: RuntimeConfig,
+    sampled_candidate: SampledTrajectoryCandidate,
+    candidate_index: int,
+    run_index: int,
+) -> dict[str, Any] | None:
+    """Builds optional saved metadata for sampling strategy outputs."""
+
+    if (
+        sampled_candidate.probability is None
+        and sampled_candidate.sampling_configuration is None
+    ):
+        return None
+
+    sampling_metadata: dict[str, Any] = {
+        "strategy": runtime_config.sampling,
+        "candidate_index": candidate_index,
+        "run_index": run_index,
+    }
+    if sampled_candidate.probability is not None:
+        sampling_metadata["probability"] = sampled_candidate.probability
+    if sampled_candidate.sampling_configuration is not None:
+        sampling_metadata["configuration"] = sampled_candidate.sampling_configuration
+    return sampling_metadata
+
+
 def _build_trajectory_record_from_candidate(
     *,
     trajectory_index: int,
@@ -642,10 +669,13 @@ def _validate_candidate_references_without_sim(
                 )
 
         fixture_id = _step_fixture_id(args, support_site_parent_map)
-        fixture_state = fixtures_by_id.get(fixture_id) if isinstance(fixture_id, str) else None
+        fixture_state = (
+            fixtures_by_id.get(fixture_id) if isinstance(fixture_id, str) else None
+        )
         fixture_parts = (
             fixture_state.get("parts", {})
-            if isinstance(fixture_state, dict) and isinstance(fixture_state.get("parts"), dict)
+            if isinstance(fixture_state, dict)
+            and isinstance(fixture_state.get("parts"), dict)
             else {}
         )
         fixture_controls = (
@@ -663,9 +693,7 @@ def _validate_candidate_references_without_sim(
             set(fixture_support_sites)
             if isinstance(fixture_support_sites, dict)
             else {
-                site_id
-                for site_id in fixture_support_sites
-                if isinstance(site_id, str)
+                site_id for site_id in fixture_support_sites if isinstance(site_id, str)
             }
             if isinstance(fixture_support_sites, list)
             else set()
@@ -682,17 +710,21 @@ def _validate_candidate_references_without_sim(
             raise ToolArgumentSemanticValidationError(
                 f"Unknown part/control {part_id!r} for fixture {fixture_id!r}.",
                 step=step_number,
-                details={"tool": tool_name, "part_id": part_id, "fixture_id": fixture_id},
+                details={
+                    "tool": tool_name,
+                    "part_id": part_id,
+                    "fixture_id": fixture_id,
+                },
             )
-        if (
-            isinstance(part_id, str)
-            and fixture_parts
-            and part_id not in fixture_parts
-        ):
+        if isinstance(part_id, str) and fixture_parts and part_id not in fixture_parts:
             raise ToolArgumentSemanticValidationError(
                 f"Unknown part/control {part_id!r} for fixture {fixture_id!r}.",
                 step=step_number,
-                details={"tool": tool_name, "part_id": part_id, "fixture_id": fixture_id},
+                details={
+                    "tool": tool_name,
+                    "part_id": part_id,
+                    "fixture_id": fixture_id,
+                },
             )
 
         control_id = args.get("control_id")
@@ -706,7 +738,11 @@ def _validate_candidate_references_without_sim(
             raise ToolArgumentSemanticValidationError(
                 f"Unknown part/control {control_id!r} for fixture {fixture_id!r}.",
                 step=step_number,
-                details={"tool": tool_name, "control_id": control_id, "fixture_id": fixture_id},
+                details={
+                    "tool": tool_name,
+                    "control_id": control_id,
+                    "fixture_id": fixture_id,
+                },
             )
         if (
             isinstance(control_id, str)
@@ -716,7 +752,11 @@ def _validate_candidate_references_without_sim(
             raise ToolArgumentSemanticValidationError(
                 f"Unknown part/control {control_id!r} for fixture {fixture_id!r}.",
                 step=step_number,
-                details={"tool": tool_name, "control_id": control_id, "fixture_id": fixture_id},
+                details={
+                    "tool": tool_name,
+                    "control_id": control_id,
+                    "fixture_id": fixture_id,
+                },
             )
 
         for site_arg_name in ("source_site_id", "target_site_id"):
@@ -782,13 +822,14 @@ def _validation_error_payload(
     return payload
 
 
-def _build_verbalized_insufficient_results_error(
+def _build_multi_sample_insufficient_results_error(
     *,
+    sampling_name: str,
     required_count: int,
     collected_count: int,
     invalid_validations: list[dict[str, Any]],
 ) -> TrajectoryValidationError:
-    """Builds one descriptive insufficiency error for verbalized sampling retries."""
+    """Builds one descriptive insufficiency error for multi-sample retries."""
 
     duplicate_count = 0
     invalid_count = 0
@@ -806,28 +847,31 @@ def _build_verbalized_insufficient_results_error(
         "duplicate_candidate_count": duplicate_count,
         "invalid_candidate_count": invalid_count,
     }
+    run_label = (
+        "Verbalized run" if sampling_name == "verbalized" else "Multi-sample run"
+    )
 
     if duplicate_count and invalid_count:
         return InsufficientValidUniqueTrajectoriesMixedError(
-            "Verbalized run did not produce enough valid unique trajectories because "
+            f"{run_label} did not produce enough valid unique trajectories because "
             "some candidates failed validation and others duplicated existing "
             "trajectories.",
             details=details,
         )
     if duplicate_count:
         return InsufficientValidUniqueTrajectoriesDuplicateError(
-            "Verbalized run did not produce enough valid unique trajectories because "
+            f"{run_label} did not produce enough valid unique trajectories because "
             "some candidates duplicated existing trajectories.",
             details=details,
         )
     if invalid_count:
         return InsufficientValidUniqueTrajectoriesInvalidError(
-            "Verbalized run did not produce enough valid unique trajectories because "
+            f"{run_label} did not produce enough valid unique trajectories because "
             "some candidates failed validation.",
             details=details,
         )
     return InsufficientValidUniqueTrajectoriesValidationError(
-        "Verbalized run did not produce enough valid unique trajectories.",
+        f"{run_label} did not produce enough valid unique trajectories.",
         details=details,
     )
 
@@ -1058,13 +1102,14 @@ def _build_trajectory_records_from_sampled_candidates(
                 task_definition=task_definition,
             )
         )
-        if sampled_candidate.probability is not None:
-            trajectory_record["sampling_metadata"] = {
-                "strategy": runtime_config.sampling,
-                "probability": sampled_candidate.probability,
-                "candidate_index": candidate_index,
-                "run_index": run_index,
-            }
+        sampling_metadata = _sampling_metadata_for_candidate(
+            runtime_config=runtime_config,
+            sampled_candidate=sampled_candidate,
+            candidate_index=candidate_index,
+            run_index=run_index,
+        )
+        if sampling_metadata is not None:
+            trajectory_record["sampling_metadata"] = sampling_metadata
         trajectory_record["prompt"] = prompt
         trajectory_record["raw_output"] = sampled_candidate.raw_output
         trajectory_records.append(trajectory_record)

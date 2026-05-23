@@ -15,6 +15,9 @@ from data_generation.task_level.sampling.random_number import (
     RandomNumberSamplingStrategy,
     RandomSamplingStrategy,
 )
+from data_generation.task_level.sampling.structured_random import (
+    StructuredRandomSamplingStrategy,
+)
 from data_generation.task_level.sampling.verbalized import (
     VerbalizedSamplingStrategy,
     VerbalizedSamplingValidationError,
@@ -26,6 +29,7 @@ SAMPLING_STRATEGIES: dict[str, SamplingStrategy] = {
     "high_temperature": HighTemperatureSamplingStrategy(),
     "random": RandomSamplingStrategy(),
     "random_number": RandomNumberSamplingStrategy(),
+    "structured_random": StructuredRandomSamplingStrategy(),
     "verbalized": VerbalizedSamplingStrategy(),
 }
 
@@ -50,6 +54,7 @@ __all__ = [
     "SampledTrajectoryCandidate",
     "SAMPLING_STRATEGIES",
     "SamplingStrategy",
+    "StructuredRandomSamplingStrategy",
     "VerbalizedSamplingStrategy",
     "VerbalizedSamplingValidationError",
     "get_sampling_strategy",

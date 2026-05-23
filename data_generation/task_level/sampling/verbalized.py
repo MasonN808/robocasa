@@ -30,6 +30,8 @@ class VerbalizedTrajectorySequenceValidator:
     """Validates the outer verbalized response before per-trajectory validation."""
 
     expected_count: int
+    sampling_configuration_fields: tuple[str, ...] = ()
+    sampling_configuration_values: tuple[str, ...] = ("low", "medium", "high")
 
     def validate(
         self, response_payload: dict[str, Any]
@@ -75,6 +77,17 @@ class VerbalizedTrajectorySequenceValidator:
                     f"responses[{index}].trajectory must be an object."
                 )
 
+            sampling_configuration: dict[str, str] = {}
+            for field_name in self.sampling_configuration_fields:
+                field_value = response_entry.get(field_name)
+                if field_value not in self.sampling_configuration_values:
+                    allowed_values = ", ".join(self.sampling_configuration_values)
+                    raise VerbalizedSamplingValidationError(
+                        f"responses[{index}].{field_name} must be one of: "
+                        f"{allowed_values}."
+                    )
+                sampling_configuration[field_name] = field_value
+
             trajectory_signature = stable_json_sha256(trajectory)
             if trajectory_signature in seen_signatures:
                 raise VerbalizedSamplingValidationError(
@@ -82,14 +95,17 @@ class VerbalizedTrajectorySequenceValidator:
                 )
             seen_signatures.add(trajectory_signature)
 
+            raw_output = {
+                "probability": normalized_probability,
+                "trajectory": trajectory,
+            }
+            raw_output.update(sampling_configuration)
             sampled_candidates.append(
                 SampledTrajectoryCandidate(
                     candidate=trajectory,
-                    raw_output={
-                        "probability": normalized_probability,
-                        "trajectory": trajectory,
-                    },
+                    raw_output=raw_output,
                     probability=normalized_probability,
+                    sampling_configuration=sampling_configuration or None,
                 )
             )
 

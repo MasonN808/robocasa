@@ -15,6 +15,8 @@ from training.bc_task_vlm.metrics import build_structured_eval_metrics
 from training.bc_task_vlm.schema_utils import (
     canonicalize_for_comparison,
     compact_json_dumps,
+    parse_first_json_object,
+    validate_single_step_payload,
 )
 from training.bc_task_vlm.task_registry import AGENT_IDS
 from training.bc_task_vlm.tool_calling import (
@@ -33,6 +35,7 @@ class VisionGenerationCollator:
         processor_name_or_path: str,
         max_length: int | None,
         trust_remote_code: bool,
+        sft_format: str,
     ) -> None:
         self.processor = AutoProcessor.from_pretrained(
             processor_name_or_path,
@@ -42,6 +45,7 @@ class VisionGenerationCollator:
         if tokenizer is not None:
             tokenizer.padding_side = "left"
         self.max_length = max_length
+        self.sft_format = sft_format
 
     @staticmethod
     def _load_images(image_paths: list[str]):
@@ -53,16 +57,94 @@ class VisionGenerationCollator:
                 images.append(image.convert("RGB"))
         return images
 
+    @staticmethod
+    def _message_text_for_plain_fallback(
+        template_owner,
+        message: dict[str, Any],
+    ) -> str:
+        tokenizer = getattr(template_owner, "tokenizer", None)
+        image_token = (
+            getattr(template_owner, "image_token", None)
+            or getattr(tokenizer, "image_token", None)
+            or "<|image|>"
+        )
+
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return str(content).strip()
+
+        chunks: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "text":
+                chunks.append(str(item.get("text", "")).strip())
+            elif item_type == "image":
+                chunks.append(image_token)
+        return "".join(chunks).strip()
+
+    def _apply_plain_fallback_template(
+        self,
+        template_owner,
+        *,
+        messages: list[dict[str, Any]],
+        add_generation_prompt: bool,
+    ) -> str:
+        tokenizer = getattr(template_owner, "tokenizer", None) or template_owner
+        bos_token = getattr(tokenizer, "bos_token", None) or ""
+        chunks = [bos_token]
+        for message in messages:
+            role = message.get("role", "user")
+            if role == "assistant":
+                role = "model"
+            elif role == "developer":
+                role = "system"
+            chunks.append(f"<|turn>{role}\n")
+            chunks.append(
+                self._message_text_for_plain_fallback(template_owner, message)
+            )
+            chunks.append("<turn|>\n")
+        if add_generation_prompt:
+            chunks.append("<|turn>model\n")
+        return "".join(chunks)
+
+    def _apply_chat_template(
+        self,
+        *,
+        feature: dict[str, Any],
+        messages: list[dict[str, Any]],
+        add_generation_prompt: bool,
+    ) -> str:
+        template_kwargs: dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": add_generation_prompt,
+            "enable_thinking": False,
+        }
+        if self.sft_format == "tool_call":
+            template_kwargs["tools"] = feature["tool_schemas"]
+
+        if self.sft_format == "plain" and not getattr(
+            self.processor, "chat_template", None
+        ):
+            return self._apply_plain_fallback_template(
+                self.processor,
+                messages=messages,
+                add_generation_prompt=add_generation_prompt,
+            )
+
+        return self.processor.apply_chat_template(messages, **template_kwargs)
+
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         prompt_messages = [feature["messages"][:-1] for feature in features]
         images = [self._load_images(feature["image_paths"]) for feature in features]
         prompt_texts = [
-            self.processor.apply_chat_template(
-                message,
-                tools=feature["tool_schemas"],
-                tokenize=False,
+            self._apply_chat_template(
+                feature=feature,
+                messages=message,
                 add_generation_prompt=True,
-                enable_thinking=False,
             )
             for message, feature in zip(prompt_messages, features, strict=True)
         ]
@@ -87,6 +169,7 @@ class VisionGenerationCollator:
                 "step_index": feature["step_index"],
                 "agent_id": feature["agent_id"],
                 "target_payload": feature["target_payload"],
+                "target_tool_call": feature["target_tool_call"],
                 "target_text": feature["target_text"],
                 "allowed_tool_specs": feature["allowed_tool_specs"],
             }
@@ -107,6 +190,44 @@ def _move_batch_to_device(
     return tensor_batch
 
 
+def _parse_plain_json_tool_call(text: str) -> dict[str, Any]:
+    payload = parse_first_json_object(text)
+    if not isinstance(payload, dict):
+        raise ValueError("Plain response JSON must be an object.")
+    tool_name = payload.get("tool")
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        raise ValueError('Plain response JSON must contain a non-empty "tool".')
+    arguments = payload.get("args")
+    if not isinstance(arguments, dict):
+        raise ValueError('Plain response JSON must contain object "args".')
+    return {"name": tool_name.strip(), "arguments": dict(arguments)}
+
+
+def _plain_tool_call_to_single_step_payload(
+    tool_call: dict[str, Any],
+    *,
+    step_index: int,
+    agent_id: str,
+    allowed_tool_specs: dict[str, dict[str, Any]],
+    reasoning_text: str,
+) -> dict[str, Any]:
+    return validate_single_step_payload(
+        {
+            "steps": [
+                {
+                    "step": step_index,
+                    "agent": agent_id,
+                    "tool": tool_call["name"],
+                    "args": dict(tool_call["arguments"]),
+                    "reasoning": reasoning_text or "plain_json",
+                }
+            ]
+        },
+        agent_ids=AGENT_IDS,
+        allowed_tool_specs=allowed_tool_specs,
+    )
+
+
 def evaluate_structured_generation(
     *,
     model,
@@ -117,6 +238,7 @@ def evaluate_structured_generation(
     max_new_tokens: int,
     batch_size: int,
     trust_remote_code: bool,
+    sft_format: str,
     max_samples: int | None = None,
 ) -> dict[str, float]:
     """Runs generation over the validation split and computes structured metrics."""
@@ -134,6 +256,7 @@ def evaluate_structured_generation(
         processor_name_or_path=processor_name_or_path,
         max_length=max_length,
         trust_remote_code=trust_remote_code,
+        sft_format=sft_format,
     )
     dataloader = DataLoader(
         dataset,
@@ -204,24 +327,44 @@ def evaluate_structured_generation(
                     exact_action_match = False
 
                     try:
-                        parsed_tool_call = parse_first_qwen_tool_call(decoded_text)
+                        if sft_format == "plain":
+                            parsed_tool_call = _parse_plain_json_tool_call(decoded_text)
+                        else:
+                            parsed_tool_call = parse_first_qwen_tool_call(decoded_text)
                         parsed_tool_calls += 1
                     except Exception as exc:  # pragma: no cover - defensive eval logging
                         parse_error = str(exc)
 
                     if parsed_tool_call is not None:
                         try:
-                            normalized_prediction = tool_call_to_single_step_payload(
-                                parsed_tool_call,
-                                step_index=metadata["step_index"],
-                                agent_id=metadata["agent_id"],
-                                agent_ids=AGENT_IDS,
-                                allowed_tool_specs=metadata["allowed_tool_specs"],
-                                reasoning_text=(
-                                    extract_pre_tool_call_text(decoded_text)
-                                    or "tool_call"
-                                ),
-                            )
+                            if sft_format == "plain":
+                                normalized_prediction = (
+                                    _plain_tool_call_to_single_step_payload(
+                                        parsed_tool_call,
+                                        step_index=metadata["step_index"],
+                                        agent_id=metadata["agent_id"],
+                                        allowed_tool_specs=metadata[
+                                            "allowed_tool_specs"
+                                        ],
+                                        reasoning_text="plain_json",
+                                    )
+                                )
+                            else:
+                                normalized_prediction = (
+                                    tool_call_to_single_step_payload(
+                                        parsed_tool_call,
+                                        step_index=metadata["step_index"],
+                                        agent_id=metadata["agent_id"],
+                                        agent_ids=AGENT_IDS,
+                                        allowed_tool_specs=metadata[
+                                            "allowed_tool_specs"
+                                        ],
+                                        reasoning_text=(
+                                            extract_pre_tool_call_text(decoded_text)
+                                            or "tool_call"
+                                        ),
+                                    )
+                                )
                             valid_tool_calls += 1
                         except Exception as exc:  # pragma: no cover - defensive eval logging
                             validation_error = str(exc)
@@ -267,6 +410,7 @@ def evaluate_structured_generation(
                                 "step_index": metadata["step_index"],
                                 "prediction_text": decoded_text,
                                 "target_text": metadata["target_text"],
+                                "target_tool_call": metadata["target_tool_call"],
                                 "target_payload": compact_json_dumps(target_payload),
                                 "parsed_tool_call": parsed_tool_call,
                                 "parse_error": parse_error,
