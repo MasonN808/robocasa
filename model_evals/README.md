@@ -30,6 +30,26 @@ model_evals/backends/gwp/logs/
 
 Use equivalent `assets/`, `ckpts/`, and `logs/` paths under `pi05/`, `rldx/`, or `gr00t_n1_5/` for the other model families.
 
+## External Model Repos
+
+Large model-code dependencies live as optional git submodules under `external/`:
+
+```text
+external/openpi/        # pi0.5 server code
+external/rldx-1/        # RLDX-1 server code
+external/Isaac-GR00T/   # GR00T N1.5 server code
+```
+
+A normal clone of this repository does not download those repos. Initialize only
+the backend you need, for example:
+
+```bash
+git submodule update --init external/rldx-1
+```
+
+Model checkpoints are not submodules and remain under ignored backend `ckpts/`
+directories or external Hugging Face cache paths.
+
 ## Evaluation Modes
 
 ### Registry Task-Set Eval

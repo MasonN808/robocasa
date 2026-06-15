@@ -4,7 +4,7 @@ This backend runs the RoboCasa leaderboard GR00T N1.5 checkpoint through the Rob
 
 ## Setup
 
-Use a separate GR00T environment for the server. The client still runs in the normal RoboCasa environment.
+Use a separate GR00T environment for the server. The client still runs in the normal RoboCasa environment. GR00T model code lives in the optional `external/Isaac-GR00T` submodule.
 
 ### RTX 5090 / Blackwell
 
@@ -15,7 +15,9 @@ with kernel / architecture errors on `sm_120`.
 Use the repo-local pixi environment instead:
 
 ```bash
-cd /home/dorian/Projects/robocasa/external/Isaac-GR00T
+cd /home/dorian/Projects/robocasa
+git submodule update --init external/Isaac-GR00T
+cd external/Isaac-GR00T
 pixi install
 pixi run postinstall
 pixi run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
@@ -28,8 +30,7 @@ This uses CUDA 12.8, `torch==2.8.0+cu128`, and source-builds flash-attn for
 
 ```bash
 cd /home/dorian/Projects/robocasa
-git clone https://github.com/robocasa-benchmark/Isaac-GR00T external/Isaac-GR00T
-
+git submodule update --init external/Isaac-GR00T
 cd external/Isaac-GR00T
 pip install -e .[base]
 pip install --no-build-isolation flash-attn==2.7.1.post4

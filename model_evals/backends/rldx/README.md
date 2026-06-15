@@ -15,13 +15,12 @@ Checkpoint: https://huggingface.co/RLWRLD/RLDX-1-FT-RC365
 
 ## Setup
 
-RLDX-1 uses a separate model-server environment. Keep the external checkout
-under the ignored repo-local `external/` folder:
+RLDX-1 uses a separate model-server environment. Its model code lives in the
+optional `external/rldx-1` submodule:
 
 ```bash
-git clone https://github.com/RLWRLD/RLDX-1 external/rldx-1
+git submodule update --init external/rldx-1
 cd external/rldx-1
-git checkout ef05cd4ae634ff97d672d42275febbc0b92cc192
 ```
 
 ### RTX 5090 / Blackwell

@@ -19,12 +19,12 @@ Code:
 
 Unlike the GWP backend, the pi0.5 runtime is not vendored into this repository.
 GWP only needed a small `world_action_model` package, which we keep under
-`model_evals/backends/gwp/src`. pi0.5 depends on the RoboCasa openpi fork policy
-server, configs, model code, and transforms, so we keep that external checkout
-under an ignored repo-local folder:
+`model_evals/backends/gwp/src`. pi0.5 depends on the RoboCasa OpenPI fork policy
+server, configs, model code, and transforms, so it lives in the optional
+`external/openpi` submodule:
 
 ```bash
-git clone https://github.com/robocasa-benchmark/openpi external/openpi
+git submodule update --init external/openpi
 cd external/openpi
 
 uv venv --python 3.11 .venv
@@ -46,8 +46,8 @@ such as `mujoco==3.3.1`.
 `chex==0.1.89` is included because this OpenPI checkout imports `chex` from the
 tokenizer code and pins that version in `uv.lock`.
 
-`external/` is ignored by git. You may still override the checkout path with
-`OPENPI_ROOT=/path/to/openpi`, but the default expected path is:
+You may still override the checkout path with `OPENPI_ROOT=/path/to/openpi`,
+but the default expected path is:
 
 ```text
 /home/dorian/Projects/robocasa/external/openpi

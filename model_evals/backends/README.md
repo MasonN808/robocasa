@@ -16,6 +16,10 @@ gr00t_n1_5/    # GR00T N1.5 backend
 Each backend has its own `README.md` with environment setup, checkpoint
 download, server launch, and RoboCasa client commands.
 
+External model-code repos are optional submodules under `external/`; initialize
+only the backend repo you need with `git submodule update --init <path>`.
+Checkpoints, logs, and per-backend virtual environments remain ignored.
+
 The goal is for each backend to expose a comparable client entrypoint so the
 same one-robot vs. two-robot evaluation scripts and analysis tools can be reused
 across models.

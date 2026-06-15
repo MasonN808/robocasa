@@ -199,7 +199,19 @@ PROGRESS.md
 
 # model evaluation outputs
 logs/
-external/
+
+# Optional external VLA repos are tracked as submodule gitlinks. Keep any other
+# local external checkout ignored, and keep local env/build outputs ignored.
+external/*
+!external/openpi/
+!external/rldx-1/
+!external/Isaac-GR00T/
+external/*/.venv/
+external/*/.pixi/
+external/*/*.egg-info/
+external/*/build/
+external/*/dist/
+
 model_evals/backends/*/assets/
 model_evals/backends/*/ckpts/
 model_evals/backends/*/logs/
