@@ -8,10 +8,21 @@ import csv
 import json
 import math
 import statistics
+import struct
+import zlib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
+
+try:
+    from PIL import Image, ImageChops, ImageDraw, ImageFont, PngImagePlugin
+except ModuleNotFoundError:  # Keep the original dependency-free renderer available.
+    Image = None
+    ImageChops = None
+    ImageDraw = None
+    ImageFont = None
+    PngImagePlugin = None
 
 
 DEFAULT_INPUT = Path(
@@ -19,17 +30,25 @@ DEFAULT_INPUT = Path(
 )
 DEFAULT_RAW_INPUT = Path("data_generation/task_level/data_k3/raw/sampling_methods")
 DEFAULT_OUTPUT_DIR = Path("data_analysis/plots/sampling_method_diversity")
-METHOD_ORDER = ["base", "high_temperature", "random", "verbalized"]
+METHOD_ORDER = [
+    "base",
+    "high_temperature",
+    "random",
+    "structured_random",
+    "verbalized",
+]
 METHOD_LABELS = {
     "base": "base",
     "high_temperature": "high temp",
     "random": "random",
+    "structured_random": "structured random",
     "verbalized": "verbalized",
 }
 METHOD_COLORS = {
     "base": "#4c78a8",
     "high_temperature": "#f58518",
     "random": "#54a24b",
+    "structured_random": "#e45756",
     "verbalized": "#b279a2",
 }
 TOOL_COLORS = [
@@ -43,6 +62,39 @@ TOOL_COLORS = [
     "#9d755d",
     "#bab0ac",
 ]
+PIL_CANVAS_SCALE = 2
+PIL_TEXT_SIZES = {
+    "title": 36,
+    "label": 14,
+    "method_label": 18,
+    "task_label": 13,
+    "interval_label": 15,
+    "small": 10,
+}
+REGULAR_FONT_CANDIDATES = (
+    ("/System/Library/Fonts/SFNS.ttf", "SF Pro"),
+    ("/System/Library/Fonts/SFNSDisplay.ttf", "SF Pro Display"),
+    ("/Library/Fonts/SF-Pro-Text-Regular.otf", "SF Pro Text"),
+    ("/Library/Fonts/SF-Pro-Display-Regular.otf", "SF Pro Display"),
+    ("/usr/share/fonts/urw-base35/NimbusSans-Regular.otf", "Nimbus Sans"),
+    ("/usr/share/fonts/opentype/urw-base35/NimbusSans-Regular.otf", "Nimbus Sans"),
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVu Sans"),
+    ("/usr/share/fonts/dejavu/DejaVuSans.ttf", "DejaVu Sans"),
+    ("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf", "DejaVu Sans"),
+    ("/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf", "Liberation Sans"),
+)
+BOLD_FONT_CANDIDATES = (
+    ("/System/Library/Fonts/SFNS.ttf", "SF Pro"),
+    ("/System/Library/Fonts/SFNSDisplay.ttf", "SF Pro Display"),
+    ("/Library/Fonts/SF-Pro-Text-Bold.otf", "SF Pro Text"),
+    ("/Library/Fonts/SF-Pro-Display-Bold.otf", "SF Pro Display"),
+    ("/usr/share/fonts/urw-base35/NimbusSans-Bold.otf", "Nimbus Sans"),
+    ("/usr/share/fonts/opentype/urw-base35/NimbusSans-Bold.otf", "Nimbus Sans"),
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "DejaVu Sans"),
+    ("/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", "DejaVu Sans"),
+    ("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf", "DejaVu Sans"),
+    ("/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf", "Liberation Sans"),
+)
 
 
 @dataclass(frozen=True)
@@ -68,70 +120,88 @@ class ToolTrajectory:
         return sum(self.tool_counts.values())
 
 
-class PdfCanvas:
-    def __init__(self, width: int, height: int) -> None:
+@dataclass(frozen=True)
+class FontSet:
+    regular_path: Path | None
+    bold_path: Path | None
+    family: str
+
+
+def first_existing_font(
+    candidates: Iterable[tuple[str, str]],
+) -> tuple[Path | None, str | None]:
+    for raw_path, family in candidates:
+        path = Path(raw_path)
+        if path.exists():
+            return path, family
+    return None, None
+
+
+def discover_fonts() -> FontSet:
+    regular_path, regular_family = first_existing_font(REGULAR_FONT_CANDIDATES)
+    bold_path, bold_family = first_existing_font(BOLD_FONT_CANDIDATES)
+    return FontSet(
+        regular_path=regular_path,
+        bold_path=bold_path,
+        family=regular_family or bold_family or "Pillow default",
+    )
+
+
+class PillowPngCanvas:
+    def __init__(
+        self, width: int, height: int, *, scale: int = PIL_CANVAS_SCALE
+    ) -> None:
+        if Image is None or ImageDraw is None or ImageFont is None:
+            raise RuntimeError("Pillow is not available")
         self.width = width
         self.height = height
-        self.parts: list[str] = []
-        self.rect(0, 0, width, height, fill="white")
+        self.scale = scale
+        self.fonts = discover_fonts()
+        self.image = Image.new("RGB", (width * scale, height * scale), (255, 255, 255))
+        self.draw = ImageDraw.Draw(self.image)
+        self.text_values: list[str] = []
+        self._font_cache: dict[tuple[int, bool], ImageFont.ImageFont] = {}
 
-    def pdf_y(self, y: float) -> float:
-        return self.height - y
-
-    def pdf_rect_y(self, y: float, height: float) -> float:
-        return self.height - y - height
+    def _s(self, value: float) -> int:
+        return int(round(value * self.scale))
 
     def color_components(
         self, color: str, opacity: float = 1.0
-    ) -> tuple[float, float, float]:
-        if color == "none":
-            return 0.0, 0.0, 0.0
+    ) -> tuple[int, int, int]:
         named_colors = {
             "black": "#000000",
             "white": "#ffffff",
         }
-        color = named_colors.get(color, color)
-        color = color.lstrip("#")
+        color = named_colors.get(color, color).lstrip("#")
         if len(color) == 3:
             color = "".join(channel * 2 for channel in color)
-        red = int(color[0:2], 16) / 255.0
-        green = int(color[2:4], 16) / 255.0
-        blue = int(color[4:6], 16) / 255.0
+        red = int(color[0:2], 16)
+        green = int(color[2:4], 16)
+        blue = int(color[4:6], 16)
         if opacity < 1.0:
-            red = 1.0 - (1.0 - red) * opacity
-            green = 1.0 - (1.0 - green) * opacity
-            blue = 1.0 - (1.0 - blue) * opacity
+            red = round(255 - (255 - red) * opacity)
+            green = round(255 - (255 - green) * opacity)
+            blue = round(255 - (255 - blue) * opacity)
         return red, green, blue
 
-    def set_stroke(self, color: str, opacity: float = 1.0) -> str:
-        red, green, blue = self.color_components(color, opacity)
-        return f"{red:.4f} {green:.4f} {blue:.4f} RG"
-
-    def set_fill(self, color: str, opacity: float = 1.0) -> str:
-        red, green, blue = self.color_components(color, opacity)
-        return f"{red:.4f} {green:.4f} {blue:.4f} rg"
-
     def text_size(self, size_class: str) -> int:
-        if size_class == "title":
-            return 18
-        if size_class == "small":
-            return 10
-        return 12
+        return PIL_TEXT_SIZES.get(size_class, PIL_TEXT_SIZES["label"])
 
-    def estimate_text_width(self, value: str, size: int) -> float:
-        return len(value) * size * 0.54
-
-    def escape_text(self, value: str) -> str:
-        return (
-            value.encode("latin-1", errors="replace")
-            .decode("latin-1")
-            .replace("\\", "\\\\")
-            .replace("(", "\\(")
-            .replace(")", "\\)")
+    def font(self, size: int, *, bold: bool = False) -> ImageFont.ImageFont:
+        key = (size, bold)
+        if key in self._font_cache:
+            return self._font_cache[key]
+        font_path = (
+            self.fonts.bold_path
+            if bold and self.fonts.bold_path
+            else self.fonts.regular_path
         )
-
-    def append(self, command: str) -> None:
-        self.parts.append(command)
+        if font_path is not None:
+            font = ImageFont.truetype(str(font_path), self._s(size))
+        else:
+            font = ImageFont.load_default()
+        self._font_cache[key] = font
+        return font
 
     def line(
         self,
@@ -145,16 +215,31 @@ class PdfCanvas:
         opacity: float = 1.0,
         dash: str | None = None,
     ) -> None:
-        dash_command = "[3 3] 0 d" if dash else "[] 0 d"
-        self.append(
-            "q\n"
-            f"{self.set_stroke(stroke, opacity)}\n"
-            f"{width:.2f} w\n"
-            f"{dash_command}\n"
-            f"{x1:.2f} {self.pdf_y(y1):.2f} m "
-            f"{x2:.2f} {self.pdf_y(y2):.2f} l S\n"
-            "Q"
-        )
+        fill = self.color_components(stroke, opacity)
+        scaled_width = max(1, self._s(width))
+        if dash:
+            steps = max(1, int(max(abs(x2 - x1), abs(y2 - y1)) / 8))
+            for index in range(steps):
+                if index % 2:
+                    continue
+                start = index / steps
+                end = min(1.0, (index + 1) / steps)
+                self.draw.line(
+                    (
+                        self._s(x1 + (x2 - x1) * start),
+                        self._s(y1 + (y2 - y1) * start),
+                        self._s(x1 + (x2 - x1) * end),
+                        self._s(y1 + (y2 - y1) * end),
+                    ),
+                    fill=fill,
+                    width=scaled_width,
+                )
+        else:
+            self.draw.line(
+                (self._s(x1), self._s(y1), self._s(x2), self._s(y2)),
+                fill=fill,
+                width=scaled_width,
+            )
 
     def rect(
         self,
@@ -169,23 +254,20 @@ class PdfCanvas:
     ) -> None:
         if fill == "none" and stroke == "none":
             return
-        operator = (
-            "B"
-            if fill != "none" and stroke != "none"
-            else "f"
-            if fill != "none"
-            else "S"
+        xy = (
+            self._s(x),
+            self._s(y),
+            self._s(x + width),
+            self._s(y + height),
         )
-        commands = ["q"]
-        if fill != "none":
-            commands.append(self.set_fill(fill, opacity))
-        if stroke != "none":
-            commands.append(self.set_stroke(stroke, opacity))
-        commands.append(
-            f"{x:.2f} {self.pdf_rect_y(y, height):.2f} {width:.2f} {height:.2f} re {operator}"
+        self.draw.rectangle(
+            xy,
+            fill=None if fill == "none" else self.color_components(fill, opacity),
+            outline=None
+            if stroke == "none"
+            else self.color_components(stroke, opacity),
+            width=max(1, self._s(1.0)),
         )
-        commands.append("Q")
-        self.append("\n".join(commands))
 
     def circle(
         self,
@@ -197,22 +279,19 @@ class PdfCanvas:
         stroke: str = "white",
         opacity: float = 1.0,
     ) -> None:
-        kappa = 0.5522847498
-        x = cx
-        y = self.pdf_y(cy)
-        c = r * kappa
-        operator = "B" if stroke != "none" else "f"
-        self.append(
-            "q\n"
-            f"{self.set_fill(fill, opacity)}\n"
-            f"{self.set_stroke(stroke, opacity)}\n"
-            f"{x + r:.2f} {y:.2f} m\n"
-            f"{x + r:.2f} {y + c:.2f} {x + c:.2f} {y + r:.2f} {x:.2f} {y + r:.2f} c\n"
-            f"{x - c:.2f} {y + r:.2f} {x - r:.2f} {y + c:.2f} {x - r:.2f} {y:.2f} c\n"
-            f"{x - r:.2f} {y - c:.2f} {x - c:.2f} {y - r:.2f} {x:.2f} {y - r:.2f} c\n"
-            f"{x + c:.2f} {y - r:.2f} {x + r:.2f} {y - c:.2f} {x + r:.2f} {y:.2f} c\n"
-            f"{operator}\n"
-            "Q"
+        xy = (
+            self._s(cx - r),
+            self._s(cy - r),
+            self._s(cx + r),
+            self._s(cy + r),
+        )
+        self.draw.ellipse(
+            xy,
+            fill=None if fill == "none" else self.color_components(fill, opacity),
+            outline=None
+            if stroke == "none"
+            else self.color_components(stroke, opacity),
+            width=max(1, self._s(1.0)),
         )
 
     def text(
@@ -226,82 +305,353 @@ class PdfCanvas:
         rotate: float | None = None,
     ) -> None:
         size = self.text_size(size_class)
-        escaped = self.escape_text(value)
+        bold = size_class == "title"
+        font = self.font(size, bold=bold)
+        self.text_values.append(value)
+        fill = self.color_components("#222222")
+        bbox = self.draw.textbbox((0, 0), value, font=font)
+        width = bbox[2] - bbox[0]
+        anchor_dx = 0
+        if anchor == "middle":
+            anchor_dx = -width // 2
+        elif anchor == "end":
+            anchor_dx = -width
+
+        if rotate is None:
+            draw_x = self._s(x) + anchor_dx - bbox[0]
+            draw_y = self._s(y) - bbox[3]
+            self.draw.text((draw_x, draw_y), value, font=font, fill=fill)
+            return
+
+        pad = self._s(6)
+        temp = Image.new(
+            "RGBA",
+            (max(1, bbox[2] - bbox[0] + pad * 2), max(1, bbox[3] - bbox[1] + pad * 2)),
+            (0, 0, 0, 0),
+        )
+        temp_draw = ImageDraw.Draw(temp)
+        temp_draw.text((pad - bbox[0], pad - bbox[1]), value, font=font, fill=fill)
+        resample = getattr(Image, "Resampling", Image).BICUBIC
+        rotated = temp.rotate(rotate, expand=True, resample=resample)
+        left = self._s(x) - rotated.width // 2
+        top = self._s(y) - rotated.height // 2
+        self.image.paste(rotated.convert("RGB"), (left, top), rotated.getchannel("A"))
+        self.draw = ImageDraw.Draw(self.image)
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        output = self.image.resize((self.width, self.height), resample=resample)
+        if ImageChops is not None:
+            background = Image.new(output.mode, output.size, (255, 255, 255))
+            bbox = ImageChops.difference(output, background).getbbox()
+            if bbox is not None:
+                crop_padding = 12
+                left_crop_padding = 28
+                output = output.crop(
+                    (
+                        max(0, bbox[0] - left_crop_padding),
+                        max(0, bbox[1] - crop_padding),
+                        min(output.width, bbox[2] + crop_padding),
+                        min(output.height, bbox[3] + crop_padding),
+                    )
+                )
+        metadata = PngImagePlugin.PngInfo() if PngImagePlugin is not None else None
+        if metadata is not None:
+            metadata.add_text("FontFamily", self.fonts.family)
+            metadata.add_text("Labels", "; ".join(dict.fromkeys(self.text_values)))
+        output.save(path, pnginfo=metadata)
+
+
+BITMAP_FONT = {
+    " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+    "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+    "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+    "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
+    "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+    "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+    "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+    "6": ["00110", "01000", "10000", "11110", "10001", "10001", "01110"],
+    "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+    "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+    "9": ["01110", "10001", "10001", "01111", "00001", "00010", "11100"],
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "B": ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
+    "C": ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
+    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    "G": ["01110", "10001", "10000", "10111", "10001", "10001", "01110"],
+    "H": ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "I": ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
+    "J": ["00111", "00010", "00010", "00010", "10010", "10010", "01100"],
+    "K": ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
+    "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+    "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+    "Q": ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
+    "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+    "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+    "W": ["10001", "10001", "10001", "10101", "10101", "10101", "01010"],
+    "X": ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
+    "Y": ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+    "Z": ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
+    ".": ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
+    ",": ["00000", "00000", "00000", "00000", "01100", "01100", "01000"],
+    "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+    "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
+    "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"],
+    "/": ["00001", "00010", "00010", "00100", "01000", "01000", "10000"],
+    ":": ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
+    "(": ["00010", "00100", "01000", "01000", "01000", "00100", "00010"],
+    ")": ["01000", "00100", "00010", "00010", "00010", "00100", "01000"],
+    "<": ["00010", "00100", "01000", "10000", "01000", "00100", "00010"],
+    ">": ["01000", "00100", "00010", "00001", "00010", "00100", "01000"],
+    "=": ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
+    "%": ["11001", "11010", "00010", "00100", "01000", "01011", "10011"],
+    "?": ["01110", "10001", "00001", "00010", "00100", "00000", "00100"],
+}
+
+
+class PngCanvas:
+    def __init__(self, width: int, height: int) -> None:
+        self.width = width
+        self.height = height
+        self.pixels = [bytearray([255, 255, 255] * width) for _ in range(height)]
+        self.text_values: list[str] = []
+        self.rect(0, 0, width, height, fill="white")
+
+    def color_components(
+        self, color: str, opacity: float = 1.0
+    ) -> tuple[int, int, int]:
+        if color == "none":
+            return 0, 0, 0
+        named_colors = {
+            "black": "#000000",
+            "white": "#ffffff",
+        }
+        color = named_colors.get(color, color)
+        color = color.lstrip("#")
+        if len(color) == 3:
+            color = "".join(channel * 2 for channel in color)
+        red = int(color[0:2], 16)
+        green = int(color[2:4], 16)
+        blue = int(color[4:6], 16)
+        if opacity < 1.0:
+            red = round(255 - (255 - red) * opacity)
+            green = round(255 - (255 - green) * opacity)
+            blue = round(255 - (255 - blue) * opacity)
+        return red, green, blue
+
+    def set_pixel(
+        self,
+        x: int,
+        y: int,
+        color: tuple[int, int, int],
+        opacity: float = 1.0,
+    ) -> None:
+        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+            return
+        offset = x * 3
+        row = self.pixels[y]
+        if opacity >= 1.0:
+            row[offset : offset + 3] = bytes(color)
+            return
+        row[offset] = round(row[offset] * (1.0 - opacity) + color[0] * opacity)
+        row[offset + 1] = round(row[offset + 1] * (1.0 - opacity) + color[1] * opacity)
+        row[offset + 2] = round(row[offset + 2] * (1.0 - opacity) + color[2] * opacity)
+
+    def text_size(self, size_class: str) -> int:
+        if size_class in {"title", "method_label", "interval_label"}:
+            return 2
+        return 1
+
+    def text_height(self, scale: int) -> int:
+        return 7 * scale
+
+    def estimate_text_width(self, value: str, size: int) -> float:
+        return max(0, len(value)) * 6 * size
+
+    def line(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        stroke: str = "#333",
+        width: float = 1.0,
+        opacity: float = 1.0,
+        dash: str | None = None,
+    ) -> None:
+        color = self.color_components(stroke)
+        dx = x2 - x1
+        dy = y2 - y1
+        steps = max(1, int(max(abs(dx), abs(dy))))
+        radius = max(0.5, width / 2.0)
+        for index in range(steps + 1):
+            if dash and (index // 4) % 2:
+                continue
+            x = x1 + dx * index / steps
+            y = y1 + dy * index / steps
+            self.draw_disc(x, y, radius, color, opacity)
+
+    def rect(
+        self,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        *,
+        fill: str = "none",
+        stroke: str = "none",
+        opacity: float = 1.0,
+    ) -> None:
+        if fill == "none" and stroke == "none":
+            return
+        if fill != "none":
+            color = self.color_components(fill)
+            left = max(0, math.floor(x))
+            top = max(0, math.floor(y))
+            right = min(self.width, math.ceil(x + width))
+            bottom = min(self.height, math.ceil(y + height))
+            for py in range(top, bottom):
+                for px in range(left, right):
+                    self.set_pixel(px, py, color, opacity)
+        if stroke != "none":
+            self.line(x, y, x + width, y, stroke=stroke, opacity=opacity)
+            self.line(
+                x + width, y, x + width, y + height, stroke=stroke, opacity=opacity
+            )
+            self.line(
+                x + width, y + height, x, y + height, stroke=stroke, opacity=opacity
+            )
+            self.line(x, y + height, x, y, stroke=stroke, opacity=opacity)
+
+    def draw_disc(
+        self,
+        cx: float,
+        cy: float,
+        radius: float,
+        color: tuple[int, int, int],
+        opacity: float = 1.0,
+    ) -> None:
+        left = math.floor(cx - radius)
+        right = math.ceil(cx + radius)
+        top = math.floor(cy - radius)
+        bottom = math.ceil(cy + radius)
+        radius_sq = radius * radius
+        for py in range(top, bottom + 1):
+            for px in range(left, right + 1):
+                if (px - cx) * (px - cx) + (py - cy) * (py - cy) <= radius_sq:
+                    self.set_pixel(px, py, color, opacity)
+
+    def circle(
+        self,
+        cx: float,
+        cy: float,
+        r: float,
+        *,
+        fill: str,
+        stroke: str = "white",
+        opacity: float = 1.0,
+    ) -> None:
+        if fill != "none":
+            self.draw_disc(cx, cy, r, self.color_components(fill), opacity)
+        if stroke != "none":
+            stroke_color = self.color_components(stroke)
+            for angle in range(0, 360, 2):
+                radians = math.radians(angle)
+                self.draw_disc(
+                    cx + math.cos(radians) * r,
+                    cy + math.sin(radians) * r,
+                    0.8,
+                    stroke_color,
+                    opacity,
+                )
+
+    def text(
+        self,
+        x: float,
+        y: float,
+        value: str,
+        *,
+        anchor: str = "start",
+        size_class: str = "label",
+        rotate: float | None = None,
+    ) -> None:
+        size = self.text_size(size_class)
+        self.text_values.append(value)
         width = self.estimate_text_width(value, size)
+        height = self.text_height(size)
         anchor_dx = 0.0
         if anchor == "middle":
             anchor_dx = -width / 2
         elif anchor == "end":
             anchor_dx = -width
 
-        pdf_y = self.pdf_y(y)
-        if rotate is None:
-            self.append(
-                "BT\n"
-                f"{self.set_fill('#222222')}\n"
-                f"/F1 {size} Tf\n"
-                f"{x + anchor_dx:.2f} {pdf_y:.2f} Td\n"
-                f"({escaped}) Tj\n"
-                "ET"
-            )
-            return
-
-        radians = math.radians(rotate)
+        radians = math.radians(rotate or 0.0)
         cos_value = math.cos(radians)
-        sin_value = -math.sin(radians)
-        self.append(
-            "BT\n"
-            f"{self.set_fill('#222222')}\n"
-            f"/F1 {size} Tf\n"
-            f"{cos_value:.5f} {sin_value:.5f} {-sin_value:.5f} {cos_value:.5f} "
-            f"{x:.2f} {pdf_y:.2f} Tm\n"
-            f"{anchor_dx:.2f} 0 Td\n"
-            f"({escaped}) Tj\n"
-            "ET"
-        )
+        sin_value = math.sin(radians)
+        color = self.color_components("#222222")
+        cursor = 0
+        for raw_char in value:
+            char = raw_char.upper()
+            glyph = BITMAP_FONT.get(char, BITMAP_FONT["?"])
+            for row_index, row in enumerate(glyph):
+                for column_index, pixel in enumerate(row):
+                    if pixel != "1":
+                        continue
+                    for sy in range(size):
+                        for sx in range(size):
+                            local_x = anchor_dx + cursor + column_index * size + sx
+                            local_y = row_index * size + sy - height
+                            if rotate is None:
+                                draw_x = x + local_x
+                                draw_y = y + local_y
+                            else:
+                                draw_x = x + local_x * cos_value - local_y * sin_value
+                                draw_y = y + local_x * sin_value + local_y * cos_value
+                            self.set_pixel(round(draw_x), round(draw_y), color)
+            cursor += 6 * size
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        content = "\n".join(self.parts).encode("latin-1", errors="replace")
-        objects = [
-            b"<< /Type /Catalog /Pages 2 0 R >>",
-            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            (
-                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {self.width} {self.height}] "
-                f"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
-            ).encode("ascii"),
-            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-            b"<< /Length "
-            + str(len(content)).encode("ascii")
-            + b" >>\nstream\n"
-            + content
-            + b"\nendstream",
-        ]
-        pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-        offsets = [0]
-        for index, obj in enumerate(objects, start=1):
-            offsets.append(len(pdf))
-            pdf.extend(f"{index} 0 obj\n".encode("ascii"))
-            pdf.extend(obj)
-            pdf.extend(b"\nendobj\n")
-        xref_offset = len(pdf)
-        pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
-        pdf.extend(b"0000000000 65535 f \n")
-        for offset in offsets[1:]:
-            pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
-        pdf.extend(
-            (
-                f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-                f"startxref\n{xref_offset}\n%%EOF\n"
-            ).encode("ascii")
+        raw_rows = b"".join(b"\x00" + bytes(row) for row in self.pixels)
+
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(data))
+                + tag
+                + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+            )
+
+        labels = "; ".join(dict.fromkeys(self.text_values)).encode(
+            "latin-1", errors="replace"
         )
-        path.write_bytes(bytes(pdf))
+        png = bytearray(b"\x89PNG\r\n\x1a\n")
+        png.extend(
+            chunk(
+                b"IHDR",
+                struct.pack(">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0),
+            )
+        )
+        png.extend(chunk(b"tEXt", b"Labels\x00" + labels))
+        png.extend(chunk(b"IDAT", zlib.compress(raw_rows, level=9)))
+        png.extend(chunk(b"IEND", b""))
+        path.write_bytes(bytes(png))
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create simple PDF plots for sampling-method trajectory diversity "
+            "Create simple PNG plots for sampling-method trajectory diversity "
             "and tool-call distributions. Diversity is defined as "
             "1 - trajectory_cosine_avg."
         )
@@ -470,7 +820,7 @@ def format_value(value: float) -> str:
 
 
 def draw_y_axis(
-    svg: PdfCanvas,
+    svg: PngCanvas,
     *,
     x0: float,
     y0: float,
@@ -518,7 +868,7 @@ def plot_method_boxplot(
     max_y = nice_max(values)
     x_step = plot_width / len(methods)
 
-    svg = PdfCanvas(width, height)
+    svg = PngCanvas(width, height)
     svg.text(left, 30, title, size_class="title")
     y_scale = draw_y_axis(
         svg,
@@ -610,7 +960,7 @@ def plot_paired_slope(metrics: list[TaskMetric], output_path: Path) -> None:
     max_y = nice_max(metric.diversity for metric in metrics)
     x_step = plot_width / max(1, len(methods) - 1)
 
-    svg = PdfCanvas(width, height)
+    svg = PngCanvas(width, height)
     svg.text(left, 30, "Paired task diversity by sampling method", size_class="title")
     y_scale = draw_y_axis(
         svg,
@@ -686,7 +1036,7 @@ def plot_task_heatmap(metrics: list[TaskMetric], output_path: Path) -> None:
     width = left + cell_width * len(methods) + 50
     height = top + row_height * len(tasks) + 72
 
-    svg = PdfCanvas(width, height)
+    svg = PngCanvas(width, height)
     svg.text(left, 30, "Task-method diversity heatmap", size_class="title")
 
     for col, method in enumerate(methods):
@@ -744,67 +1094,98 @@ def plot_delta_from_base(metrics: list[TaskMetric], output_path: Path) -> None:
 
     all_deltas = [abs(delta) for rows in deltas.values() for _, delta in rows]
     max_abs = nice_max(all_deltas) if all_deltas else 1.0
-    row_height = 13
-    panel_gap = 42
-    panel_left = 230
-    panel_width = 620
-    top = 58
-    width = 920
-    height = (
-        top
-        + sum(max(1, len(rows)) * row_height + panel_gap for rows in deltas.values())
-        + 30
+    row_height = 14
+    panel_gap = 14
+    label_width = 165
+    bar_width = 215
+    panel_width = label_width + bar_width
+    left = 28
+    right = 6
+    top = 70
+    max_rows = max((max(1, len(rows)) for rows in deltas.values()), default=1)
+    width = (
+        left + len(methods) * panel_width + max(0, len(methods) - 1) * panel_gap + right
+    )
+    method_label_y = top + max_rows * row_height + 30
+    height = top + max_rows * row_height + 46
+
+    svg = (
+        PillowPngCanvas(width, height)
+        if Image is not None
+        else PngCanvas(width, height)
+    )
+    svg.text(
+        width / 2,
+        38,
+        "Diverstiy Delta from Base Sampling",
+        anchor="middle",
+        size_class="title",
     )
 
-    svg = PdfCanvas(width, height)
-    svg.text(panel_left, 30, "Diversity delta from base", size_class="title")
-
-    y_cursor = top
-    for method in methods:
+    for index, method in enumerate(methods):
         rows = deltas[method]
         panel_height = max(1, len(rows)) * row_height
-        x_zero = panel_left + panel_width / 2
+        panel_left = left + index * (panel_width + panel_gap)
+        bar_left = panel_left + label_width
+        x_zero = bar_left + bar_width / 2
 
-        svg.text(20, y_cursor + 12, label_method(method), size_class="label")
-        svg.line(x_zero, y_cursor - 8, x_zero, y_cursor + panel_height, stroke="#555")
+        svg.line(x_zero, top - 5, x_zero, top + panel_height, stroke="#555")
         svg.line(
-            panel_left,
-            y_cursor - 8,
-            panel_left + panel_width,
-            y_cursor - 8,
+            bar_left,
+            top - 5,
+            bar_left + bar_width,
+            top - 5,
             stroke="#ddd",
+            width=2.0,
         )
         svg.text(
-            panel_left,
-            y_cursor - 14,
+            bar_left,
+            top - 7,
             f"-{format_value(max_abs)}",
             anchor="start",
-            size_class="small",
+            size_class="interval_label",
         )
-        svg.text(x_zero, y_cursor - 14, "0", anchor="middle", size_class="small")
+        svg.text(x_zero, top - 7, "0", anchor="middle", size_class="interval_label")
         svg.text(
-            panel_left + panel_width,
-            y_cursor - 14,
+            bar_left + bar_width,
+            top - 7,
             f"+{format_value(max_abs)}",
             anchor="end",
-            size_class="small",
+            size_class="interval_label",
         )
 
         for row, (task, delta) in enumerate(rows):
-            y = y_cursor + row * row_height
-            bar_width = abs(delta) / max_abs * (panel_width / 2)
+            y = top + row * row_height
+            delta_width = abs(delta) / max_abs * (bar_width / 2)
             if delta >= 0:
                 x = x_zero
                 fill = "#54a24b"
             else:
-                x = x_zero - bar_width
+                x = x_zero - delta_width
                 fill = "#e45756"
-            svg.text(panel_left - 8, y + 9, task, anchor="end", size_class="small")
+            svg.text(
+                bar_left - 6,
+                y + 10,
+                task,
+                anchor="end",
+                size_class="task_label",
+            )
             svg.rect(
-                x, y + 2, max(1.0, bar_width), row_height - 4, fill=fill, opacity=0.78
+                x,
+                y + 2,
+                max(1.0, delta_width),
+                row_height - 4,
+                fill=fill,
+                opacity=0.78,
             )
 
-        y_cursor += panel_height + panel_gap
+        svg.text(
+            bar_left + bar_width / 2,
+            method_label_y,
+            label_method(method).title(),
+            anchor="middle",
+            size_class="method_label",
+        )
 
     svg.save(output_path)
 
@@ -825,7 +1206,7 @@ def plot_diversity_vs_length(metrics: list[TaskMetric], output_path: Path) -> No
     def x_scale(value: float) -> float:
         return left + (value - min_x) / x_span * plot_width
 
-    svg = PdfCanvas(width, height)
+    svg = PngCanvas(width, height)
     svg.text(left, 30, "Diversity vs conversation length", size_class="title")
     y_scale = draw_y_axis(
         svg,
@@ -891,7 +1272,7 @@ def plot_method_numeric_boxplot(
     max_y = nice_max(values)
     x_step = plot_width / len(methods)
 
-    svg = PdfCanvas(width, height)
+    svg = PngCanvas(width, height)
     svg.text(left, 30, title, size_class="title")
     y_scale = draw_y_axis(
         svg,
@@ -986,7 +1367,7 @@ def plot_tool_fraction_by_method(
     def y_scale(value: float) -> float:
         return top + plot_height - value * plot_height
 
-    svg = PdfCanvas(width, height)
+    svg = PngCanvas(width, height)
     svg.text(left, 30, "Tool-call fraction by sampling method", size_class="title")
     draw_y_axis(
         svg,
@@ -1070,7 +1451,7 @@ def plot_top_tool_fraction_boxplots(
     width = columns * panel_width + 40
     height = 58 + rows * panel_height + 26
 
-    svg = PdfCanvas(width, height)
+    svg = PngCanvas(width, height)
     svg.text(48, 30, "Per-trajectory fraction of top tools", size_class="title")
 
     for tool_index, tool in enumerate(tools):
@@ -1189,7 +1570,7 @@ def plot_tool_delta_from_base(
     width = left + cell_width * len(methods) + 64
     height = top + row_height * len(tools) + 78
 
-    svg = PdfCanvas(width, height)
+    svg = PngCanvas(width, height)
     svg.text(left, 30, "Mean tool-fraction delta from base", size_class="title")
     for col, method in enumerate(methods):
         svg.text(
@@ -1248,12 +1629,12 @@ def plot_tool_delta_from_base(
 
 def write_diversity_plots(metrics: list[TaskMetric], output_dir: Path) -> list[Path]:
     outputs = [
-        output_dir / "diversity_by_method.pdf",
-        output_dir / "paired_task_diversity.pdf",
-        output_dir / "task_method_heatmap.pdf",
-        output_dir / "delta_from_base.pdf",
-        output_dir / "outlier_diversity_by_method.pdf",
-        output_dir / "diversity_vs_conversation_length.pdf",
+        output_dir / "diversity_by_method.png",
+        output_dir / "paired_task_diversity.png",
+        output_dir / "task_method_heatmap.png",
+        output_dir / "delta_from_base.png",
+        output_dir / "outlier_diversity_by_method.png",
+        output_dir / "diversity_vs_conversation_length.png",
     ]
     plot_method_boxplot(
         metrics,
@@ -1283,10 +1664,10 @@ def write_tool_plots(
     top_tool_count: int,
 ) -> list[Path]:
     outputs = [
-        output_dir / "tool_fraction_by_method.pdf",
-        output_dir / "tool_calls_per_trajectory.pdf",
-        output_dir / "top_tool_fraction_boxplots.pdf",
-        output_dir / "tool_distribution_delta_from_base.pdf",
+        output_dir / "tool_fraction_by_method.png",
+        output_dir / "tool_calls_per_trajectory.png",
+        output_dir / "top_tool_fraction_boxplots.png",
+        output_dir / "tool_distribution_delta_from_base.png",
     ]
     plot_tool_fraction_by_method(
         trajectories,

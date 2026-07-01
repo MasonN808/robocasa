@@ -20,6 +20,11 @@ class PipelineCliPhaseSelectionTests(unittest.TestCase):
 
         self.assertTrue(args.phase1_sim_normalization)
 
+    def test_parse_args_accepts_azure_openai_sdk(self):
+        args = cli.parse_args(["--phase", "1", "--sdk", "azure-openai"])
+
+        self.assertEqual(args.sdk, "azure-openai")
+
     def test_parse_args_normalizes_phase_subset_in_pipeline_order(self):
         args = cli.parse_args(["--phase", "4", "1", "3"])
 
@@ -107,7 +112,9 @@ class PipelineCliPhaseSelectionTests(unittest.TestCase):
 
         self.assertEqual([candidate.task_name for candidate in candidates], ["TaskA"])
 
-    def test_load_best_available_candidates_rebuilds_from_source_when_artifacts_missing(self):
+    def test_load_best_available_candidates_rebuilds_from_source_when_artifacts_missing(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir)
             rebuilt_candidate = mock.Mock()
@@ -124,7 +131,9 @@ class PipelineCliPhaseSelectionTests(unittest.TestCase):
                     task_names=["arrangetea"],
                 )
 
-        self.assertEqual([candidate.task_name for candidate in candidates], ["ArrangeTea"])
+        self.assertEqual(
+            [candidate.task_name for candidate in candidates], ["ArrangeTea"]
+        )
 
     def test_apply_selection_filters_accepts_slug_task_names(self):
         candidate = mock.Mock()

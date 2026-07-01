@@ -111,9 +111,25 @@ if [[ "${NUM_PROCESSES}" -lt 1 ]]; then
   exit 1
 fi
 
+echo "Launching with NUM_PROCESSES=${NUM_PROCESSES}"
+
 if [[ "${NUM_PROCESSES}" -eq 1 ]]; then
   "${python_bin}" -m training.bc_task_vlm.main "$@"
 else
+  # Avoid NCCL cuMem host allocation crashes seen on some Slurm/GH nodes.
+  export NCCL_CUMEM_HOST_ENABLE="${NCCL_CUMEM_HOST_ENABLE:-0}"
+  # This launcher is single-node. Avoid loading a site OFI net plugin that can
+  # fail during initialization before NCCL falls back to intra-node transports.
+  if [[ "${ROBOCASA_KEEP_NCCL_NET_PLUGIN:-false}" != "true" ]]; then
+    export NCCL_NET_PLUGIN=none
+  fi
+  export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
+  echo "NCCL_CUMEM_HOST_ENABLE=${NCCL_CUMEM_HOST_ENABLE}"
+  echo "NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN}"
+  echo "NCCL_DEBUG=${NCCL_DEBUG}"
+  echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+  echo "SLURM_STEP_GPUS=${SLURM_STEP_GPUS:-<unset>}"
+  echo "SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-<unset>}"
   "${python_bin}" -m accelerate.commands.launch \
     --config_file training/bc_task_vlm/accelerate_multigpu.yaml \
     --num_processes "${NUM_PROCESSES}" \

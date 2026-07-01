@@ -193,7 +193,6 @@ def tool_call_to_single_step_payload(
     agent_id: str,
     agent_ids: tuple[str, ...],
     allowed_tool_specs: dict[str, dict[str, Any]],
-    reasoning_text: str = "tool_call",
 ) -> dict[str, Any]:
     """Converts one parsed tool call into the canonical single-step payload."""
 
@@ -247,7 +246,6 @@ def tool_call_to_single_step_payload(
                     "agent": agent_id,
                     "tool": tool_name,
                     "args": normalized_args,
-                    "reasoning": reasoning_text,
                 }
             ]
         },

@@ -12,7 +12,6 @@ from training.bc_task_vlm import merge_pretokenized_shards, preprocessed_data
 from training.bc_task_vlm.dataset import (
     LazyVisionSFTCollator,
     build_centralized_examples,
-    build_decentralized_examples,
     build_split_manifest,
     serialize_pretokenized_tensors,
 )
@@ -57,7 +56,7 @@ class PreprocessedArtifactTests(unittest.TestCase):
 
     def test_local_artifact_round_trip_preserves_features(self):
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )
@@ -87,8 +86,8 @@ class PreprocessedArtifactTests(unittest.TestCase):
         preprocess_config = {
             "command": "python -m training.bc_task_vlm.preprocess ...",
             "dataset_root": str(dataset_root),
-            "train_example_format": "single_turn",
-            "preprocessed_format_version": 4,
+            "train_example_format": "centralized",
+            "preprocessed_format_version": 6,
         }
         save_preprocessed_artifact(
             output_dir=output_dir,
@@ -171,7 +170,7 @@ class PreprocessedArtifactTests(unittest.TestCase):
         from PIL import Image
 
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )[:1]
@@ -208,7 +207,7 @@ class PreprocessedArtifactTests(unittest.TestCase):
         from PIL import Image
 
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )[:1]
@@ -232,7 +231,7 @@ class PreprocessedArtifactTests(unittest.TestCase):
 
     def test_existing_artifact_images_can_be_reused_for_resume(self):
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )[:1]
@@ -257,7 +256,7 @@ class PreprocessedArtifactTests(unittest.TestCase):
 
     def test_existing_artifact_images_resume_rejects_missing_files(self):
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )[:1]
@@ -284,7 +283,7 @@ class PreprocessedArtifactTests(unittest.TestCase):
 
     def test_existing_artifact_images_can_be_reused_without_validation(self):
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )[:1]
@@ -427,7 +426,7 @@ class PreprocessedArtifactTests(unittest.TestCase):
         output_dir = temp_root / "artifact"
         shard_dir = output_dir / "pretokenized_shards"
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )[:2]
@@ -511,7 +510,7 @@ class PreprocessedArtifactTests(unittest.TestCase):
 
     def test_local_artifact_round_trip_preserves_pretokenized_tensors(self):
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )[:1]
@@ -563,8 +562,8 @@ class PreprocessedArtifactTests(unittest.TestCase):
             preprocess_config={
                 "command": "python -m training.bc_task_vlm.preprocess ...",
                 "dataset_root": str(dataset_root),
-                "train_example_format": "single_turn",
-                "preprocessed_format_version": 4,
+                "train_example_format": "centralized",
+                "preprocessed_format_version": 6,
                 "pretokenized": True,
                 "pretokenization": {
                     "processor_family": "qwen",
@@ -755,7 +754,7 @@ class PretokenizationCompatibilityTests(unittest.TestCase):
         self,
     ):
         dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_decentralized_examples(
+        train_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )[:1]

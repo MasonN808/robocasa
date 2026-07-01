@@ -101,6 +101,7 @@ def _load_processor(args: argparse.Namespace):
     tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is not None:
         tokenizer.padding_side = "right"
+        tokenizer.truncation_side = "left"  # We want to keep the right side of the trajectory which has the most recent history
     return processor
 
 

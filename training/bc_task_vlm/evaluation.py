@@ -20,7 +20,6 @@ from training.bc_task_vlm.schema_utils import (
 )
 from training.bc_task_vlm.task_registry import AGENT_IDS
 from training.bc_task_vlm.tool_calling import (
-    extract_pre_tool_call_text,
     parse_first_qwen_tool_call,
     tool_call_to_single_step_payload,
 )
@@ -44,6 +43,7 @@ class VisionGenerationCollator:
         tokenizer = getattr(self.processor, "tokenizer", None)
         if tokenizer is not None:
             tokenizer.padding_side = "left"
+            tokenizer.truncation_side = "left"
         self.max_length = max_length
         self.sft_format = sft_format
 
@@ -190,6 +190,28 @@ def _move_batch_to_device(
     return tensor_batch
 
 
+def _limit_dataset_by_trajectories(
+    dataset,
+    max_trajectories: int | None,
+) -> tuple[Any, int | None]:
+    if max_trajectories is None:
+        return dataset, None
+
+    max_trajectories = max(0, max_trajectories)
+    selected_keys: set[tuple[str, str]] = set()
+    selected_indices: list[int] = []
+    for index in range(len(dataset)):
+        feature = dataset[index]
+        key = (str(feature["task_name"]), str(feature["trajectory_id"]))
+        if key not in selected_keys:
+            if len(selected_keys) >= max_trajectories:
+                continue
+            selected_keys.add(key)
+        selected_indices.append(index)
+
+    return torch.utils.data.Subset(dataset, selected_indices), len(selected_keys)
+
+
 def _parse_plain_json_tool_call(text: str) -> dict[str, Any]:
     payload = parse_first_json_object(text)
     if not isinstance(payload, dict):
@@ -209,7 +231,6 @@ def _plain_tool_call_to_single_step_payload(
     step_index: int,
     agent_id: str,
     allowed_tool_specs: dict[str, dict[str, Any]],
-    reasoning_text: str,
 ) -> dict[str, Any]:
     return validate_single_step_payload(
         {
@@ -219,7 +240,6 @@ def _plain_tool_call_to_single_step_payload(
                     "agent": agent_id,
                     "tool": tool_call["name"],
                     "args": dict(tool_call["arguments"]),
-                    "reasoning": reasoning_text or "plain_json",
                 }
             ]
         },
@@ -237,9 +257,11 @@ def evaluate_structured_generation(
     max_length: int | None,
     max_new_tokens: int,
     batch_size: int,
+    num_workers: int,
     trust_remote_code: bool,
     sft_format: str,
     max_samples: int | None = None,
+    max_trajectories: int | None = None,
 ) -> dict[str, float]:
     """Runs generation over the validation split and computes structured metrics."""
 
@@ -251,6 +273,10 @@ def evaluate_structured_generation(
         dataset = torch.utils.data.Subset(eval_dataset, range(max_samples))
     else:
         dataset = eval_dataset
+    dataset, trajectory_count = _limit_dataset_by_trajectories(
+        dataset,
+        max_trajectories,
+    )
 
     collator = VisionGenerationCollator(
         processor_name_or_path=processor_name_or_path,
@@ -262,7 +288,7 @@ def evaluate_structured_generation(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=0,
+        num_workers=max(num_workers, 0),
         collate_fn=collator,
     )
 
@@ -346,7 +372,6 @@ def evaluate_structured_generation(
                                         allowed_tool_specs=metadata[
                                             "allowed_tool_specs"
                                         ],
-                                        reasoning_text="plain_json",
                                     )
                                 )
                             else:
@@ -359,10 +384,6 @@ def evaluate_structured_generation(
                                         allowed_tool_specs=metadata[
                                             "allowed_tool_specs"
                                         ],
-                                        reasoning_text=(
-                                            extract_pre_tool_call_text(decoded_text)
-                                            or "tool_call"
-                                        ),
                                     )
                                 )
                             valid_tool_calls += 1
@@ -437,6 +458,9 @@ def evaluate_structured_generation(
         exact_tool_call_matches=exact_tool_call_matches,
         exact_action_matches=exact_action_matches,
     )
+    if trajectory_count is not None:
+        metrics["structured_eval_num_trajectories"] = float(trajectory_count)
+    metrics["structured_eval_num_workers"] = float(max(num_workers, 0))
     metrics_path = output_dir / "structured_eval_metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, indent=2, sort_keys=True),

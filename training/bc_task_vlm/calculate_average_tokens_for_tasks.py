@@ -13,7 +13,6 @@ from typing import Any
 
 from training.bc_task_vlm.dataset import (
     build_centralized_examples,
-    build_decentralized_examples,
     image_resolution_to_pixels,
 )
 from training.bc_task_vlm.task_registry import resolve_task_name, supported_task_names
@@ -65,6 +64,7 @@ def _load_processor(
     tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is not None:
         tokenizer.padding_side = "right"
+        tokenizer.truncation_side = "left"
     return processor
 
 
@@ -205,18 +205,11 @@ def _build_examples(
     dataset_root: Path,
     task_name: str,
     trajectory_ids: list[str],
-    granularity: str,
 ) -> list[Any]:
-    builder = (
-        build_decentralized_examples
-        if granularity == "decentralized"
-        else build_centralized_examples
-    )
-    return builder(
+    return build_centralized_examples(
         dataset_root=dataset_root,
         task_names=[task_name],
-        trajectory_ids_by_task={task_name: trajectory_ids},
-        num_workers=1,
+        trajectory_ids_by_task={task_name: set(trajectory_ids)},
         show_progress=False,
     )
 
@@ -227,7 +220,6 @@ def summarize_task_tokens(
     dataset_root: Path,
     task_name: str,
     trajectories_per_task: int,
-    granularity: str,
     image_resolution: int | None,
     image_size_cache: dict[str, tuple[int, int]],
 ) -> TaskTokenSummary:
@@ -240,7 +232,6 @@ def summarize_task_tokens(
         dataset_root=dataset_root,
         task_name=task_name,
         trajectory_ids=trajectory_ids,
-        granularity=granularity,
     )
     tokens_by_trajectory = {trajectory_id: 0 for trajectory_id in trajectory_ids}
     image_tokens_by_trajectory = {trajectory_id: 0 for trajectory_id in trajectory_ids}
@@ -299,11 +290,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-name-or-path", required=True)
     parser.add_argument("--tasks", default=None)
     parser.add_argument("--trajectories-per-task", type=int, default=20)
-    parser.add_argument(
-        "--granularity",
-        choices=("decentralized", "centralized"),
-        default="decentralized",
-    )
     parser.add_argument("--image-resolution", type=int, default=512)
     parser.add_argument(
         "--trust-remote-code",
@@ -323,12 +309,11 @@ def _print_table(
     model_name_or_path: str,
     dataset_root: Path,
     trajectories_per_task: int,
-    granularity: str,
     summaries: list[TaskTokenSummary],
 ) -> None:
     print(f"model: {model_name_or_path}")
     print(f"dataset_root: {dataset_root}")
-    print(f"granularity: {granularity}")
+    print("example_format: centralized")
     print(f"trajectories_per_task: {trajectories_per_task}")
     print()
 
@@ -395,7 +380,6 @@ def main() -> None:
                 dataset_root=args.dataset_root,
                 task_name=task_name,
                 trajectories_per_task=args.trajectories_per_task,
-                granularity=args.granularity,
                 image_resolution=args.image_resolution,
                 image_size_cache=image_size_cache,
             )
@@ -404,7 +388,6 @@ def main() -> None:
         model_name_or_path=args.model_name_or_path,
         dataset_root=args.dataset_root,
         trajectories_per_task=args.trajectories_per_task,
-        granularity=args.granularity,
         summaries=summaries,
     )
 

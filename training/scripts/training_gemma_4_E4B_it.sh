@@ -22,7 +22,7 @@ export TOKENIZERS_PARALLELISM=false
 python_bin=/work/hdd/bgjs/mnakamura/robocasa/.venv/bin/python
 model_path=google/gemma-4-E4B-it
 dataset_root=/work/hdd/bgjs/mnakamura/robocasa/data_generation/task_level/data/image/20260413T205634Z
-max_length=4096
+max_length="${MAX_LENGTH:-16384}"
 image_resolution=256
 
 bash training/bc_task_vlm/launch_gh200_test.sh \

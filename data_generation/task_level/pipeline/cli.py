@@ -9,12 +9,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from data_generation.task_level.runtime.client import (
+    DEFAULT_SDK,
+    SUPPORTED_GENERATION_SDKS,
+)
+
 from .models import TaskAnalysis
 from .state import PipelineState
 
-DEFAULT_OUTPUT_DIR = (
-    Path(__file__).resolve().parents[1] / "data" / "pipeline_runs"
-)
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "data" / "pipeline_runs"
 
 PIPELINE_PHASE_ORDER = ("0a", "0b", "1", "2", "2.5", "3", "4", "5")
 VALID_PHASES = PIPELINE_PHASE_ORDER + ("all",)
@@ -66,7 +69,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model",
         type=str,
         default=None,
-        help="LLM model name for phases that need it.",
+        help=(
+            "LLM model or deployment name for phases that need it. For "
+            "azure-openai this is the Azure OpenAI deployment name."
+        ),
+    )
+    parser.add_argument(
+        "--sdk",
+        type=str,
+        choices=SUPPORTED_GENERATION_SDKS,
+        default=DEFAULT_SDK,
+        help="Generation client to use for LLM-backed phases.",
     )
     parser.add_argument(
         "--max-retries",
@@ -187,9 +200,7 @@ def _normalize_requested_phases(
 
     requested_phase_set = set(unique_phases)
     return tuple(
-        phase
-        for phase in PIPELINE_PHASE_ORDER
-        if phase in requested_phase_set
+        phase for phase in PIPELINE_PHASE_ORDER if phase in requested_phase_set
     )
 
 
@@ -197,7 +208,10 @@ def _resolve_run_dir(args: argparse.Namespace) -> Path:
     """Get or create the run directory."""
     if args.resume:
         if not args.resume.exists():
-            print(f"Error: Resume directory does not exist: {args.resume}", file=sys.stderr)
+            print(
+                f"Error: Resume directory does not exist: {args.resume}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         return args.resume
 
@@ -408,6 +422,7 @@ def _run_phase0b(
         rating_threshold=args.rating_threshold,
         project=args.project,
         location=args.location or "global",
+        sdk=args.sdk,
         dry_run=args.dry_run,
         progress_callback=_progress,
         generation_timeout_sec=(
@@ -491,6 +506,7 @@ def _run_phase1(
         workers=args.workers,
         project=args.project,
         location=args.location or "global",
+        sdk=args.sdk,
         dry_run=args.dry_run,
         progress_callback=_progress,
         heartbeat_callback=_heartbeat,
@@ -764,7 +780,10 @@ def _merge_phase2_results_with_generation_failures(
     }
     for result in generation_results:
         task_name = getattr(result, "task_name", None)
-        if not isinstance(task_name, str) or getattr(result, "spec_payload", None) is not None:
+        if (
+            not isinstance(task_name, str)
+            or getattr(result, "spec_payload", None) is not None
+        ):
             continue
         results_by_task[task_name] = SpecValidationResult(
             task_name=task_name,
@@ -1015,6 +1034,7 @@ def _run_phase2_5(
         workers=args.workers,
         project=args.project,
         location=args.location or "global",
+        sdk=args.sdk,
         dry_run=args.dry_run,
         progress_callback=_progress,
         generation_timeout_sec=(
@@ -1103,6 +1123,7 @@ def _run_phase3(
         max_retries=args.max_retries,
         project=args.project,
         location=args.location or "global",
+        sdk=args.sdk,
         dry_run=args.dry_run,
         progress_callback=_progress,
         heartbeat_callback=_heartbeat,
@@ -1116,7 +1137,9 @@ def _run_phase3(
 
     completed = sum(1 for result in results if result.completed)
     incomplete = len(results) - completed
-    print(f"  Generated {len(results)} task outputs: completed={completed}, incomplete={incomplete}")
+    print(
+        f"  Generated {len(results)} task outputs: completed={completed}, incomplete={incomplete}"
+    )
     for result in results:
         if result.completed:
             continue
@@ -1139,10 +1162,7 @@ def _run_phase4(
 
     from .phase4 import run_phase4
 
-    print(
-        f"{'[DRY RUN] ' if args.dry_run else ''}"
-        "Phase 4: Pre-image + sweep..."
-    )
+    print(f"{'[DRY RUN] ' if args.dry_run else ''}" "Phase 4: Pre-image + sweep...")
     state.mark_phase_started("4")
     try:
         results = run_phase4(
@@ -1190,10 +1210,7 @@ def _run_phase5(
 
     from .phase5 import run_phase5
 
-    print(
-        f"{'[DRY RUN] ' if args.dry_run else ''}"
-        "Phase 5: Error aggregation..."
-    )
+    print(f"{'[DRY RUN] ' if args.dry_run else ''}" "Phase 5: Error aggregation...")
     if args.dry_run:
         return
     state.mark_phase_started("5")

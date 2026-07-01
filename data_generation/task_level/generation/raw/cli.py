@@ -53,6 +53,8 @@ from data_generation.task_level.runtime.client import (
     DEFAULT_LOCATION,
     DEFAULT_MODEL,
     DEFAULT_SDK,
+    GOOGLE_GENAI_SDK,
+    SUPPORTED_GENERATION_SDKS,
     TrajectoryGenerationError,
     load_dotenv_file,
 )
@@ -481,7 +483,7 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
     load_dotenv_file()
     supported_tasks = ", ".join(supported_task_names())
     parser = argparse.ArgumentParser(
-        description="Generate multi-agent task-level trajectories with google-genai on Vertex AI.",
+        description="Generate multi-agent task-level trajectories with a configured LLM provider.",
         allow_abbrev=False,
     )
     parser.add_argument(
@@ -543,12 +545,15 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         "--model",
         type=str,
         default=DEFAULT_MODEL,
-        help="Vertex model name.",
+        help=(
+            "Provider model or deployment name. For azure-openai this is the "
+            "Azure OpenAI deployment name."
+        ),
     )
     parser.add_argument(
         "--sdk",
         type=str,
-        choices=[DEFAULT_SDK],
+        choices=SUPPORTED_GENERATION_SDKS,
         default=DEFAULT_SDK,
         help="Generation client to use.",
     )
@@ -694,7 +699,7 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         "--batch-processing",
         action="store_true",
         dest="batch_processing",
-        help="Use Vertex batch processing instead of online requests.",
+        help=f"Use Vertex batch processing instead of online requests ({GOOGLE_GENAI_SDK} only).",
     )
     parser.add_argument(
         "--batch_processing",

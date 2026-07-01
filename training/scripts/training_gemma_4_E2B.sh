@@ -26,14 +26,12 @@ model_path="${MODEL_PATH:-google/gemma-4-E2B}"
 staged_dataset_root="${STAGED_DATASET_ROOT:-/work/hdd/bgjs/mnakamura/robocasa/training/bc_task_vlm/staged_hf/robocasa_20260430T030150Z_full_run_selected}"
 train_tasks="${TRAIN_TASKS:-all}"
 val_tasks="${VAL_TASKS:-all}"
-train_example_granularity="${TRAIN_EXAMPLE_GRANULARITY:-decentralized}"
 trust_example_cache="${TRUST_EXAMPLE_CACHE:-false}"
 validation_trajectories_per_task="${VAL_TRAJECTORIES_PER_TASK:-0}"
 validation_trajectory_fraction="${VAL_TRAJECTORY_FRACTION:-0.1}"
 validation_split_seed="${VAL_SPLIT_SEED:-42}"
-max_length=4096
+max_length="${MAX_LENGTH:-16384}"
 max_images_per_sample="${MAX_IMAGES_PER_SAMPLE:-4}"
-max_history_steps_per_prompt="${MAX_HISTORY_STEPS_PER_PROMPT:-8}"
 supervise_last_assistant_turn_only="${SUPERVISE_LAST_ASSISTANT_TURN_ONLY:-true}"
 output_dir="${OUTPUT_DIR:-training/bc_task_vlm/runs/gemma4-e2b-20260430-five-task-bc-task-vlm}"
 per_device_batch_size="${PER_DEVICE_BATCH_SIZE:-4}"
@@ -42,9 +40,9 @@ learning_rate="${LEARNING_RATE:-2e-4}"
 warmup_ratio="${WARMUP_RATIO:-0.03}"
 num_workers="${NUM_WORKERS:-8}"
 logging_steps="${LOGGING_STEPS:-10}"
-save_steps="${SAVE_STEPS:-500}"
+save_steps="${SAVE_STEPS:-5000}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-8}"
-eval_steps="${EVAL_STEPS:-500}"
+eval_steps="${EVAL_STEPS:-5000}"
 wandb_mode="${WANDB_MODE:-online}"
 wandb_project="${WANDB_PROJECT:-robocasa-bc-task-vlm}"
 wandb_run_name="${WANDB_RUN_NAME:-gemma4-e2b-20260430-five-task-sft}"
@@ -104,7 +102,6 @@ launch_args=(
   --validation-trajectories-per-task "${validation_trajectories_per_task}" \
   --validation-trajectory-fraction "${validation_trajectory_fraction}" \
   --validation-split-seed "${validation_split_seed}" \
-  --train-example-granularity "${train_example_granularity}" \
   --output-dir "${output_dir}" \
   --per-device-batch-size "${per_device_batch_size}" \
   --grad-accum "${grad_accum}" \
@@ -112,7 +109,6 @@ launch_args=(
   --learning-rate "${learning_rate}" \
   --max-length "${max_length}" \
   --max-images-per-sample "${max_images_per_sample}" \
-  --max-history-steps-per-prompt "${max_history_steps_per_prompt}" \
   --num-workers "${num_workers}" \
   --bf16 \
   --attn-implementation sdpa \

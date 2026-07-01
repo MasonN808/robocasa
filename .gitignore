@@ -196,6 +196,8 @@ training/bc_task_vlm/runs/
 training/bc_task_vlm/preprocessed/*
 
 PROGRESS.md
-training/bc_task_vlm/staged_hf
+training/bc_task_vlm/staged_hf*
 *hf_cache/
 data_analysis/raw_gemini_pro_traj
+
+data_analysis/model_sampling_comparison

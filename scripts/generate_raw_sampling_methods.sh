@@ -21,7 +21,8 @@ Options:
   --verbalized-k N           Trajectories requested per verbalized run (default: 4)
   --max-workers N            Parallel trajectory workers per task (default: 4)
   --max-retries N            Maximum attempts per run (default: 5)
-  --model NAME               Vertex model (default: gemini-3-flash-preview)
+  --model NAME               Provider model/deployment (default: gemini-3-flash-preview)
+  --sdk NAME                 Generation SDK: google-genai or azure-openai (default: google-genai)
   --location LOCATION        Vertex location (default: global)
   --thinking-level LEVEL     Gemini 3 thinking level (default: low)
   --base-temperature VALUE   Temperature for base/random/verbalized (default: 0.6)
@@ -43,6 +44,7 @@ verbalized_k="4"
 max_workers="4"
 max_retries="1"
 model="${ROBOCASA_RAW_MODEL:-gemini-3-flash-preview}"
+sdk="${ROBOCASA_RAW_SDK:-google-genai}"
 location="${GOOGLE_CLOUD_LOCATION:-global}"
 thinking_level="${ROBOCASA_RAW_THINKING_LEVEL:-low}"
 base_temperature="0.6"
@@ -98,6 +100,11 @@ while [[ $# -gt 0 ]]; do
     --model)
       require_option_value "$1" "${2:-}"
       model="$2"
+      shift 2
+      ;;
+    --sdk)
+      require_option_value "$1" "${2:-}"
+      sdk="$2"
       shift 2
       ;;
     --location)
@@ -183,6 +190,7 @@ for method in "${methods[@]}"; do
     "${extra_sampling_args[@]}"
     --temperature "$temperature"
     --model "$model"
+    --sdk "$sdk"
     --location "$location"
     --thinking-level "$thinking_level"
     --max-workers "$max_workers"

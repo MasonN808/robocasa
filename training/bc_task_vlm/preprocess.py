@@ -22,7 +22,6 @@ from data_generation.task_level.runtime.client import load_dotenv_file
 from training.bc_task_vlm.dataset import (
     build_batched_pretokenized_tensors,
     build_centralized_examples,
-    build_decentralized_examples,
     build_example_cache_fingerprint,
     build_example_cache_path,
     build_same_task_trajectory_split,
@@ -407,6 +406,7 @@ def _load_processor(
     tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is not None:
         tokenizer.padding_side = "right"
+        tokenizer.truncation_side = "left"
     return processor
 
 
@@ -548,8 +548,6 @@ def _build_examples_for_tasks(
     dataset_root: Path,
     task_names: list[str],
     split_name: str,
-    cache_granularity: str,
-    builder,
     trajectory_ids_by_task: dict[str, list[str]] | None,
     use_example_cache: bool,
     training_samples_cache_dir: Path,
@@ -571,23 +569,21 @@ def _build_examples_for_tasks(
             else trajectory_ids_by_task.get(task_name, [])
         )
 
-        if use_example_cache:
+        cache_allowed = use_example_cache and trajectory_ids is None
+        if cache_allowed:
             fingerprint = build_example_cache_fingerprint(
                 dataset_root=dataset_root,
                 task_name=task_name,
-                granularity=cache_granularity,
                 trajectory_ids=trajectory_ids,
             )
             cache_path = build_example_cache_path(
                 cache_dir=training_samples_cache_dir,
                 dataset_root=dataset_root,
                 task_name=task_name,
-                granularity=cache_granularity,
             )
             task_examples = load_examples_from_cache(
                 cache_path=cache_path,
                 expected_fingerprint=fingerprint,
-                granularity=cache_granularity,
                 sample_id_filter=example_filter,
             )
             if task_examples is not None:
@@ -599,7 +595,7 @@ def _build_examples_for_tasks(
         if task_examples is None:
             lock_dir = (
                 None
-                if not use_example_cache or cache_path is None
+                if not cache_allowed or cache_path is None
                 else cache_path.with_name(f"{cache_path.name}.lock")
             )
             owns_lock = False
@@ -612,7 +608,6 @@ def _build_examples_for_tasks(
                         task_examples = load_examples_from_cache(
                             cache_path=cache_path,
                             expected_fingerprint=fingerprint,
-                            granularity=cache_granularity,
                             sample_id_filter=example_filter,
                         )
                         if task_examples is not None:
@@ -629,7 +624,6 @@ def _build_examples_for_tasks(
                         task_examples = load_examples_from_cache(
                             cache_path=cache_path,
                             expected_fingerprint=fingerprint,
-                            granularity=cache_granularity,
                             sample_id_filter=example_filter,
                         )
                         if task_examples is not None:
@@ -638,18 +632,17 @@ def _build_examples_for_tasks(
             try:
                 if task_examples is None:
                     _log(f"Building {task_label}")
-                    task_examples = builder(
+                    task_examples = build_centralized_examples(
                         dataset_root=dataset_root,
                         task_names=[task_name],
                         trajectory_ids_by_task=None
                         if trajectory_ids is None
-                        else {task_name: trajectory_ids},
-                        num_workers=example_build_workers,
+                        else {task_name: set(trajectory_ids)},
                         show_progress=True,
                         progress_description=progress_description,
                     )
                     if (
-                        use_example_cache
+                        cache_allowed
                         and cache_path is not None
                         and fingerprint is not None
                     ):
@@ -850,8 +843,6 @@ def main() -> None:
         dataset_root=dataset_root,
         task_names=train_tasks,
         split_name="train",
-        cache_granularity="train",
-        builder=build_decentralized_examples,
         trajectory_ids_by_task=train_trajectory_ids_by_task,
         use_example_cache=args.use_example_cache,
         training_samples_cache_dir=training_samples_cache_dir,
@@ -862,8 +853,6 @@ def main() -> None:
         dataset_root=dataset_root,
         task_names=val_tasks,
         split_name="validation",
-        cache_granularity="centralized",
-        builder=build_centralized_examples,
         trajectory_ids_by_task=val_trajectory_ids_by_task,
         use_example_cache=args.use_example_cache,
         training_samples_cache_dir=training_samples_cache_dir,
@@ -1055,7 +1044,7 @@ def main() -> None:
         ),
         "train_trajectory_ids_by_task": train_trajectory_ids_by_task,
         "val_trajectory_ids_by_task": val_trajectory_ids_by_task,
-        "train_example_format": "single_turn",
+        "train_example_format": "centralized",
         "use_example_cache": args.use_example_cache,
         "training_samples_cache_dir": str(training_samples_cache_dir),
         "example_build_workers": args.example_build_workers,

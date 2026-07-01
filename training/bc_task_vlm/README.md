@@ -4,7 +4,6 @@
  - [x] Verify that the image observations are being sent through a ViT or whatever encoder the model uses
  - [x] Verify that the images are excluded from the cross-entropy loss
  - [x] Verify that the ouptut is structured wrt the finetunned model
- - [x] Split joint demonstrations into one training conversation per agent so the loss only applies to that agent's tool-call turns.
  - [] Verify wandb works
  - [] Verify pretraining works on the NCSA cluster with the small amount of data we have.
  - [] Fix the NCSA cluster CUDA/PyTorch environment mismatch; the current multi-GPU launch warns that the NVIDIA driver is too old for the installed torch build and then fails precision validation during Trainer startup.
@@ -23,28 +22,11 @@ does not pass tool schemas into `apply_chat_template(...)`. Use
 `--sft-format tool_call` to train actual Qwen/Hugging Face function-call
 messages and enable structured generation evaluation.
 
-By default, each joint two-agent demonstration is converted into two training
-conversations, one per agent. The global mixed-agent execution history stays in
-the user prompt, but only the selected agent's assistant turns contribute to the
-loss. Validation remains step-level in both SFT formats. For
-`--sft-format tool_call`, structured generation evaluation logs exact tool-call
-accuracy, including both the predicted tool name and every argument, plus
-stricter action-step accuracy.
-
-## Training Modes
-
-`--train-example-granularity decentralized` is the default.
-
-- `centralized`: one training example per successful non-`get_image` global action step. Each sample asks for the single next tool call in the joint trajectory, including whichever agent acts next.
-- `decentralized`: one training example per `(trajectory, agent)`. A single joint two-agent demonstration becomes two training conversations, one for `agent_0` and one for `agent_1`. The other agent's actions stay in the prompt history, but the loss is only applied to the selected agent's assistant tool-call turns.
-
-Example:
-
-- Joint trajectory actions: `agent_0 -> communicate`, `agent_1 -> communicate`, `agent_1 -> pick_up_object`, `agent_0 -> navigate_to_fixture`
-- `centralized`: 4 separate next-step training samples
-- `decentralized`: 2 training samples total
-
-Validation remains step-level in both cases.
+Each successful non-`get_image` global action step becomes one centralized
+training example. Every sample asks for the single next tool call in the joint
+trajectory, including whichever agent acts next. For `--sft-format tool_call`,
+structured generation evaluation logs exact tool-call accuracy, including both
+the predicted tool name and every argument, plus stricter action-step accuracy.
 
 ## Training Sample Build Progress And Cache
 
@@ -60,14 +42,19 @@ training samples are stored under:
 .cache/bc_task_vlm/examples/
 ```
 
-The cache is keyed by dataset root, task name, and granularity
-(`centralized` vs `decentralized`). It is automatically invalidated when any of
-these change:
+New cache writes use zstd-compressed pickle files (`*.pkl.zst`) for faster
+startup and lower shared-filesystem traffic. If `zstandard` is not installed,
+the loader falls back to gzip-compressed pickle (`*.pkl.gz`). Existing JSON cache
+files remain readable; after a successful JSON cache load, the loader writes the
+compressed binary sibling so later runs can skip JSON parsing.
+
+The cache is keyed by dataset root, task name, centralized example format, and
+SFT format. It is automatically invalidated when any of these change:
 
 - `original_trajectory.json`
 - `plan.json`
 - `metadata.json`
-- the BC task VLM example-building code or prompt/schema helpers
+- the BC task VLM example-cache format version or prompt/schema/task helpers
 
 On repeated runs, training and validation sample construction will load from
 cache and skip the expensive rebuild step. In multi-GPU launches, rank 0 builds
@@ -76,6 +63,7 @@ or refreshes the cache and the other ranks wait, then reuse the cached result.
 Useful flags:
 
 - `--use-example-cache` / `--no-use-example-cache`
+- `--trust-example-cache` / `--no-trust-example-cache`
 - `--training-samples-cache-dir /path/to/cache`
 - `--sft-format plain` / `--sft-format tool_call`
 
@@ -172,7 +160,6 @@ accelerate launch \
   --config_file training/bc_task_vlm/accelerate_multigpu.yaml \
   --num_processes 4 \
   -m training.bc_task_vlm.main \
-  --train-example-granularity decentralized \
   --output-dir training/bc_task_vlm/runs/qwen35_08b_lora
 ```
 

@@ -15,8 +15,6 @@ except ImportError:  # pragma: no cover - optional in lightweight test envs
 
 from data_generation.task_level.runtime.client import load_dotenv_file
 from training.bc_task_vlm.dataset import (
-    build_centralized_examples,
-    build_decentralized_examples,
     build_same_task_trajectory_split,
     build_split_manifest,
 )
@@ -377,8 +375,6 @@ def _build_examples(args: argparse.Namespace, dataset_root: Path):
         dataset_root=dataset_root,
         task_names=train_tasks,
         split_name="train",
-        cache_granularity="train",
-        builder=build_decentralized_examples,
         trajectory_ids_by_task=train_trajectory_ids_by_task,
         use_example_cache=args.use_example_cache,
         training_samples_cache_dir=training_samples_cache_dir,
@@ -388,8 +384,6 @@ def _build_examples(args: argparse.Namespace, dataset_root: Path):
         dataset_root=dataset_root,
         task_names=val_tasks,
         split_name="validation",
-        cache_granularity="centralized",
-        builder=build_centralized_examples,
         trajectory_ids_by_task=val_trajectory_ids_by_task,
         use_example_cache=args.use_example_cache,
         training_samples_cache_dir=training_samples_cache_dir,
@@ -485,7 +479,7 @@ def main() -> None:
         ),
         "train_trajectory_ids_by_task": train_trajectory_ids_by_task,
         "val_trajectory_ids_by_task": val_trajectory_ids_by_task,
-        "train_example_format": "single_turn",
+        "train_example_format": "centralized",
         "use_example_cache": args.use_example_cache,
         "training_samples_cache_dir": str(training_samples_cache_dir),
         "example_build_workers": args.example_build_workers,

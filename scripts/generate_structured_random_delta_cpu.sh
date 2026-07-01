@@ -28,6 +28,7 @@ args=(
   --sampling structured_random
   --temperature "${TEMPERATURE:-0.6}"
   --model "${MODEL:-gemini-3-flash-preview}"
+  --sdk "${SDK:-${ROBOCASA_RAW_SDK:-google-genai}}"
   --location "${GOOGLE_CLOUD_LOCATION:-global}"
   --thinking-level "${THINKING_LEVEL:-low}"
   --max-workers "${MAX_WORKERS:-4}"

@@ -43,6 +43,7 @@ class Phase3Tests(unittest.TestCase):
                     output_dir=output_dir,
                     num_runs=1,
                     model=None,
+                    sdk="google-genai",
                     project=None,
                     location="global",
                     max_retries=1,
@@ -73,12 +74,22 @@ class Phase3Tests(unittest.TestCase):
                     task_name=task_name,
                     spec_path=str(spec_path),
                     output_dir=str(output_dir / "phase3" / "raw" / spec_path.stem),
-                    summary_path=str(output_dir / "phase3" / "raw" / spec_path.stem / "summary.json"),
-                    error_summary_path=str(
-                        output_dir / "phase3" / "raw" / spec_path.stem / "summary_errors.json"
+                    summary_path=str(
+                        output_dir / "phase3" / "raw" / spec_path.stem / "summary.json"
                     ),
-                    stdout_log_path=str(output_dir / "phase3" / "logs" / f"{spec_path.stem}.stdout.log"),
-                    stderr_log_path=str(output_dir / "phase3" / "logs" / f"{spec_path.stem}.stderr.log"),
+                    error_summary_path=str(
+                        output_dir
+                        / "phase3"
+                        / "raw"
+                        / spec_path.stem
+                        / "summary_errors.json"
+                    ),
+                    stdout_log_path=str(
+                        output_dir / "phase3" / "logs" / f"{spec_path.stem}.stdout.log"
+                    ),
+                    stderr_log_path=str(
+                        output_dir / "phase3" / "logs" / f"{spec_path.stem}.stderr.log"
+                    ),
                     exit_code=0,
                     completed=True,
                     num_runs=1,

@@ -1,0 +1,7 @@
+model,sampling_method,n_tasks,mean_diversity,median_diversity,min_diversity,max_diversity,mean_num_trajectories
+Gemini-3-Flash,base,51,0.058174,0.056520,0.030868,0.100496,30.00
+Gemini-3-Flash,structured_random,51,0.088427,0.087537,0.064130,0.169125,30.00
+Gemini-3.1-Pro,base,52,0.061639,0.054246,0.037442,0.131755,28.73
+Gemini-3.1-Pro,structured_random,52,0.107727,0.100863,0.070854,0.213025,29.00
+GPT-5.4-Mini,base,52,0.064510,0.062869,0.047619,0.101888,23.00
+GPT-5.4-Mini,structured_random,52,0.084694,0.081305,0.045015,0.145678,23.02

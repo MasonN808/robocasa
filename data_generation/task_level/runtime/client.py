@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib import error, parse, request
 
 from data_generation.utils import (
     coerce_int,
@@ -19,7 +20,10 @@ from data_generation.utils import (
 
 DEFAULT_MODEL = "gemini-3-flash-preview"
 DEFAULT_LOCATION = "global"
-DEFAULT_SDK = "google-genai"
+GOOGLE_GENAI_SDK = "google-genai"
+AZURE_OPENAI_SDK = "azure-openai"
+DEFAULT_SDK = GOOGLE_GENAI_SDK
+SUPPORTED_GENERATION_SDKS = (GOOGLE_GENAI_SDK, AZURE_OPENAI_SDK)
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DOTENV_PATH = REPO_ROOT / ".env"
 COST_DECIMAL_PLACES = 4
@@ -60,6 +64,13 @@ MODEL_TEXT_PRICING_USD_PER_MILLION = {
 }
 # google-genai reads Vertex routing from environment variables.
 GOOGLE_GENAI_VERTEX_ENV_VAR = "GOOGLE_GENAI_USE_VERTEXAI"
+AZURE_OPENAI_ENDPOINT_ENV_VAR = "AZURE_OPENAI_ENDPOINT"
+AZURE_OPENAI_API_KEY_ENV_VAR = "AZURE_OPENAI_API_KEY"
+AZURE_OPENAI_API_VERSION_ENV_VAR = "AZURE_OPENAI_API_VERSION"
+AZURE_OPENAI_REASONING_EFFORT_ENV_VAR = "AZURE_OPENAI_REASONING_EFFORT"
+AI_FOUNDRY_PROJECT_ENDPOINT_ENV_VAR = "AI_FOUNDRY_PROJECT_ENDPOINT"
+AI_FOUNDRY_API_KEY_ENV_VAR = "AI_FOUNDRY_API_KEY"
+AI_FOUNDRY_AUTH_MODE_ENV_VAR = "AI_FOUNDRY_AUTH_MODE"
 
 
 class TrajectoryGenerationError(RuntimeError):
@@ -684,6 +695,314 @@ class GoogleGenAIClient(BaseGenerationClient):
         )
 
 
+DEFAULT_AZURE_OPENAI_MAX_COMPLETION_TOKENS = 32768
+
+
+def _first_configured_env_value(*names: str) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def _normalize_azure_openai_chat_endpoint(
+    endpoint: str,
+    *,
+    api_version: str | None,
+) -> str:
+    normalized_endpoint = endpoint.strip().rstrip("/")
+    if not normalized_endpoint:
+        raise TrajectoryGenerationError(
+            f"{AZURE_OPENAI_ENDPOINT_ENV_VAR} must not be empty."
+        )
+    if normalized_endpoint.endswith("/openai/v1"):
+        chat_url = f"{normalized_endpoint}/chat/completions"
+    else:
+        chat_url = f"{normalized_endpoint}/openai/v1/chat/completions"
+    if api_version:
+        chat_url = f"{chat_url}?{parse.urlencode({'api-version': api_version})}"
+    return chat_url
+
+
+def _validate_ai_foundry_auth_mode() -> None:
+    auth_mode = os.environ.get(AI_FOUNDRY_AUTH_MODE_ENV_VAR)
+    if not auth_mode:
+        return
+    if auth_mode.strip().lower() == "api_key":
+        return
+    raise TrajectoryGenerationError(
+        f"{AI_FOUNDRY_AUTH_MODE_ENV_VAR}={auth_mode!r} is not supported by "
+        f"{AZURE_OPENAI_SDK}. Use api_key authentication or configure "
+        f"{AZURE_OPENAI_ENDPOINT_ENV_VAR} / {AZURE_OPENAI_API_KEY_ENV_VAR}."
+    )
+
+
+def _normalize_openai_json_schema(schema: Any) -> Any:
+    """Converts Gemini-style schema fragments to OpenAI JSON Schema spelling."""
+
+    if isinstance(schema, dict):
+        normalized: dict[str, Any] = {}
+        for key, value in schema.items():
+            if key == "propertyOrdering":
+                continue
+            if key == "type" and isinstance(value, str):
+                normalized[key] = value.lower()
+            else:
+                normalized[key] = _normalize_openai_json_schema(value)
+        return normalized
+    if isinstance(schema, list):
+        return [_normalize_openai_json_schema(item) for item in schema]
+    return schema
+
+
+def _build_azure_openai_response_format(
+    response_schema: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if response_schema is None:
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "robocasa_response",
+            "strict": False,
+            "schema": _normalize_openai_json_schema(response_schema),
+        },
+    }
+
+
+def _azure_reasoning_effort_for_request(
+    *,
+    model: str,
+    thinking_level: str | None,
+) -> str | None:
+    configured_effort = os.environ.get(AZURE_OPENAI_REASONING_EFFORT_ENV_VAR)
+    if configured_effort:
+        return configured_effort
+    if thinking_level is None:
+        return None
+
+    normalized_model = model.strip().lower()
+    if normalized_model.startswith(("gpt-5", "o1", "o3", "o4")):
+        return thinking_level
+    if "reasoning" in normalized_model:
+        return thinking_level
+    return None
+
+
+def _read_azure_openai_error_body(exc: error.HTTPError) -> str:
+    try:
+        return exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _extract_azure_chat_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise TrajectoryGenerationError(
+            "Azure OpenAI response did not include any chat completion choices."
+        )
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise TrajectoryGenerationError(
+            "Azure OpenAI response choice was not a JSON object."
+        )
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        raise TrajectoryGenerationError(
+            "Azure OpenAI response choice did not include a message."
+        )
+
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                text_value = part.get("text")
+                if isinstance(text_value, str):
+                    text_parts.append(text_value)
+                elif isinstance(part.get("content"), str):
+                    text_parts.append(part["content"])
+        if text_parts:
+            return "".join(text_parts)
+
+    refusal = message.get("refusal")
+    if isinstance(refusal, str) and refusal:
+        raise TrajectoryGenerationError(f"Azure OpenAI refused the request: {refusal}")
+    raise TrajectoryGenerationError(
+        "Azure OpenAI response message did not contain text content."
+    )
+
+
+def build_openai_chat_generation_usage(usage_metadata: Any) -> GenerationUsage | None:
+    if usage_metadata is None:
+        return None
+    prompt_details = usage_field(
+        usage_metadata,
+        "prompt_tokens_details",
+        "promptTokensDetails",
+    )
+    completion_details = usage_field(
+        usage_metadata,
+        "completion_tokens_details",
+        "completionTokensDetails",
+    )
+    return GenerationUsage(
+        prompt_tokens=usage_field(usage_metadata, "prompt_tokens", "promptTokens"),
+        candidates_tokens=usage_field(
+            usage_metadata,
+            "completion_tokens",
+            "completionTokens",
+        ),
+        thoughts_tokens=usage_field(
+            completion_details,
+            "reasoning_tokens",
+            "reasoningTokens",
+        ),
+        cached_content_tokens=usage_field(
+            prompt_details,
+            "cached_tokens",
+            "cachedTokens",
+        ),
+        total_tokens=usage_field(usage_metadata, "total_tokens", "totalTokens"),
+        traffic_type=DEFAULT_TRAFFIC_TYPE,
+    )
+
+
+class AzureOpenAIChatClient(BaseGenerationClient):
+    """Generation client for Azure OpenAI chat completions."""
+
+    def __init__(
+        self,
+        *,
+        endpoint: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
+        timeout_sec: int | None = DEFAULT_GENERATION_TIMEOUT_SEC,
+    ):
+        _validate_ai_foundry_auth_mode()
+        resolved_endpoint = endpoint or _first_configured_env_value(
+            AZURE_OPENAI_ENDPOINT_ENV_VAR,
+            AI_FOUNDRY_PROJECT_ENDPOINT_ENV_VAR,
+        )
+        resolved_api_key = api_key or _first_configured_env_value(
+            AZURE_OPENAI_API_KEY_ENV_VAR,
+            AI_FOUNDRY_API_KEY_ENV_VAR,
+        )
+        if not resolved_endpoint:
+            raise TrajectoryGenerationError(
+                f"{AZURE_OPENAI_ENDPOINT_ENV_VAR} or "
+                f"{AI_FOUNDRY_PROJECT_ENDPOINT_ENV_VAR} is required when --sdk "
+                f"{AZURE_OPENAI_SDK} is used."
+            )
+        if not resolved_api_key:
+            raise TrajectoryGenerationError(
+                f"{AZURE_OPENAI_API_KEY_ENV_VAR} or {AI_FOUNDRY_API_KEY_ENV_VAR} "
+                f"is required when --sdk {AZURE_OPENAI_SDK} is used."
+            )
+        self._api_key = resolved_api_key
+        self._timeout_sec = timeout_sec
+        self._chat_url = _normalize_azure_openai_chat_endpoint(
+            resolved_endpoint,
+            api_version=api_version or os.environ.get(AZURE_OPENAI_API_VERSION_ENV_VAR),
+        )
+
+    def _build_payload(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        response_schema: dict[str, Any] | None,
+        temperature: float,
+        thinking_level: str | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Return only valid JSON. Do not include markdown.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_completion_tokens": DEFAULT_AZURE_OPENAI_MAX_COMPLETION_TOKENS,
+            "response_format": _build_azure_openai_response_format(response_schema),
+        }
+        reasoning_effort = _azure_reasoning_effort_for_request(
+            model=model,
+            thinking_level=thinking_level,
+        )
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
+        return payload
+
+    def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+        body = json.dumps(payload).encode("utf-8")
+        request_obj = request.Request(
+            self._chat_url,
+            data=body,
+            headers={
+                "api-key": self._api_key,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with request.urlopen(request_obj, timeout=self._timeout_sec) as response:
+                raw_response = response.read().decode("utf-8")
+        except error.HTTPError as exc:
+            error_body = _read_azure_openai_error_body(exc)
+            raise TrajectoryGenerationError(
+                "Azure OpenAI chat completion request failed with "
+                f"HTTP {exc.code}: {error_body or exc.reason}"
+            ) from exc
+        except error.URLError as exc:
+            raise TrajectoryGenerationError(
+                f"Azure OpenAI chat completion request failed: {exc.reason}"
+            ) from exc
+
+        try:
+            decoded = json.loads(raw_response)
+        except json.JSONDecodeError as exc:
+            raise TrajectoryGenerationError(
+                "Azure OpenAI returned a non-JSON chat completion response."
+            ) from exc
+        if not isinstance(decoded, dict):
+            raise TrajectoryGenerationError(
+                "Azure OpenAI chat completion response was not a JSON object."
+            )
+        return decoded
+
+    def generate(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        response_schema: dict[str, Any] | None,
+        temperature: float,
+        thinking_level: str | None = None,
+        thinking_budget: int | None = None,
+    ) -> Any:
+        del thinking_budget
+        response_payload = self._post_json(
+            self._build_payload(
+                model=model,
+                prompt=prompt,
+                response_schema=response_schema,
+                temperature=temperature,
+                thinking_level=thinking_level,
+            )
+        )
+        return GenerationResult(
+            payload=_extract_azure_chat_text(response_payload),
+            usage=build_openai_chat_generation_usage(response_payload.get("usage")),
+        )
+
+
 def build_generation_client(
     sdk: str,
     project: str | None,
@@ -691,12 +1010,15 @@ def build_generation_client(
     *,
     timeout_sec: int | None = DEFAULT_GENERATION_TIMEOUT_SEC,
 ) -> BaseGenerationClient:
-    if sdk == DEFAULT_SDK:
+    if sdk == GOOGLE_GENAI_SDK:
         return GoogleGenAIClient(
             project=project,
             location=location,
             timeout_sec=timeout_sec,
         )
+    if sdk == AZURE_OPENAI_SDK:
+        return AzureOpenAIChatClient(timeout_sec=timeout_sec)
     raise TrajectoryGenerationError(
-        f"Unsupported SDK '{sdk}'. Expected one of: {DEFAULT_SDK}."
+        f"Unsupported SDK '{sdk}'. Expected one of: "
+        f"{', '.join(SUPPORTED_GENERATION_SDKS)}."
     )

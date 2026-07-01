@@ -9,6 +9,8 @@ from pathlib import Path
 
 from data_generation.task_level.runtime.client import (
     DEFAULT_GENERATION_TIMEOUT_SEC,
+    GOOGLE_GENAI_SDK,
+    SUPPORTED_GENERATION_SDKS,
     TrajectoryGenerationError,
 )
 from data_generation.task_level.tasks import supported_task_names
@@ -198,6 +200,12 @@ def _validate_runtime_config(runtime_config: RuntimeConfig) -> None:
         raise TrajectoryGenerationError(
             "--batch-gcs-prefix or GOOGLE_CLOUD_BATCH_GCS_PREFIX is required "
             "when --batch-processing is enabled."
+        )
+    if runtime_config.batch_processing and runtime_config.sdk != GOOGLE_GENAI_SDK:
+        raise TrajectoryGenerationError(
+            "--batch-processing currently supports only "
+            f"{GOOGLE_GENAI_SDK}; got {runtime_config.sdk!r}. "
+            "Use online requests for: " + ", ".join(SUPPORTED_GENERATION_SDKS) + "."
         )
     if runtime_config.resume_path is not None:
         if not runtime_config.resume_path.exists():

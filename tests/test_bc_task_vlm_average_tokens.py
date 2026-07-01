@@ -114,7 +114,6 @@ class AverageTaskTokenTests(unittest.TestCase):
                         dataset_root=dataset_root,
                         task_name="task",
                         trajectories_per_task=2,
-                        granularity="decentralized",
                         image_resolution=1,
                         image_size_cache={},
                     )
@@ -144,7 +143,6 @@ class AverageTaskTokenTests(unittest.TestCase):
                 model_name_or_path="model",
                 dataset_root=Path("/dataset"),
                 trajectories_per_task=2,
-                granularity="decentralized",
                 summaries=[summary],
             )
 

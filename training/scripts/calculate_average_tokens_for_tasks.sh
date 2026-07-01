@@ -24,7 +24,6 @@ Options:
                                    Default: data_generation/task_level/data/image/20260413T205634Z
   --tasks CSV                      Task list. Default: all supported task directories.
   --trajectories-per-task N        Number of trajectories to sample per task. Default: 20.
-  --granularity NAME               decentralized or centralized. Default: decentralized.
   --image-resolution N             Square image resolution estimate. Default: 512.
   --trust-remote-code              Allow remote processor code.
   --local-files-only               Do not download model/processor files.

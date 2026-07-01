@@ -20,8 +20,6 @@ except ImportError:  # pragma: no cover - optional in lightweight test envs
     tqdm = None
 
 from training.bc_task_vlm.dataset import (
-    CentralizedExample,
-    DecentralizedExample,
     ManifestExample,
     _PRETOKENIZED_FIELD_NAME,
     deserialize_pretokenized_tensors,
@@ -37,7 +35,7 @@ _PRETOKENIZED_BLOB_COLUMN = "pretokenized_blob"
 _PRETOKENIZED_SHARD_MANIFEST_PREFIX = "manifest"
 _PRETOKENIZED_SHARD_TRAIN_PREFIX = "train"
 _PRETOKENIZED_SHARD_VALIDATION_PREFIX = "validation"
-_PREPROCESSED_FORMAT_VERSION = 4
+_PREPROCESSED_FORMAT_VERSION = 6
 _ARTIFACT_IMAGE_PROGRESS_INTERVAL = 1000
 _ROW_SERIALIZATION_PROGRESS_INTERVAL = 5000
 _MAX_COPY_WORKERS = max(1, min(16, os.cpu_count() or 1))
@@ -204,12 +202,6 @@ class PretokenizedShard:
 
 def _num_supervised_actions(example: ManifestExample) -> int:
     return 1
-
-
-def _example_type_name(example: ManifestExample) -> str:
-    if isinstance(example, DecentralizedExample):
-        return "train"
-    return "centralized"
 
 
 def _dataset_dir(output_dir: Path) -> Path:
@@ -1284,7 +1276,6 @@ def _row_from_example(
 ) -> dict[str, Any]:
     image_paths = list(feature.get("image_paths", ()))
     return {
-        "example_type": _example_type_name(example),
         "sample_id": example.sample_id,
         "task_name": example.task_name,
         "trajectory_id": example.trajectory_id,
@@ -1359,7 +1350,6 @@ def _dataset_features():
     value_cls = _get_hf_value_class()
     return features_cls(
         {
-            "example_type": value_cls("string"),
             "sample_id": value_cls("string"),
             "task_name": value_cls("string"),
             "trajectory_id": value_cls("string"),
@@ -1377,7 +1367,6 @@ def _preprocessed_row_arrow_schema():
     pyarrow_module = _import_optional_module("pyarrow", "pyarrow")
     return pyarrow_module.schema(
         [
-            ("example_type", pyarrow_module.string()),
             ("sample_id", pyarrow_module.string()),
             ("task_name", pyarrow_module.string()),
             ("trajectory_id", pyarrow_module.string()),
@@ -1819,7 +1808,9 @@ def load_preprocessed_artifact_from_disk(
     output_dir: Path,
 ) -> LoadedPreprocessedArtifact:
     dataset_dir = _dataset_dir(output_dir)
-    if (dataset_dir / "state.json").is_file():
+    if (dataset_dir / "state.json").is_file() or (
+        dataset_dir / "dataset_dict.json"
+    ).is_file():
         loader = _get_load_from_disk()
         dataset_dict = loader(str(dataset_dir))
     else:

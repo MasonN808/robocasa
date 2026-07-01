@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from data_generation.task_level.runtime.client import DEFAULT_SDK
+
 _DEFAULT_HEARTBEAT_INTERVAL_SEC = 30.0
 _HEARTBEAT_STATUS_SAMPLE_SIZE = 5
 
@@ -119,6 +121,7 @@ def _run_one_task(
     output_dir: Path,
     num_runs: int,
     model: str | None,
+    sdk: str,
     project: str | None,
     location: str,
     max_retries: int,
@@ -156,6 +159,8 @@ def _run_one_task(
         ]
         if model:
             command.extend(["--model", model])
+        if sdk:
+            command.extend(["--sdk", sdk])
         if project:
             command.extend(["--project", project])
         if location:
@@ -214,10 +219,18 @@ def _run_one_task(
             completed=bool(summary_payload.get("is_complete", False)),
             num_runs=int(summary_payload.get("num_runs", 1) or 1),
             num_trajectories=int(summary_payload.get("num_trajectories", 0) or 0),
-            completed_run_indices=list(summary_payload.get("completed_run_indices", []) or []),
-            failed_run_indices=list(summary_payload.get("failed_run_indices", []) or []),
-            pending_run_indices=list(summary_payload.get("pending_run_indices", []) or []),
-            error_counts_by_type=list(error_payload.get("error_counts_by_type", []) or []),
+            completed_run_indices=list(
+                summary_payload.get("completed_run_indices", []) or []
+            ),
+            failed_run_indices=list(
+                summary_payload.get("failed_run_indices", []) or []
+            ),
+            pending_run_indices=list(
+                summary_payload.get("pending_run_indices", []) or []
+            ),
+            error_counts_by_type=list(
+                error_payload.get("error_counts_by_type", []) or []
+            ),
             distinct_errors=list(error_payload.get("distinct_errors", []) or []),
             error=(
                 None
@@ -259,6 +272,7 @@ def run_phase3(
     num_runs: int = 1,
     workers: int = 4,
     max_retries: int = 5,
+    sdk: str = DEFAULT_SDK,
     project: str | None = None,
     location: str = "global",
     dry_run: bool = False,
@@ -273,7 +287,9 @@ def run_phase3(
     phase_dir.mkdir(parents=True, exist_ok=True)
     spec_dir = output_dir / "phase1" / "specs"
     spec_task_names = [
-        str((_load_json_object(spec_path) or {}).get("composite_task") or spec_path.stem)
+        str(
+            (_load_json_object(spec_path) or {}).get("composite_task") or spec_path.stem
+        )
         for spec_path in spec_paths
     ]
 
@@ -285,6 +301,7 @@ def run_phase3(
                 output_dir=output_dir,
                 num_runs=num_runs,
                 model=model,
+                sdk=sdk,
                 project=project,
                 location=location,
                 max_retries=max_retries,
@@ -309,6 +326,7 @@ def run_phase3(
                     output_dir=output_dir,
                     num_runs=num_runs,
                     model=model,
+                    sdk=sdk,
                     project=project,
                     location=location,
                     max_retries=max_retries,
@@ -318,9 +336,7 @@ def run_phase3(
                 ): index
                 for index, spec_path in enumerate(spec_paths)
             }
-            future_started_at = {
-                future: time.monotonic() for future in future_to_index
-            }
+            future_started_at = {future: time.monotonic() for future in future_to_index}
             pending = set(future_to_index)
             try:
                 while pending:
@@ -363,7 +379,11 @@ def run_phase3(
                         if not dry_run:
                             _write_phase3_outputs(
                                 phase_dir,
-                                [result for result in ordered_results if result is not None],
+                                [
+                                    result
+                                    for result in ordered_results
+                                    if result is not None
+                                ],
                             )
             finally:
                 if not dry_run:

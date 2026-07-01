@@ -23,6 +23,14 @@ def build_single_step_response_schema(
     )
     schema = deepcopy(schema)
     schema["properties"]["steps"]["maxItems"] = 1
+    step_items = schema["properties"]["steps"]["items"]
+    step_items.get("properties", {}).pop("reasoning", None)
+    if isinstance(step_items.get("required"), list):
+        step_items["required"] = [
+            field_name
+            for field_name in step_items["required"]
+            if field_name != "reasoning"
+        ]
     return schema
 
 
@@ -214,11 +222,6 @@ def validate_single_step_payload(
 
         normalized_args[arg_name] = normalized_value
 
-    normalized_reasoning = _normalize_required_string(
-        step.get("reasoning"),
-        "steps[0].reasoning",
-    )
-
     return {
         "steps": [
             {
@@ -226,7 +229,6 @@ def validate_single_step_payload(
                 "agent": normalized_agent,
                 "tool": normalized_tool,
                 "args": normalized_args,
-                "reasoning": normalized_reasoning,
             }
         ]
     }

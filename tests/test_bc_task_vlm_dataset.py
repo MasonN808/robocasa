@@ -6,11 +6,13 @@ import shutil
 import tempfile
 import unittest
 
+from training.bc_task_vlm import dataset as dataset_module
 from training.bc_task_vlm.dataset import (
     build_example_cache_fingerprint,
     build_example_cache_path,
     build_centralized_examples,
-    build_decentralized_examples,
+    list_available_task_names,
+    list_task_trajectory_ids,
     load_examples_from_cache,
     save_examples_to_cache,
 )
@@ -23,7 +25,7 @@ DATASET_ROOT = (
 SOURCE_TRAJECTORY_DIR = DATASET_ROOT / "hot_dog_setup" / "traj_000028"
 
 
-class DecentralizedExampleTests(unittest.TestCase):
+class CentralizedExampleTests(unittest.TestCase):
     def _build_single_trajectory_dataset_root(self) -> Path:
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         trajectory_dir = temp_root / "hot_dog_setup" / "traj_000028"
@@ -32,52 +34,33 @@ class DecentralizedExampleTests(unittest.TestCase):
             shutil.copy2(SOURCE_TRAJECTORY_DIR / file_name, trajectory_dir / file_name)
         return temp_root
 
-    def test_decentralized_examples_preserve_supervised_action_count(self):
+    def test_joint_demo_builds_one_centralized_example_per_action(self):
         dataset_root = self._build_single_trajectory_dataset_root()
-        centralized_examples = build_centralized_examples(
-            dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
-        )
-        decentralized_examples = build_decentralized_examples(
+        examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )
 
-        self.assertTrue(centralized_examples)
-        self.assertTrue(decentralized_examples)
+        self.assertTrue(examples)
+        self.assertTrue(
+            all(example.trajectory_id == "traj_000028" for example in examples)
+        )
         self.assertEqual(
-            len(centralized_examples),
-            sum(example.num_target_steps for example in decentralized_examples),
-        )
-
-    def test_joint_demo_splits_into_one_training_conversation_per_agent(self):
-        dataset_root = self._build_single_trajectory_dataset_root()
-        decentralized_examples = build_decentralized_examples(
-            dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
-        )
-        trajectory_examples = [
-            example
-            for example in decentralized_examples
-            if example.trajectory_id == "traj_000028"
-        ]
-
-        self.assertEqual(
-            {example.agent_id for example in trajectory_examples},
+            {example.agent_id for example in examples},
             {"agent_0", "agent_1"},
         )
 
-        for example in trajectory_examples:
-            roles = [message["role"] for message in example.messages]
-            self.assertEqual(roles[0], "system")
-            self.assertEqual(
-                roles[1:],
-                ["user", "assistant"] * example.num_target_steps,
+        for example in examples:
+            self.assertNotIn("reasoning", example.target_payload["steps"][0])
+            self.assertNotIn(
+                "reasoning",
+                example.to_feature_dict()["target_payload"]["steps"][0],
             )
-            for message in example.messages:
-                if message["role"] == "assistant":
-                    self.assertNotIn("reasoning_content", message)
-
+            self.assertNotIn("reasoning", example.to_manifest_entry())
+            self.assertNotIn("reasoning", json.dumps(example.history_steps))
+            self.assertNotIn("reasoning", json.dumps(example.response_schema))
+            roles = [message["role"] for message in example.messages]
+            self.assertEqual(roles, ["system", "user", "assistant"])
             num_image_placeholders = sum(
                 1
                 for message in example.messages
@@ -108,59 +91,142 @@ class DecentralizedExampleTests(unittest.TestCase):
         self.assertNotIn("tool_calls", assistant_message)
         self.assertNotIn("reasoning_content", assistant_message)
 
-    def test_plain_sft_decentralized_examples_use_text_targets(self):
-        dataset_root = self._build_single_trajectory_dataset_root()
-        examples = build_decentralized_examples(
-            dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
-            sft_format="plain",
+    def test_manifest_only_stage_root_resolves_shard_trajectories(self):
+        shard_root = self._build_single_trajectory_dataset_root()
+        manifest_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (manifest_root / "hf_stage_manifest.json").write_text(
+            json.dumps(
+                {
+                    "output_root": str(manifest_root),
+                    "sources": [
+                        {
+                            "repo_id": "example/hot_dog_setup",
+                            "tasks": ["hot_dog_setup"],
+                            "num_episodes": 1,
+                            "shard_output_root": str(shard_root),
+                        }
+                    ],
+                    "total_episodes": 1,
+                }
+            ),
+            encoding="utf-8",
         )
 
-        self.assertTrue(examples)
-        for example in examples:
-            assistant_messages = [
-                message
-                for message in example.messages
-                if message["role"] == "assistant"
-            ]
-            self.assertEqual(len(assistant_messages), example.num_target_steps)
-            for message in assistant_messages:
-                target = json.loads(message["content"])
-                self.assertNotIn("reasoning", target)
-                self.assertNotIn("tool_calls", message)
-                self.assertNotIn("reasoning_content", message)
+        examples = build_centralized_examples(
+            dataset_root=manifest_root,
+            task_names=["hot_dog_setup"],
+        )
+        fingerprint = build_example_cache_fingerprint(
+            dataset_root=manifest_root,
+            task_name="hot_dog_setup",
+        )
 
-    def test_decentralized_examples_round_trip_through_cache(self):
+        self.assertEqual(list_available_task_names(manifest_root), ["hot_dog_setup"])
+        self.assertEqual(
+            list_task_trajectory_ids(
+                dataset_root=manifest_root,
+                task_name="hot_dog_setup",
+            ),
+            ["traj_000028"],
+        )
+        self.assertTrue(examples)
+        self.assertTrue(
+            all(example.trajectory_id == "traj_000028" for example in examples)
+        )
+        self.assertEqual(
+            [entry["trajectory_id"] for entry in fingerprint["trajectories"]],
+            ["traj_000028"],
+        )
+
+    def test_centralized_examples_round_trip_through_cache(self):
         dataset_root = self._build_single_trajectory_dataset_root()
         cache_dir = dataset_root / ".cache"
-        decentralized_examples = build_decentralized_examples(
+        centralized_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )
         fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
             task_name="hot_dog_setup",
-            granularity="decentralized",
         )
         cache_path = build_example_cache_path(
             cache_dir=cache_dir,
             dataset_root=dataset_root,
             task_name="hot_dog_setup",
-            granularity="decentralized",
         )
 
         save_examples_to_cache(
             cache_path=cache_path,
             fingerprint=fingerprint,
-            examples=decentralized_examples,
+            examples=centralized_examples,
         )
+        compressed_cache_path = dataset_module._preferred_compressed_example_cache_path(
+            cache_path
+        )
+
+        self.assertTrue(compressed_cache_path.is_file())
+        self.assertFalse(cache_path.exists())
+
         cached_examples = load_examples_from_cache(
             cache_path=cache_path,
             expected_fingerprint=fingerprint,
-            granularity="decentralized",
         )
 
-        self.assertEqual(cached_examples, decentralized_examples)
+        self.assertEqual(cached_examples, centralized_examples)
+
+    def test_legacy_json_cache_load_migrates_to_compressed_cache(self):
+        dataset_root = self._build_single_trajectory_dataset_root()
+        cache_dir = dataset_root / ".cache"
+        centralized_examples = build_centralized_examples(
+            dataset_root=dataset_root,
+            task_names=["hot_dog_setup"],
+        )
+        fingerprint = build_example_cache_fingerprint(
+            dataset_root=dataset_root,
+            task_name="hot_dog_setup",
+        )
+        legacy_fingerprint = json.loads(json.dumps(fingerprint))
+        legacy_fingerprint["builder_dependencies"]["dataset.py"] = {
+            "mtime_ns": 1,
+            "size": 1,
+        }
+        cache_path = build_example_cache_path(
+            cache_dir=cache_dir,
+            dataset_root=dataset_root,
+            task_name="hot_dog_setup",
+        )
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "cache_format_version": dataset_module._EXAMPLE_CACHE_FORMAT_VERSION,
+                    "fingerprint": legacy_fingerprint,
+                    "examples": [example.__dict__ for example in centralized_examples],
+                }
+            ),
+            encoding="utf-8",
+        )
+        compressed_cache_path = dataset_module._preferred_compressed_example_cache_path(
+            cache_path
+        )
+
+        self.assertFalse(compressed_cache_path.exists())
+
+        cached_examples = load_examples_from_cache(
+            cache_path=cache_path,
+            expected_fingerprint=fingerprint,
+        )
+
+        self.assertEqual(cached_examples, centralized_examples)
+        self.assertTrue(compressed_cache_path.is_file())
+
+        cache_path.unlink()
+        cached_compressed_examples = load_examples_from_cache(
+            cache_path=cache_path,
+            expected_fingerprint=fingerprint,
+        )
+
+        self.assertEqual(cached_compressed_examples, centralized_examples)
 
     def test_cache_fingerprint_includes_sft_format(self):
         dataset_root = self._build_single_trajectory_dataset_root()
@@ -168,13 +234,11 @@ class DecentralizedExampleTests(unittest.TestCase):
         tool_call_fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
             task_name="hot_dog_setup",
-            granularity="decentralized",
             sft_format="tool_call",
         )
         plain_fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
             task_name="hot_dog_setup",
-            granularity="decentralized",
             sft_format="plain",
         )
 
@@ -185,25 +249,23 @@ class DecentralizedExampleTests(unittest.TestCase):
     def test_cache_invalidates_when_trajectory_inputs_change(self):
         dataset_root = self._build_single_trajectory_dataset_root()
         cache_dir = dataset_root / ".cache"
-        decentralized_examples = build_decentralized_examples(
+        centralized_examples = build_centralized_examples(
             dataset_root=dataset_root,
             task_names=["hot_dog_setup"],
         )
         fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
             task_name="hot_dog_setup",
-            granularity="decentralized",
         )
         cache_path = build_example_cache_path(
             cache_dir=cache_dir,
             dataset_root=dataset_root,
             task_name="hot_dog_setup",
-            granularity="decentralized",
         )
         save_examples_to_cache(
             cache_path=cache_path,
             fingerprint=fingerprint,
-            examples=decentralized_examples,
+            examples=centralized_examples,
         )
 
         metadata_path = dataset_root / "hot_dog_setup" / "traj_000028" / "metadata.json"
@@ -214,13 +276,11 @@ class DecentralizedExampleTests(unittest.TestCase):
         updated_fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
             task_name="hot_dog_setup",
-            granularity="decentralized",
         )
 
         cached_examples = load_examples_from_cache(
             cache_path=cache_path,
             expected_fingerprint=updated_fingerprint,
-            granularity="decentralized",
         )
 
         self.assertIsNone(cached_examples)

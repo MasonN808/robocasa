@@ -26,6 +26,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any, Iterable, Iterator
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -101,6 +102,9 @@ class RepoStageState:
     submitted: int = 0
     staged: int = 0
     skipped_existing: int = 0
+    expected_episodes: int | None = None
+    stage_started_at: float = 0.0
+    last_progress_reported: int = 0
     exhausted: bool = False
     finished_logged: bool = False
     tasks: set[str] | None = None
@@ -126,6 +130,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         required=True,
         help="Destination rendered-dataset root for the SFT trainer.",
+    )
+    parser.add_argument(
+        "--manifest-path",
+        type=Path,
+        default=None,
+        help=(
+            "Path for the stage manifest. Defaults to "
+            "<output-root>/hf_stage_manifest.json."
+        ),
     )
     parser.add_argument("--split", default="train", help="HF dataset split to stage.")
     parser.add_argument(
@@ -172,6 +185,24 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=25,
         help="Print progress after this many completed episodes per repo.",
+    )
+    parser.add_argument(
+        "--max-total-episodes",
+        type=int,
+        default=None,
+        help=(
+            "Stop after selecting this many total episodes across all repos. "
+            "Repos are consumed in the provided order, and resumed existing "
+            "trajectories count toward the cap."
+        ),
+    )
+    parser.add_argument(
+        "--trajectory-id-prefix",
+        default="",
+        help=(
+            "Optional prefix for generated trajectory directory names. Useful "
+            "when multiple staging shards may contain the same task name."
+        ),
     )
     parser.add_argument(
         "--resume",
@@ -254,9 +285,9 @@ def _repo_tail(repo_id: str) -> str:
 
 def _task_dir_from_repo(repo_id: str) -> str:
     tail = _repo_tail(repo_id)
-    marker = "_full_run_"
-    if marker in tail:
-        return tail.split(marker, 1)[1]
+    for marker in ("_full_run_", "_full_"):
+        if marker in tail:
+            return tail.split(marker, 1)[1]
     return tail
 
 
@@ -282,9 +313,17 @@ def _row_images_by_view(
         value = row.get(view_name)
         if sequence_index is not None and isinstance(value, (list, tuple)):
             value = value[sequence_index] if sequence_index < len(value) else None
-        if value is not None:
+        if _has_image_value(value):
             images[view_name] = value
     return images
+
+
+def _has_image_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return bool(value.get("path") or value.get("bytes"))
+    return True
 
 
 def _rows_from_trajectory_row(row: dict[str, Any]) -> list[StepRecord]:
@@ -550,6 +589,51 @@ def _metadata_scan_dataset(ds):
     return remove_columns(image_columns)
 
 
+def _image_decode_disabled_feature(feature: Any) -> Any:
+    if getattr(feature, "_type", None) == "Image":
+        if not getattr(feature, "decode", True):
+            return feature
+        return type(feature)(
+            mode=getattr(feature, "mode", None),
+            decode=False,
+            id=getattr(feature, "id", None),
+        )
+
+    child_feature = getattr(feature, "feature", None)
+    if child_feature is None:
+        return feature
+
+    updated_child = _image_decode_disabled_feature(child_feature)
+    if updated_child is child_feature:
+        return feature
+
+    kwargs: dict[str, Any] = {}
+    if hasattr(feature, "length"):
+        kwargs["length"] = getattr(feature, "length")
+    if hasattr(feature, "id"):
+        kwargs["id"] = getattr(feature, "id")
+    return type(feature)(updated_child, **kwargs)
+
+
+def _disable_image_decoding(ds):
+    """Keep HF image columns as raw path/bytes dicts until explicit staging."""
+    features = getattr(ds, "features", None)
+    cast_column = getattr(ds, "cast_column", None)
+    if features is None or cast_column is None:
+        return ds
+
+    for column_name in IMAGE_COLUMNS:
+        if column_name not in set(ds.column_names):
+            continue
+        feature = features.get(column_name)
+        if feature is None:
+            continue
+        updated_feature = _image_decode_disabled_feature(feature)
+        if updated_feature is not feature:
+            ds = ds.cast_column(column_name, updated_feature)
+    return ds
+
+
 def _iter_episode_sources(ds) -> Iterator[EpisodeSource]:
     column_names = set(ds.column_names)
     scan_ds = _metadata_scan_dataset(ds)
@@ -580,6 +664,15 @@ def _row_granularity_for_dataset(ds) -> str:
     return "step"
 
 
+def _episode_count_for_dataset(ds, *, row_granularity: str) -> int | None:
+    if row_granularity == "trajectory":
+        try:
+            return len(ds)
+        except TypeError:
+            return None
+    return sum(1 for _source in _iter_episode_sources(ds))
+
+
 def _records_for_episode_source(
     *,
     dataset,
@@ -606,10 +699,24 @@ def _load_repo_state(
         revision=revision,
         trust_remote_code=trust_remote_code,
     )
+    ds = _disable_image_decoding(ds)
     sidecar_root = None
     if "original_trajectory" not in set(ds.column_names):
         print(f"Downloading JSON sidecars for {repo_id}", flush=True)
         sidecar_root = _snapshot_dataset_sidecars(repo_id, revision=revision)
+    row_granularity = _row_granularity_for_dataset(ds)
+    expected_episodes = _episode_count_for_dataset(
+        ds,
+        row_granularity=row_granularity,
+    )
+    expected_text = (
+        str(expected_episodes) if expected_episodes is not None else "unknown"
+    )
+    print(
+        f"Loaded {repo_id}: row_granularity={row_granularity}, "
+        f"expected_episodes={expected_text}",
+        flush=True,
+    )
 
     return RepoStageState(
         repo_id=repo_id,
@@ -617,8 +724,9 @@ def _load_repo_state(
         revision=revision,
         sidecar_root=sidecar_root,
         dataset=ds,
-        row_granularity=_row_granularity_for_dataset(ds),
+        row_granularity=row_granularity,
         episodes=iter(_iter_episode_sources(ds)),
+        expected_episodes=expected_episodes,
     )
 
 
@@ -627,11 +735,12 @@ def _next_task_trajectory_id(
     source_row: dict[str, Any],
     repo_id: str,
     counters_by_task: dict[str, int],
+    trajectory_id_prefix: str = "",
 ) -> tuple[str, str]:
     task_dir = _task_dir_for_row(source_row, repo_id)
     trajectory_index = counters_by_task[task_dir]
     counters_by_task[task_dir] += 1
-    return task_dir, f"traj_{trajectory_index:06d}"
+    return task_dir, f"{trajectory_id_prefix}traj_{trajectory_index:06d}"
 
 
 def _load_json_for_resume(path: Path) -> Any | None:
@@ -797,39 +906,200 @@ def _stage_episode_job(job: EpisodeStagingJob) -> EpisodeStagingResult:
     return EpisodeStagingResult(repo_id=job.repo_id, task_dir=job.task_dir)
 
 
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "unknown"
+    total_seconds = max(0, int(seconds + 0.5))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _completed_episode_count(states: list[RepoStageState]) -> int:
+    return sum(state.staged + state.skipped_existing for state in states)
+
+
+def _expected_total_for_states(
+    states: list[RepoStageState],
+    *,
+    max_total_episodes: int | None,
+) -> int | None:
+    if any(state.expected_episodes is None for state in states):
+        return max_total_episodes
+    total = sum(int(state.expected_episodes or 0) for state in states)
+    if max_total_episodes is not None:
+        return min(total, max_total_episodes)
+    return total
+
+
+def _format_count_with_total(count: int, total: int | None) -> str:
+    if total is None:
+        return f"{count}/unknown"
+    if total <= 0:
+        return f"{count}/{total}"
+    percent = 100.0 * count / total
+    return f"{count}/{total} ({percent:.1f}%)"
+
+
+def _format_progress_line(
+    *,
+    states: list[RepoStageState],
+    state: RepoStageState,
+    elapsed_seconds: float,
+    max_total_episodes: int | None,
+) -> str:
+    repo_completed = state.staged + state.skipped_existing
+    global_completed = _completed_episode_count(states)
+    global_expected = _expected_total_for_states(
+        states,
+        max_total_episodes=max_total_episodes,
+    )
+    rate = global_completed / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    eta_seconds = None
+    if global_expected is not None and rate > 0:
+        eta_seconds = max(0.0, (global_expected - global_completed) / rate)
+
+    return (
+        "[progress] "
+        f"repo={state.repo_id} "
+        f"repo_selected={_format_count_with_total(repo_completed, state.expected_episodes)} "
+        f"staged={state.staged} skipped={state.skipped_existing} "
+        f"shard_selected={_format_count_with_total(global_completed, global_expected)} "
+        f"elapsed={_format_duration(elapsed_seconds)} "
+        f"rate={rate:.2f} traj/s "
+        f"eta={_format_duration(eta_seconds)}"
+    )
+
+
+def _maybe_log_progress(
+    *,
+    states: list[RepoStageState],
+    state: RepoStageState,
+    progress_interval: int,
+    max_total_episodes: int | None,
+    force: bool = False,
+) -> None:
+    completed = state.staged + state.skipped_existing
+    if not force:
+        if progress_interval <= 0 or completed <= 0:
+            return
+        if completed - state.last_progress_reported < progress_interval:
+            return
+    state.last_progress_reported = completed
+    elapsed_seconds = time.monotonic() - state.stage_started_at
+    print(
+        _format_progress_line(
+            states=states,
+            state=state,
+            elapsed_seconds=elapsed_seconds,
+            max_total_episodes=max_total_episodes,
+        ),
+        flush=True,
+    )
+
+
+def _log_staging_plan(
+    *,
+    states: list[RepoStageState],
+    workers: int,
+    max_in_flight: int,
+    progress_interval: int,
+    max_total_episodes: int | None,
+) -> None:
+    expected_total = _expected_total_for_states(
+        states,
+        max_total_episodes=max_total_episodes,
+    )
+    print(
+        "Staging plan: "
+        f"repos={len(states)}, "
+        f"expected_episodes={expected_total if expected_total is not None else 'unknown'}, "
+        f"workers={workers}, max_in_flight={max_in_flight}, "
+        f"progress_interval={progress_interval}, eta=unknown until first progress",
+        flush=True,
+    )
+    for state in states:
+        expected = (
+            str(state.expected_episodes)
+            if state.expected_episodes is not None
+            else "unknown"
+        )
+        print(
+            f"  source repo={state.repo_id} expected_episodes={expected}",
+            flush=True,
+        )
+
+
 def _finish_completed_jobs(
     *,
     done: set[Future[EpisodeStagingResult]],
     futures_by_state: dict[Future[EpisodeStagingResult], RepoStageState],
+    states: list[RepoStageState],
     progress_interval: int,
+    max_total_episodes: int | None,
 ) -> None:
     for future in done:
         state = futures_by_state.pop(future)
         result = future.result()
         state.staged += 1
         state.tasks.add(result.task_dir)
-        if progress_interval > 0 and state.staged % progress_interval == 0:
-            print(f"  staged {state.staged} episodes from {state.repo_id}", flush=True)
+        _maybe_log_progress(
+            states=states,
+            state=state,
+            progress_interval=progress_interval,
+            max_total_episodes=max_total_episodes,
+        )
 
 
-def _log_finished_repos(states: list[RepoStageState]) -> None:
+def _log_finished_repos(
+    states: list[RepoStageState],
+    *,
+    max_total_episodes: int | None,
+) -> None:
     for state in states:
         if state.finished_logged or not state.exhausted:
             continue
         if state.staged < state.submitted:
             continue
+        _maybe_log_progress(
+            states=states,
+            state=state,
+            progress_interval=0,
+            max_total_episodes=max_total_episodes,
+            force=True,
+        )
+        elapsed_seconds = time.monotonic() - state.stage_started_at
+        completed = state.staged + state.skipped_existing
+        rate = completed / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        expected = (
+            str(state.expected_episodes)
+            if state.expected_episodes is not None
+            else "unknown"
+        )
         if state.skipped_existing:
             print(
-                f"Finished {state.repo_id}: staged {state.staged} new episodes, "
-                f"skipped {state.skipped_existing} existing episodes",
+                f"Finished {state.repo_id}: selected {completed}/{expected}, "
+                f"staged {state.staged} new episodes, skipped "
+                f"{state.skipped_existing} existing episodes, "
+                f"elapsed={_format_duration(elapsed_seconds)}, rate={rate:.2f} traj/s",
                 flush=True,
             )
         else:
             print(
-                f"Finished {state.repo_id}: staged {state.staged} episodes",
+                f"Finished {state.repo_id}: selected {completed}/{expected}, "
+                f"staged {state.staged} episodes, "
+                f"elapsed={_format_duration(elapsed_seconds)}, rate={rate:.2f} traj/s",
                 flush=True,
             )
         state.finished_logged = True
+
+
+def _selected_episode_count(states: list[RepoStageState]) -> int:
+    return sum(state.submitted + state.skipped_existing for state in states)
 
 
 def stage_repos(
@@ -846,6 +1116,8 @@ def stage_repos(
     progress_interval: int,
     resume_existing: bool = False,
     resume_validation: str = "validated",
+    max_total_episodes: int | None = None,
+    trajectory_id_prefix: str = "",
 ) -> list[dict[str, Any]]:
     states = _load_repo_states(
         repo_ids=repo_ids,
@@ -854,17 +1126,49 @@ def stage_repos(
         trust_remote_code=trust_remote_code,
         load_workers=load_workers,
     )
+    started_at = time.monotonic()
+    for state in states:
+        state.stage_started_at = started_at
+    _log_staging_plan(
+        states=states,
+        workers=workers,
+        max_in_flight=max_in_flight,
+        progress_interval=progress_interval,
+        max_total_episodes=max_total_episodes,
+    )
 
     futures_by_state: dict[Future[EpisodeStagingResult], RepoStageState] = {}
     next_state_index = 0
+    cap_logged = False
     with ThreadPoolExecutor(max_workers=workers) as executor:
         try:
             while True:
+                cap_reached = (
+                    max_total_episodes is not None
+                    and _selected_episode_count(states) >= max_total_episodes
+                )
+                if cap_reached and not cap_logged:
+                    print(
+                        f"Reached --max-total-episodes={max_total_episodes}; "
+                        "waiting for submitted staging jobs to finish.",
+                        flush=True,
+                    )
+                    cap_logged = True
                 active_states = [state for state in states if not state.exhausted]
                 made_submission = False
-                while active_states and len(futures_by_state) < max_in_flight:
-                    state = active_states[next_state_index % len(active_states)]
-                    next_state_index += 1
+                while (
+                    active_states
+                    and len(futures_by_state) < max_in_flight
+                    and (
+                        max_total_episodes is None
+                        or _selected_episode_count(states) < max_total_episodes
+                    )
+                ):
+                    if max_total_episodes is None:
+                        state = active_states[next_state_index % len(active_states)]
+                        next_state_index += 1
+                    else:
+                        state = active_states[0]
                     try:
                         source = next(state.episodes)
                     except StopIteration:
@@ -879,6 +1183,7 @@ def stage_repos(
                         source_row=source.source_row,
                         repo_id=state.repo_id,
                         counters_by_task=counters_by_task,
+                        trajectory_id_prefix=trajectory_id_prefix,
                     )
                     state.tasks.add(task_dir)
                     if resume_existing and _existing_trajectory_is_complete(
@@ -896,6 +1201,12 @@ def stage_repos(
                                 f"{state.repo_id}",
                                 flush=True,
                             )
+                        _maybe_log_progress(
+                            states=states,
+                            state=state,
+                            progress_interval=progress_interval,
+                            max_total_episodes=max_total_episodes,
+                        )
                         continue
 
                     records = _records_for_episode_source(
@@ -918,7 +1229,12 @@ def stage_repos(
                     state.submitted += 1
                     made_submission = True
 
-                _log_finished_repos(states)
+                _log_finished_repos(
+                    states,
+                    max_total_episodes=max_total_episodes,
+                )
+                if cap_reached and not futures_by_state:
+                    break
                 if not futures_by_state and not any(
                     not state.exhausted for state in states
                 ):
@@ -931,9 +1247,14 @@ def stage_repos(
                     _finish_completed_jobs(
                         done=done,
                         futures_by_state=futures_by_state,
+                        states=states,
                         progress_interval=progress_interval,
+                        max_total_episodes=max_total_episodes,
                     )
-                    _log_finished_repos(states)
+                    _log_finished_repos(
+                        states,
+                        max_total_episodes=max_total_episodes,
+                    )
                 elif not made_submission:
                     break
         except BaseException:
@@ -969,6 +1290,8 @@ def stage_repo(
     progress_interval: int = 25,
     resume_existing: bool = False,
     resume_validation: str = "validated",
+    max_total_episodes: int | None = None,
+    trajectory_id_prefix: str = "",
 ) -> dict[str, Any]:
     max_in_flight = max_in_flight or max(1, workers * 2)
     return stage_repos(
@@ -984,6 +1307,8 @@ def stage_repo(
         progress_interval=progress_interval,
         resume_existing=resume_existing,
         resume_validation=resume_validation,
+        max_total_episodes=max_total_episodes,
+        trajectory_id_prefix=trajectory_id_prefix,
     )[0]
 
 
@@ -995,10 +1320,18 @@ def main() -> None:
         raise ValueError("--load-workers must be at least 1.")
     if args.max_in_flight is not None and args.max_in_flight < 1:
         raise ValueError("--max-in-flight must be at least 1.")
+    if args.max_total_episodes is not None and args.max_total_episodes < 1:
+        raise ValueError("--max-total-episodes must be at least 1.")
     max_in_flight = args.max_in_flight or max(1, args.workers * 2)
 
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = (
+        args.manifest_path.resolve()
+        if args.manifest_path is not None
+        else output_root / "hf_stage_manifest.json"
+    )
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     counters_by_task: dict[str, int] = defaultdict(int)
     staged_sources = stage_repos(
         repo_ids=args.repo_id,
@@ -1013,18 +1346,28 @@ def main() -> None:
         progress_interval=args.progress_interval,
         resume_existing=args.resume_existing,
         resume_validation=args.resume_validation,
+        max_total_episodes=args.max_total_episodes,
+        trajectory_id_prefix=args.trajectory_id_prefix,
     )
 
+    staged_total = sum(source["num_episodes"] for source in staged_sources)
     manifest = {
         "output_root": str(output_root),
+        "repo_order": args.repo_id,
         "sources": staged_sources,
         "task_episode_counts": dict(sorted(counters_by_task.items())),
+        "total_episodes": staged_total,
+        "trajectory_id_prefix": args.trajectory_id_prefix,
     }
-    (output_root / "hf_stage_manifest.json").write_text(
+    if args.max_total_episodes is not None:
+        manifest["max_total_episodes"] = args.max_total_episodes
+        manifest["max_total_episodes_reached"] = staged_total >= args.max_total_episodes
+    manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True),
         encoding="utf-8",
     )
     print(f"Staged HF sweep datasets at {output_root}", flush=True)
+    print(f"Wrote stage manifest to {manifest_path}", flush=True)
     print("Task episode counts:", dict(sorted(counters_by_task.items())), flush=True)
 
 

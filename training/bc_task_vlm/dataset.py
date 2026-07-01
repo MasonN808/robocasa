@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import gzip
+import io
 import json
+import math
 import os
-from dataclasses import asdict, dataclass
+import pickle
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -39,11 +44,13 @@ try:
 except ImportError:  # pragma: no cover - optional in lightweight test envs
     tqdm = None
 
+try:
+    import zstandard
+except ImportError:  # pragma: no cover - optional fallback for old envs
+    zstandard = None
+
 from training.bc_task_vlm.prompting import (
-    build_assistant_text_message,
     build_messages,
-    build_system_message,
-    build_user_message,
     build_user_prompt,
 )
 from training.bc_task_vlm.schema_utils import (
@@ -51,12 +58,16 @@ from training.bc_task_vlm.schema_utils import (
     compact_json_dumps,
     validate_single_step_payload,
 )
-from training.bc_task_vlm.task_registry import AGENT_IDS, get_task_metadata
+from training.bc_task_vlm.task_registry import (
+    AGENT_IDS,
+    get_task_metadata,
+    resolve_task_name,
+)
 from training.bc_task_vlm.tool_calling import (
-    build_assistant_tool_call_message,
     build_tool_schemas,
 )
 
+_STAGE_MANIFEST_FILENAME = "hf_stage_manifest.json"
 _TRAJECTORY_METADATA_FILENAMES = (
     "original_trajectory.json",
     "plan.json",
@@ -65,9 +76,16 @@ _TRAJECTORY_METADATA_FILENAMES = (
 SFT_FORMAT_PLAIN = "plain"
 SFT_FORMAT_TOOL_CALL = "tool_call"
 SUPPORTED_SFT_FORMATS = (SFT_FORMAT_PLAIN, SFT_FORMAT_TOOL_CALL)
-_EXAMPLE_CACHE_FORMAT_VERSION = 1
+_EXAMPLE_CACHE_FORMAT_VERSION = 3
+_EXAMPLE_CACHE_BINARY_FORMAT_VERSION = 1
+_EXAMPLE_CACHE_ZSTD_SUFFIX = ".pkl.zst"
+_EXAMPLE_CACHE_GZIP_SUFFIX = ".pkl.gz"
+_EXAMPLE_CACHE_ZSTD_LEVEL = 1
+_EXAMPLE_CACHE_GZIP_LEVEL = 1
+_PRETOKENIZED_FIELD_NAME = "pretokenized_tensors"
+# Keep cache serialization-only edits from invalidating example contents. Bump
+# _EXAMPLE_CACHE_FORMAT_VERSION when dataset.py changes generated examples.
 _EXAMPLE_CACHE_DEPENDENCY_PATHS = (
-    Path(__file__).resolve(),
     Path(__file__).with_name("prompting.py").resolve(),
     Path(__file__).with_name("schema_utils.py").resolve(),
     Path(__file__).with_name("tool_calling.py").resolve(),
@@ -147,58 +165,13 @@ class CentralizedExample:
         }
 
 
+ManifestExample = CentralizedExample
+
+
 @dataclass(frozen=True)
-class DecentralizedExample:
-    """One supervised per-agent trajectory conversation in decentralized mode."""
-
-    sample_id: str
-    task_name: str
-    composite_task: str
-    trajectory_id: str
-    agent_id: str
-    task_instruction: str
-    target_step_indices: list[int]
-    image_paths: list[str]
-    allowed_tool_specs: dict[str, dict[str, Any]]
-    tool_schemas: list[dict[str, Any]]
-    messages: list[dict[str, Any]]
-
-    @property
-    def num_target_steps(self) -> int:
-        return len(self.target_step_indices)
-
-    def to_manifest_entry(self) -> dict[str, Any]:
-        """Returns the compact sample metadata persisted with the run."""
-
-        return {
-            "sample_id": self.sample_id,
-            "task_name": self.task_name,
-            "trajectory_id": self.trajectory_id,
-            "agent_id": self.agent_id,
-            "num_images": len(self.image_paths),
-            "num_supervised_actions": self.num_target_steps,
-            "target_step_indices": list(self.target_step_indices),
-        }
-
-    def to_feature_dict(self) -> dict[str, Any]:
-        """Builds the trainer-facing feature dict for one decentralized example."""
-
-        return {
-            "sample_id": self.sample_id,
-            "task_name": self.task_name,
-            "composite_task": self.composite_task,
-            "trajectory_id": self.trajectory_id,
-            "agent_id": self.agent_id,
-            "target_step_indices": list(self.target_step_indices),
-            "num_target_steps": self.num_target_steps,
-            "image_paths": list(self.image_paths),
-            "allowed_tool_specs": self.allowed_tool_specs,
-            "tool_schemas": self.tool_schemas,
-            "messages": self.messages,
-        }
-
-
-ManifestExample = CentralizedExample | DecentralizedExample
+class SameTaskTrajectorySplit:
+    train_trajectory_ids_by_task: dict[str, list[str]]
+    validation_trajectory_ids_by_task: dict[str, list[str]]
 
 
 def _load_json(path: Path) -> Any:
@@ -206,23 +179,167 @@ def _load_json(path: Path) -> Any:
         return json.load(handle)
 
 
+def _load_stage_manifest(dataset_root: Path) -> dict[str, Any] | None:
+    manifest_path = dataset_root / _STAGE_MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        return None
+    manifest = _load_json(manifest_path)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Stage manifest must be a JSON object: {manifest_path}")
+    return manifest
+
+
+def _resolve_stage_path(raw_path: Any, *, dataset_root: Path) -> Path:
+    path = Path(str(raw_path))
+    if path.is_absolute():
+        return path
+    return (dataset_root / path).resolve()
+
+
+def _stage_source_root(
+    *,
+    manifest: dict[str, Any],
+    source: dict[str, Any],
+    dataset_root: Path,
+) -> Path:
+    raw_root = (
+        source.get("shard_output_root")
+        or source.get("output_root")
+        or manifest.get("output_root")
+    )
+    if raw_root is None:
+        return dataset_root
+    return _resolve_stage_path(raw_root, dataset_root=dataset_root)
+
+
+def _selected_stage_source_trajectory_dirs(
+    *,
+    manifest: dict[str, Any],
+    source: dict[str, Any],
+    dataset_root: Path,
+) -> list[tuple[str, Path]]:
+    source_root = _stage_source_root(
+        manifest=manifest,
+        source=source,
+        dataset_root=dataset_root,
+    )
+    trajectory_dirs: list[tuple[str, Path]] = []
+    for raw_task_name in source.get("tasks", []):
+        task_name = str(raw_task_name)
+        task_root = source_root / task_name
+        if not task_root.is_dir():
+            raise FileNotFoundError(f"Missing staged task directory: {task_root}")
+        trajectory_dirs.extend(
+            (task_name, path) for path in sorted(task_root.iterdir()) if path.is_dir()
+        )
+
+    expected_count = int(source.get("num_episodes", len(trajectory_dirs)))
+    if len(trajectory_dirs) < expected_count:
+        repo_id = source.get("repo_id", "<unknown>")
+        raise ValueError(
+            f"{repo_id} manifest reports {expected_count} episodes "
+            f"but only {len(trajectory_dirs)} trajectory dirs were found."
+        )
+    return trajectory_dirs[:expected_count]
+
+
+def _manifest_trajectory_dirs_for_task(
+    *,
+    dataset_root: Path,
+    task_name: str,
+) -> list[Path] | None:
+    manifest = _load_stage_manifest(dataset_root)
+    if manifest is None:
+        return None
+    sources = manifest.get("sources")
+    if not isinstance(sources, list):
+        return None
+
+    trajectory_dirs: list[Path] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_task_names = {str(raw_task) for raw_task in source.get("tasks", [])}
+        if task_name not in source_task_names:
+            continue
+        trajectory_dirs.extend(
+            path
+            for source_task_name, path in _selected_stage_source_trajectory_dirs(
+                manifest=manifest,
+                source=source,
+                dataset_root=dataset_root,
+            )
+            if source_task_name == task_name
+        )
+    return sorted(trajectory_dirs, key=lambda path: path.name)
+
+
+def _trajectory_dirs_for_task(*, dataset_root: Path, task_name: str) -> list[Path]:
+    task_metadata = get_task_metadata(task_name)
+    normalized_task_name = task_metadata.dataset_name
+    manifest_dirs = _manifest_trajectory_dirs_for_task(
+        dataset_root=dataset_root,
+        task_name=normalized_task_name,
+    )
+    if manifest_dirs is not None:
+        return manifest_dirs
+
+    task_root = dataset_root / normalized_task_name
+    if not task_root.is_dir():
+        raise FileNotFoundError(f"Task directory does not exist: {task_root}")
+    return sorted(path for path in task_root.iterdir() if path.is_dir())
+
+
+def list_available_task_names(dataset_root: Path) -> list[str]:
+    """Returns supported task names available in a staged dataset root."""
+
+    task_names: set[str] = set()
+    manifest = _load_stage_manifest(dataset_root)
+    sources = manifest.get("sources") if manifest is not None else None
+    if isinstance(sources, list):
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for raw_task_name in source.get("tasks", []):
+                try:
+                    task_names.add(resolve_task_name(str(raw_task_name)))
+                except ValueError:
+                    continue
+
+    if dataset_root.is_dir():
+        for path in dataset_root.iterdir():
+            if not path.is_dir():
+                continue
+            try:
+                task_names.add(resolve_task_name(path.name))
+            except ValueError:
+                continue
+
+    return sorted(task_names)
+
+
+def _filter_trajectory_dirs(
+    trajectory_dirs: list[Path],
+    *,
+    include_trajectory_ids: set[str] | None = None,
+) -> list[Path]:
+    if include_trajectory_ids is not None:
+        return [path for path in trajectory_dirs if path.name in include_trajectory_ids]
+    return trajectory_dirs
+
+
 def _iter_trajectory_dirs(
-    task_root: Path,
+    trajectory_dirs: list[Path],
     *,
     show_progress: bool,
     progress_description: str | None,
-    include_trajectory_ids: set[str] | None = None,
 ):
-    trajectory_dirs = sorted(path for path in task_root.iterdir() if path.is_dir())
-    if include_trajectory_ids is not None:
-        trajectory_dirs = [
-            path for path in trajectory_dirs if path.name in include_trajectory_ids
-        ]
     if not show_progress or tqdm is None:
         return trajectory_dirs
     return tqdm(
         trajectory_dirs,
-        desc=progress_description or task_root.name,
+        desc=progress_description,
+        total=len(trajectory_dirs),
         dynamic_ncols=True,
         leave=False,
         unit="traj",
@@ -232,11 +349,90 @@ def _iter_trajectory_dirs(
 def list_task_trajectory_ids(*, dataset_root: Path, task_name: str) -> list[str]:
     """Returns sorted trajectory directory names for one dataset task."""
 
-    task_metadata = get_task_metadata(task_name)
-    task_root = dataset_root / task_metadata.dataset_name
-    if not task_root.is_dir():
-        raise FileNotFoundError(f"Task directory does not exist: {task_root}")
-    return sorted(path.name for path in task_root.iterdir() if path.is_dir())
+    trajectory_dirs = _trajectory_dirs_for_task(
+        dataset_root=dataset_root,
+        task_name=task_name,
+    )
+    return sorted(path.name for path in trajectory_dirs)
+
+
+def build_same_task_trajectory_split(
+    *,
+    dataset_root: Path,
+    train_task_names: list[str],
+    validation_task_names: list[str],
+    validation_fraction: float,
+    min_validation_trajectories_per_task: int,
+) -> SameTaskTrajectorySplit:
+    """Builds deterministic held-out trajectory ids for same-task validation."""
+
+    if validation_fraction < 0.0 or validation_fraction > 1.0:
+        raise ValueError("validation_fraction must be between 0 and 1.")
+    if min_validation_trajectories_per_task < 0:
+        raise ValueError("min_validation_trajectories_per_task must be non-negative.")
+
+    train_task_set = set(train_task_names)
+    validation_task_set = set(validation_task_names)
+    all_task_names = sorted(train_task_set.union(validation_task_set))
+    selected_validation_ids_by_task: dict[str, set[str]] = {}
+
+    for task_name in all_task_names:
+        trajectory_ids = list_task_trajectory_ids(
+            dataset_root=dataset_root,
+            task_name=task_name,
+        )
+        if task_name not in validation_task_set:
+            selected_validation_ids_by_task[task_name] = set()
+            continue
+
+        requested_count = math.ceil(len(trajectory_ids) * validation_fraction)
+        if trajectory_ids:
+            requested_count = max(
+                requested_count,
+                min_validation_trajectories_per_task,
+            )
+        max_validation_count = len(trajectory_ids)
+        if task_name in train_task_set:
+            max_validation_count = max(max_validation_count - 1, 0)
+        selected_count = min(requested_count, max_validation_count)
+        selected_validation_ids_by_task[task_name] = set(
+            trajectory_ids[-selected_count:] if selected_count > 0 else []
+        )
+
+    train_trajectory_ids_by_task: dict[str, list[str]] = {}
+    for task_name in train_task_names:
+        selected_validation_ids = selected_validation_ids_by_task.get(
+            task_name,
+            set(),
+        )
+        train_trajectory_ids_by_task[task_name] = [
+            trajectory_id
+            for trajectory_id in list_task_trajectory_ids(
+                dataset_root=dataset_root,
+                task_name=task_name,
+            )
+            if trajectory_id not in selected_validation_ids
+        ]
+
+    validation_trajectory_ids_by_task: dict[str, list[str]] = {}
+    for task_name in validation_task_names:
+        selected_validation_ids = selected_validation_ids_by_task.get(
+            task_name,
+            set(),
+        )
+        validation_trajectory_ids_by_task[task_name] = [
+            trajectory_id
+            for trajectory_id in list_task_trajectory_ids(
+                dataset_root=dataset_root,
+                task_name=task_name,
+            )
+            if trajectory_id in selected_validation_ids
+        ]
+
+    return SameTaskTrajectorySplit(
+        train_trajectory_ids_by_task=train_trajectory_ids_by_task,
+        validation_trajectory_ids_by_task=validation_trajectory_ids_by_task,
+    )
 
 
 def _normalize_history_step(step: dict[str, Any]) -> dict[str, Any]:
@@ -245,7 +441,6 @@ def _normalize_history_step(step: dict[str, Any]) -> dict[str, Any]:
         "agent": step["agent"],
         "tool": step["tool"],
         "args": dict(step["args"]),
-        "reasoning": step["reasoning"],
     }
 
 
@@ -385,8 +580,6 @@ def _validate_sft_format(sft_format: str) -> str:
 
 def _raw_step_payload(
     raw_step: dict[str, Any],
-    *,
-    include_reasoning: bool = True,
 ) -> dict[str, Any]:
     step = {
         "step": raw_step["step"],
@@ -394,8 +587,6 @@ def _raw_step_payload(
         "tool": raw_step["tool"],
         "args": dict(raw_step["args"]),
     }
-    if include_reasoning:
-        step["reasoning"] = raw_step["reasoning"]
     return {"steps": [step]}
 
 
@@ -416,7 +607,7 @@ def _build_target_metadata(
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     sft_format = _validate_sft_format(sft_format)
     if sft_format == SFT_FORMAT_PLAIN:
-        target_payload = _raw_step_payload(raw_step, include_reasoning=False)
+        target_payload = _raw_step_payload(raw_step)
         target_tool_call = {
             "name": raw_step["tool"],
             "arguments": dict(raw_step["args"]),
@@ -436,6 +627,112 @@ def _build_target_metadata(
     return target_payload, target_tool_call, target_text
 
 
+def _build_centralized_examples_for_trajectory(
+    *,
+    task_name: str,
+    trajectory_dir: Path,
+    sft_format: str,
+    response_schema: dict[str, Any],
+    tool_schemas: list[dict[str, Any]],
+) -> list[CentralizedExample]:
+    task_metadata = get_task_metadata(task_name)
+    original_trajectory = _load_json(trajectory_dir / "original_trajectory.json")
+    plan_steps = _load_json(trajectory_dir / "plan.json")
+    metadata = _load_json(trajectory_dir / "metadata.json")
+
+    raw_steps = list(original_trajectory["steps"])
+    executed_steps = list(metadata["steps"])
+    trajectory_id = str(original_trajectory["trajectory_id"])
+
+    _validate_alignment(
+        task_name=task_name,
+        trajectory_id=trajectory_id,
+        raw_steps=raw_steps,
+        plan_steps=plan_steps,
+        executed_steps=executed_steps,
+    )
+
+    examples: list[CentralizedExample] = []
+    history_steps: list[dict[str, Any]] = []
+    latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
+    for raw_step, plan_step, executed_step in zip(
+        raw_steps,
+        plan_steps,
+        executed_steps,
+        strict=True,
+    ):
+        _record_latest_observation(
+            latest_observations_by_agent=latest_observations_by_agent,
+            plan_step=plan_step,
+            task_name=task_name,
+            trajectory_id=trajectory_id,
+        )
+        if raw_step["tool"] == "get_image":
+            continue
+
+        if not executed_step.get("success", False):
+            continue
+
+        image_paths, observation_views = _require_latest_observation(
+            latest_observations_by_agent=latest_observations_by_agent,
+            before_index=raw_step["step"],
+            agent_id=raw_step["agent"],
+        )
+
+        target_payload, target_tool_call, target_text = _build_target_metadata(
+            raw_step=raw_step,
+            allowed_tool_specs=task_metadata.allowed_tool_specs,
+            sft_format=sft_format,
+        )
+        user_prompt = build_user_prompt(
+            composite_task=task_metadata.composite_task,
+            task_instruction=metadata["task"],
+            agent_id=raw_step["agent"],
+            next_step_index=raw_step["step"],
+            observation_views=observation_views,
+            history_steps=history_steps,
+            allowed_tool_specs=task_metadata.allowed_tool_specs,
+            sft_format=sft_format,
+        )
+        message_kwargs: dict[str, Any]
+        if sft_format == SFT_FORMAT_PLAIN:
+            message_kwargs = {"target_text": target_text}
+        else:
+            message_kwargs = {"target_tool_call": target_tool_call}
+        sample_id = (
+            f"{task_metadata.dataset_name}/{trajectory_id}/"
+            f"step_{raw_step['step']:06d}"
+        )
+        examples.append(
+            CentralizedExample(
+                sample_id=sample_id,
+                task_name=task_metadata.dataset_name,
+                composite_task=task_metadata.composite_task,
+                trajectory_id=trajectory_id,
+                step_index=raw_step["step"],
+                agent_id=raw_step["agent"],
+                task_instruction=metadata["task"],
+                observation_views=observation_views,
+                image_paths=list(image_paths),
+                history_steps=list(history_steps),
+                allowed_tool_specs=task_metadata.allowed_tool_specs,
+                tool_schemas=tool_schemas,
+                response_schema=response_schema,
+                target_payload=target_payload,
+                target_tool_call=target_tool_call,
+                target_text=target_text,
+                messages=build_messages(
+                    user_prompt=user_prompt,
+                    num_images=len(image_paths),
+                    **message_kwargs,
+                ),
+            )
+        )
+        history_steps.append(_normalize_history_step(raw_step))
+
+    return examples
+
+
 def build_centralized_examples(
     *,
     dataset_root: Path,
@@ -444,17 +741,20 @@ def build_centralized_examples(
     progress_description: str | None = None,
     sft_format: str = SFT_FORMAT_TOOL_CALL,
     trajectory_ids_by_task: dict[str, set[str]] | None = None,
+    example_build_workers: int = 1,
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step."""
 
     sft_format = _validate_sft_format(sft_format)
+    example_build_workers = max(example_build_workers, 1)
     examples: list[CentralizedExample] = []
 
     for task_name in task_names:
         task_metadata = get_task_metadata(task_name)
-        task_root = dataset_root / task_metadata.dataset_name
-        if not task_root.is_dir():
-            raise FileNotFoundError(f"Task directory does not exist: {task_root}")
+        trajectory_dirs = _trajectory_dirs_for_task(
+            dataset_root=dataset_root,
+            task_name=task_metadata.dataset_name,
+        )
 
         if sft_format == SFT_FORMAT_TOOL_CALL:
             response_schema = build_single_step_response_schema(
@@ -473,255 +773,42 @@ def build_centralized_examples(
                 task_metadata.dataset_name, set()
             )
 
-        for trajectory_dir in _iter_trajectory_dirs(
-            task_root,
-            show_progress=show_progress,
-            progress_description=progress_description or task_metadata.dataset_name,
+        selected_trajectory_dirs = _filter_trajectory_dirs(
+            trajectory_dirs,
             include_trajectory_ids=include_trajectory_ids,
-        ):
-            original_trajectory = _load_json(
-                trajectory_dir / "original_trajectory.json"
-            )
-            plan_steps = _load_json(trajectory_dir / "plan.json")
-            metadata = _load_json(trajectory_dir / "metadata.json")
-
-            raw_steps = list(original_trajectory["steps"])
-            executed_steps = list(metadata["steps"])
-            trajectory_id = str(original_trajectory["trajectory_id"])
-
-            _validate_alignment(
-                task_name=task_name,
-                trajectory_id=trajectory_id,
-                raw_steps=raw_steps,
-                plan_steps=plan_steps,
-                executed_steps=executed_steps,
-            )
-
-            history_steps: list[dict[str, Any]] = []
-            latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
-            for raw_step, plan_step, executed_step in zip(
-                raw_steps,
-                plan_steps,
-                executed_steps,
-                strict=True,
-            ):
-                _record_latest_observation(
-                    latest_observations_by_agent=latest_observations_by_agent,
-                    plan_step=plan_step,
-                    task_name=task_name,
-                    trajectory_id=trajectory_id,
-                )
-                if raw_step["tool"] == "get_image":
-                    continue
-
-                if not executed_step.get("success", False):
-                    continue
-
-                image_paths, observation_views = _require_latest_observation(
-                    latest_observations_by_agent=latest_observations_by_agent,
-                    before_index=raw_step["step"],
-                    agent_id=raw_step["agent"],
-                )
-
-                target_payload, target_tool_call, target_text = _build_target_metadata(
-                    raw_step=raw_step,
-                    allowed_tool_specs=task_metadata.allowed_tool_specs,
-                    sft_format=sft_format,
-                )
-                user_prompt = build_user_prompt(
-                    composite_task=task_metadata.composite_task,
-                    task_instruction=metadata["task"],
-                    agent_id=raw_step["agent"],
-                    next_step_index=raw_step["step"],
-                    observation_views=observation_views,
-                    history_steps=history_steps,
-                    allowed_tool_specs=task_metadata.allowed_tool_specs,
-                    sft_format=sft_format,
-                )
-                message_kwargs: dict[str, Any]
-                if sft_format == SFT_FORMAT_PLAIN:
-                    message_kwargs = {"target_text": target_text}
-                else:
-                    message_kwargs = {"target_tool_call": target_tool_call}
-                sample_id = f"{task_metadata.dataset_name}/{trajectory_id}/step_{raw_step['step']:06d}"
-                examples.append(
-                    CentralizedExample(
-                        sample_id=sample_id,
-                        task_name=task_metadata.dataset_name,
-                        composite_task=task_metadata.composite_task,
-                        trajectory_id=trajectory_id,
-                        step_index=raw_step["step"],
-                        agent_id=raw_step["agent"],
-                        task_instruction=metadata["task"],
-                        observation_views=observation_views,
-                        image_paths=list(image_paths),
-                        history_steps=list(history_steps),
-                        allowed_tool_specs=task_metadata.allowed_tool_specs,
-                        tool_schemas=tool_schemas,
-                        response_schema=response_schema,
-                        target_payload=target_payload,
-                        target_tool_call=target_tool_call,
-                        target_text=target_text,
-                        messages=build_messages(
-                            user_prompt=user_prompt,
-                            num_images=len(image_paths),
-                            **message_kwargs,
-                        ),
-                    )
-                )
-                history_steps.append(_normalize_history_step(raw_step))
-
-    return examples
-
-
-def build_decentralized_examples(
-    *,
-    dataset_root: Path,
-    task_names: list[str],
-    show_progress: bool = False,
-    progress_description: str | None = None,
-    sft_format: str = SFT_FORMAT_TOOL_CALL,
-    trajectory_ids_by_task: dict[str, set[str]] | None = None,
-) -> list[DecentralizedExample]:
-    """Builds one conversation per `(trajectory, agent)` training example."""
-
-    sft_format = _validate_sft_format(sft_format)
-    examples: list[DecentralizedExample] = []
-
-    for task_name in task_names:
-        task_metadata = get_task_metadata(task_name)
-        task_root = dataset_root / task_metadata.dataset_name
-        if not task_root.is_dir():
-            raise FileNotFoundError(f"Task directory does not exist: {task_root}")
-
-        tool_schemas = build_tool_schemas(
-            agent_ids=AGENT_IDS,
-            allowed_tool_specs=task_metadata.allowed_tool_specs,
         )
-        include_trajectory_ids = None
-        if trajectory_ids_by_task is not None:
-            include_trajectory_ids = trajectory_ids_by_task.get(
-                task_metadata.dataset_name, set()
+
+        def build_one(trajectory_dir: Path) -> list[CentralizedExample]:
+            return _build_centralized_examples_for_trajectory(
+                task_name=task_metadata.dataset_name,
+                trajectory_dir=trajectory_dir,
+                sft_format=sft_format,
+                response_schema=response_schema,
+                tool_schemas=tool_schemas,
             )
+
+        if example_build_workers > 1 and len(selected_trajectory_dirs) > 1:
+            with ThreadPoolExecutor(max_workers=example_build_workers) as executor:
+                task_results = executor.map(build_one, selected_trajectory_dirs)
+                if show_progress and tqdm is not None:
+                    task_results = tqdm(
+                        task_results,
+                        desc=progress_description or task_metadata.dataset_name,
+                        total=len(selected_trajectory_dirs),
+                        dynamic_ncols=True,
+                        leave=False,
+                        unit="traj",
+                    )
+                for trajectory_examples in task_results:
+                    examples.extend(trajectory_examples)
+            continue
 
         for trajectory_dir in _iter_trajectory_dirs(
-            task_root,
+            selected_trajectory_dirs,
             show_progress=show_progress,
             progress_description=progress_description or task_metadata.dataset_name,
-            include_trajectory_ids=include_trajectory_ids,
         ):
-            original_trajectory = _load_json(
-                trajectory_dir / "original_trajectory.json"
-            )
-            plan_steps = _load_json(trajectory_dir / "plan.json")
-            metadata = _load_json(trajectory_dir / "metadata.json")
-
-            raw_steps = list(original_trajectory["steps"])
-            executed_steps = list(metadata["steps"])
-            trajectory_id = str(original_trajectory["trajectory_id"])
-
-            _validate_alignment(
-                task_name=task_name,
-                trajectory_id=trajectory_id,
-                raw_steps=raw_steps,
-                plan_steps=plan_steps,
-                executed_steps=executed_steps,
-            )
-
-            history_steps: list[dict[str, Any]] = []
-            messages_by_agent: dict[str, list[dict[str, Any]]] = {
-                agent_id: [build_system_message()] for agent_id in AGENT_IDS
-            }
-            image_paths_by_agent: dict[str, list[str]] = {
-                agent_id: [] for agent_id in AGENT_IDS
-            }
-            target_step_indices_by_agent: dict[str, list[int]] = {
-                agent_id: [] for agent_id in AGENT_IDS
-            }
-            latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
-
-            for raw_step, plan_step, executed_step in zip(
-                raw_steps,
-                plan_steps,
-                executed_steps,
-                strict=True,
-            ):
-                _record_latest_observation(
-                    latest_observations_by_agent=latest_observations_by_agent,
-                    plan_step=plan_step,
-                    task_name=task_name,
-                    trajectory_id=trajectory_id,
-                )
-                if raw_step["tool"] == "get_image":
-                    continue
-
-                if not executed_step.get("success", False):
-                    continue
-
-                image_paths, observation_views = _require_latest_observation(
-                    latest_observations_by_agent=latest_observations_by_agent,
-                    before_index=raw_step["step"],
-                    agent_id=raw_step["agent"],
-                )
-
-                _, target_tool_call, target_text = _build_target_metadata(
-                    raw_step=raw_step,
-                    allowed_tool_specs=task_metadata.allowed_tool_specs,
-                    sft_format=sft_format,
-                )
-                user_prompt = build_user_prompt(
-                    composite_task=task_metadata.composite_task,
-                    task_instruction=metadata["task"],
-                    agent_id=raw_step["agent"],
-                    next_step_index=raw_step["step"],
-                    observation_views=observation_views,
-                    history_steps=history_steps,
-                    allowed_tool_specs=task_metadata.allowed_tool_specs,
-                    sft_format=sft_format,
-                )
-                acting_agent = raw_step["agent"]
-                messages_by_agent[acting_agent].append(
-                    build_user_message(
-                        user_prompt=user_prompt,
-                        num_images=len(image_paths),
-                    )
-                )
-                if sft_format == SFT_FORMAT_PLAIN:
-                    messages_by_agent[acting_agent].append(
-                        build_assistant_text_message(target_text=target_text)
-                    )
-                else:
-                    messages_by_agent[acting_agent].append(
-                        build_assistant_tool_call_message(
-                            tool_name=target_tool_call["name"],
-                            arguments=target_tool_call["arguments"],
-                        )
-                    )
-                image_paths_by_agent[acting_agent].extend(image_paths)
-                target_step_indices_by_agent[acting_agent].append(raw_step["step"])
-                history_steps.append(_normalize_history_step(raw_step))
-
-            for agent_id in AGENT_IDS:
-                target_step_indices = target_step_indices_by_agent[agent_id]
-                if not target_step_indices:
-                    continue
-
-                sample_id = f"{task_metadata.dataset_name}/{trajectory_id}/{agent_id}"
-                examples.append(
-                    DecentralizedExample(
-                        sample_id=sample_id,
-                        task_name=task_metadata.dataset_name,
-                        composite_task=task_metadata.composite_task,
-                        trajectory_id=trajectory_id,
-                        agent_id=agent_id,
-                        task_instruction=metadata["task"],
-                        target_step_indices=list(target_step_indices),
-                        image_paths=list(image_paths_by_agent[agent_id]),
-                        allowed_tool_specs=task_metadata.allowed_tool_specs,
-                        tool_schemas=tool_schemas,
-                        messages=list(messages_by_agent[agent_id]),
-                    )
-                )
+            examples.extend(build_one(trajectory_dir))
 
     return examples
 
@@ -738,23 +825,27 @@ def build_example_cache_fingerprint(
     *,
     dataset_root: Path,
     task_name: str,
-    granularity: str,
+    trajectory_ids: list[str] | set[str] | None = None,
     sft_format: str = SFT_FORMAT_TOOL_CALL,
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
 
     sft_format = _validate_sft_format(sft_format)
     task_metadata = get_task_metadata(task_name)
-    task_root = dataset_root / task_metadata.dataset_name
-    if not task_root.is_dir():
-        raise FileNotFoundError(f"Task directory does not exist: {task_root}")
-
-    trajectory_dirs = sorted(path for path in task_root.iterdir() if path.is_dir())
+    selected_trajectory_ids = None if trajectory_ids is None else set(trajectory_ids)
+    trajectory_dirs = _trajectory_dirs_for_task(
+        dataset_root=dataset_root,
+        task_name=task_metadata.dataset_name,
+    )
+    if selected_trajectory_ids is not None:
+        trajectory_dirs = [
+            path for path in trajectory_dirs if path.name in selected_trajectory_ids
+        ]
     return {
         "cache_format_version": _EXAMPLE_CACHE_FORMAT_VERSION,
         "dataset_root": str(dataset_root.resolve()),
         "task_name": task_metadata.dataset_name,
-        "granularity": granularity,
+        "example_format": "centralized",
         "sft_format": sft_format,
         "agent_ids": list(AGENT_IDS),
         "task_metadata": {
@@ -784,9 +875,8 @@ def build_example_cache_path(
     cache_dir: Path,
     dataset_root: Path,
     task_name: str,
-    granularity: str,
 ) -> Path:
-    """Returns the on-disk cache path for one `(dataset, task, granularity)` tuple."""
+    """Returns the on-disk cache path for one centralized task-example cache."""
 
     dataset_key = sha256(str(dataset_root.resolve()).encode("utf-8")).hexdigest()[:16]
     normalized_task_name = get_task_metadata(task_name).dataset_name
@@ -794,37 +884,117 @@ def build_example_cache_path(
         character if character.isalnum() or character in {"-", "_"} else "_"
         for character in normalized_task_name
     )
-    return cache_dir / dataset_key / granularity / f"{safe_task_name}.json"
+    return cache_dir / dataset_key / "centralized" / f"{safe_task_name}.json"
 
 
-def _example_type_for_granularity(
-    granularity: str,
-) -> type[CentralizedExample] | type[DecentralizedExample]:
-    if granularity == "centralized":
-        return CentralizedExample
-    if granularity == "decentralized":
-        return DecentralizedExample
-    raise ValueError(f"Unsupported granularity: {granularity}")
+def _example_cache_path_with_suffix(cache_path: Path, suffix: str) -> Path:
+    """Returns the sibling cache path for a concrete serialization suffix."""
+
+    if cache_path.suffix:
+        return cache_path.with_suffix(suffix)
+    return cache_path.with_name(f"{cache_path.name}{suffix}")
 
 
-def load_examples_from_cache(
+def _compressed_example_cache_candidate_paths(cache_path: Path) -> list[Path]:
+    zstd_path = _example_cache_path_with_suffix(cache_path, _EXAMPLE_CACHE_ZSTD_SUFFIX)
+    gzip_path = _example_cache_path_with_suffix(cache_path, _EXAMPLE_CACHE_GZIP_SUFFIX)
+    if zstandard is not None:
+        return [zstd_path, gzip_path]
+    return [gzip_path, zstd_path]
+
+
+def _preferred_compressed_example_cache_path(cache_path: Path) -> Path:
+    suffix = (
+        _EXAMPLE_CACHE_ZSTD_SUFFIX
+        if zstandard is not None
+        else _EXAMPLE_CACHE_GZIP_SUFFIX
+    )
+    return _example_cache_path_with_suffix(cache_path, suffix)
+
+
+def _load_compressed_example_cache_payload(cache_path: Path) -> dict[str, Any] | None:
+    if not cache_path.is_file():
+        return None
+    try:
+        if cache_path.name.endswith(_EXAMPLE_CACHE_ZSTD_SUFFIX):
+            if zstandard is None:
+                return None
+            with cache_path.open("rb") as raw_handle:
+                with zstandard.ZstdDecompressor().stream_reader(raw_handle) as reader:
+                    with io.BufferedReader(reader) as buffered_reader:
+                        payload = pickle.load(buffered_reader)
+        elif cache_path.name.endswith(_EXAMPLE_CACHE_GZIP_SUFFIX):
+            with gzip.open(cache_path, "rb") as handle:
+                payload = pickle.load(handle)
+        else:
+            return None
+    except (
+        AttributeError,
+        EOFError,
+        ImportError,
+        OSError,
+        pickle.PickleError,
+        TypeError,
+        ValueError,
+    ):
+        return None
+    except Exception as exc:
+        if zstandard is not None and isinstance(exc, zstandard.ZstdError):
+            return None
+        raise
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("binary_format_version") != _EXAMPLE_CACHE_BINARY_FORMAT_VERSION:
+        return None
+    return payload
+
+
+def _save_compressed_example_cache_payload(
     *,
     cache_path: Path,
+    fingerprint: dict[str, Any],
+    examples: list[CentralizedExample],
+) -> Path:
+    payload = {
+        "cache_format_version": _EXAMPLE_CACHE_FORMAT_VERSION,
+        "binary_format_version": _EXAMPLE_CACHE_BINARY_FORMAT_VERSION,
+        "fingerprint": fingerprint,
+        "examples": examples,
+    }
+    output_path = _preferred_compressed_example_cache_path(cache_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = output_path.with_name(f"{output_path.name}.tmp")
+    if output_path.name.endswith(_EXAMPLE_CACHE_ZSTD_SUFFIX):
+        if zstandard is None:  # pragma: no cover - guarded by preferred path helper
+            raise ImportError(
+                "zstandard is required to write zstd-compressed example caches."
+            )
+        with temp_path.open("wb") as raw_handle:
+            with zstandard.ZstdCompressor(
+                level=_EXAMPLE_CACHE_ZSTD_LEVEL
+            ).stream_writer(raw_handle) as handle:
+                pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    else:
+        with gzip.open(
+            temp_path,
+            "wb",
+            compresslevel=_EXAMPLE_CACHE_GZIP_LEVEL,
+        ) as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    temp_path.replace(output_path)
+    return output_path
+
+
+def _examples_from_cache_payload(
+    payload: dict[str, Any],
+    *,
     expected_fingerprint: dict[str, Any] | None,
-    granularity: str,
-) -> list[ManifestExample] | None:
-    """Loads cached task examples, optionally requiring a fingerprint match."""
-
-    try:
-        payload = _load_json(cache_path)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return None
-
+) -> list[CentralizedExample] | None:
     if payload.get("cache_format_version") != _EXAMPLE_CACHE_FORMAT_VERSION:
         return None
-    if (
-        expected_fingerprint is not None
-        and payload.get("fingerprint") != expected_fingerprint
+    if expected_fingerprint is not None and not _example_cache_fingerprints_match(
+        payload.get("fingerprint"),
+        expected_fingerprint,
     ):
         return None
 
@@ -832,33 +1002,110 @@ def load_examples_from_cache(
     if not isinstance(raw_examples, list):
         return None
 
-    example_type = _example_type_for_granularity(granularity)
+    if all(isinstance(raw_example, CentralizedExample) for raw_example in raw_examples):
+        return list(raw_examples)
+
     try:
-        return [example_type(**raw_example) for raw_example in raw_examples]
+        return [CentralizedExample(**raw_example) for raw_example in raw_examples]
     except TypeError:
         return None
+
+
+def _normalized_example_cache_fingerprint(
+    fingerprint: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(fingerprint)
+    builder_dependencies = normalized.get("builder_dependencies")
+    if isinstance(builder_dependencies, dict):
+        normalized_dependencies = dict(builder_dependencies)
+        normalized_dependencies.pop(Path(__file__).name, None)
+        normalized["builder_dependencies"] = normalized_dependencies
+    return normalized
+
+
+def _example_cache_fingerprints_match(
+    actual_fingerprint: Any,
+    expected_fingerprint: dict[str, Any],
+) -> bool:
+    if actual_fingerprint == expected_fingerprint:
+        return True
+    if not isinstance(actual_fingerprint, dict):
+        return False
+    return _normalized_example_cache_fingerprint(
+        actual_fingerprint
+    ) == _normalized_example_cache_fingerprint(expected_fingerprint)
+
+
+def _filter_cached_examples(
+    examples: list[CentralizedExample],
+    sample_id_filter: Any | None,
+) -> list[CentralizedExample]:
+    if sample_id_filter is None:
+        return examples
+    return [example for example in examples if sample_id_filter(example.sample_id)]
+
+
+def load_examples_from_cache(
+    *,
+    cache_path: Path,
+    expected_fingerprint: dict[str, Any] | None,
+    sample_id_filter: Any | None = None,
+) -> list[CentralizedExample] | None:
+    """Loads cached task examples, optionally requiring a fingerprint match."""
+
+    for compressed_cache_path in _compressed_example_cache_candidate_paths(cache_path):
+        payload = _load_compressed_example_cache_payload(compressed_cache_path)
+        if payload is None:
+            continue
+        examples = _examples_from_cache_payload(
+            payload,
+            expected_fingerprint=expected_fingerprint,
+        )
+        if examples is not None:
+            return _filter_cached_examples(examples, sample_id_filter)
+
+    try:
+        payload = _load_json(cache_path)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+
+    examples = _examples_from_cache_payload(
+        payload,
+        expected_fingerprint=expected_fingerprint,
+    )
+    if examples is None:
+        return None
+
+    preferred_cache_path = _preferred_compressed_example_cache_path(cache_path)
+    if not preferred_cache_path.exists() and isinstance(
+        payload.get("fingerprint"),
+        dict,
+    ):
+        try:
+            _save_compressed_example_cache_payload(
+                cache_path=cache_path,
+                fingerprint=payload["fingerprint"],
+                examples=examples,
+            )
+        except (OSError, ImportError):
+            pass
+
+    return _filter_cached_examples(examples, sample_id_filter)
 
 
 def save_examples_to_cache(
     *,
     cache_path: Path,
     fingerprint: dict[str, Any],
-    examples: list[ManifestExample],
+    examples: list[CentralizedExample],
 ) -> None:
-    """Persists task examples to a deterministic JSON cache file."""
+    """Persists task examples to the fastest available compressed binary cache."""
 
-    payload = {
-        "cache_format_version": _EXAMPLE_CACHE_FORMAT_VERSION,
-        "fingerprint": fingerprint,
-        "examples": [asdict(example) for example in examples],
-    }
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp")
-    temp_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True),
-        encoding="utf-8",
+    _save_compressed_example_cache_payload(
+        cache_path=cache_path,
+        fingerprint=fingerprint,
+        examples=examples,
     )
-    temp_path.replace(cache_path)
 
 
 class CentralizedDataset(Dataset):
@@ -874,22 +1121,7 @@ class CentralizedDataset(Dataset):
         return self.examples[index].to_feature_dict()
 
 
-class DecentralizedDataset(Dataset):
-    """Thin PyTorch dataset wrapper around decentralized training examples."""
-
-    def __init__(self, examples: list[DecentralizedExample]) -> None:
-        self.examples = list(examples)
-
-    def __len__(self) -> int:
-        return len(self.examples)
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        return self.examples[index].to_feature_dict()
-
-
 def _num_supervised_actions(example: ManifestExample) -> int:
-    if isinstance(example, DecentralizedExample):
-        return example.num_target_steps
     return 1
 
 
@@ -939,6 +1171,98 @@ def build_split_manifest(
     }
 
 
+def image_resolution_to_pixels(image_resolution: int | None) -> int | None:
+    """Converts a square image-resolution setting to a processor pixel budget."""
+
+    if image_resolution is None:
+        return None
+    if image_resolution < 1:
+        raise ValueError("image_resolution must be at least 1.")
+    return image_resolution * image_resolution
+
+
+def serialize_pretokenized_tensors(tensors: dict[str, Any]) -> bytes:
+    """Serializes one pretokenized tensor payload for Arrow storage."""
+
+    return pickle.dumps(tensors, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def deserialize_pretokenized_tensors(blob: bytes) -> dict[str, Any]:
+    """Deserializes one pretokenized tensor payload from Arrow storage."""
+
+    value = pickle.loads(blob)
+    if not isinstance(value, dict):
+        raise TypeError("Pretokenized tensor payload must deserialize to a dict.")
+    if torch is not None:
+        value = {
+            key: torch.tensor(item) if isinstance(item, list) else item
+            for key, item in value.items()
+        }
+    return value
+
+
+def _set_processor_image_resolution(processor, image_resolution: int | None):
+    image_pixels = image_resolution_to_pixels(image_resolution)
+    if image_pixels is None:
+        return None
+
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is None:
+        return None
+
+    previous_values = {}
+    for attribute_name in ("min_pixels", "max_pixels"):
+        if hasattr(image_processor, attribute_name):
+            previous_values[attribute_name] = getattr(image_processor, attribute_name)
+            setattr(image_processor, attribute_name, image_pixels)
+    return image_processor, previous_values
+
+
+def _restore_processor_image_resolution(state) -> None:
+    if state is None:
+        return
+    image_processor, previous_values = state
+    for attribute_name, value in previous_values.items():
+        setattr(image_processor, attribute_name, value)
+
+
+def build_batched_pretokenized_tensors(
+    *,
+    processor,
+    features: list[dict[str, Any]],
+    max_length: int | None,
+    image_resolution: int | None,
+) -> list[dict[str, Any]]:
+    """Builds per-example tensor payloads using the same masking as training."""
+
+    collator = LazyVisionSFTCollator(
+        processor_name_or_path="",
+        max_length=max_length,
+        trust_remote_code=False,
+        sft_format=SFT_FORMAT_TOOL_CALL,
+    )
+    collator._processor = processor
+    resolution_state = _set_processor_image_resolution(processor, image_resolution)
+    try:
+        batch = collator(features)
+    finally:
+        _restore_processor_image_resolution(resolution_state)
+
+    batch_size = len(features)
+    tensor_payloads: list[dict[str, Any]] = []
+    for row_index in range(batch_size):
+        row_payload: dict[str, Any] = {}
+        for key, value in batch.items():
+            if hasattr(value, "__getitem__") and hasattr(value, "shape"):
+                row_payload[key] = value[row_index].detach().cpu()
+            elif isinstance(value, list):
+                row_payload[key] = value[row_index]
+            else:
+                row_payload[key] = value
+        tensor_payloads.append(row_payload)
+    return tensor_payloads
+
+
 class LazyVisionSFTCollator:
     """Collates multimodal SFT batches and masks loss to assistant tokens only."""
 
@@ -948,7 +1272,6 @@ class LazyVisionSFTCollator:
         processor_name_or_path: str,
         max_length: int | None,
         max_images_per_sample: int | None = None,
-        max_history_steps_per_prompt: int | None = None,
         supervise_last_assistant_turn_only: bool = False,
         trust_remote_code: bool,
         sft_format: str = SFT_FORMAT_TOOL_CALL,
@@ -958,11 +1281,6 @@ class LazyVisionSFTCollator:
         self.max_images_per_sample = (
             max_images_per_sample
             if max_images_per_sample and max_images_per_sample > 0
-            else None
-        )
-        self.max_history_steps_per_prompt = (
-            max_history_steps_per_prompt
-            if max_history_steps_per_prompt and max_history_steps_per_prompt > 0
             else None
         )
         self.supervise_last_assistant_turn_only = supervise_last_assistant_turn_only
@@ -980,6 +1298,7 @@ class LazyVisionSFTCollator:
             tokenizer = getattr(processor, "tokenizer", None)
             if tokenizer is not None:
                 tokenizer.padding_side = "right"
+                tokenizer.truncation_side = "left"
             self._processor = processor
         return self._processor
 
@@ -1174,81 +1493,6 @@ class LazyVisionSFTCollator:
             messages[:leading_message_count] + messages[selected_start:]
         )
         trimmed_feature["image_paths"] = selected_image_paths
-        return trimmed_feature
-
-    def _trim_prompt_history_text(self, text: str) -> str:
-        if self.max_history_steps_per_prompt is None:
-            return text
-
-        history_header = "Previous executed symbolic action history:\n"
-        tools_header = "\n\nAvailable tools for this task:\n"
-        history_start = text.find(history_header)
-        if history_start < 0:
-            return text
-        history_body_start = history_start + len(history_header)
-        history_end = text.find(tools_header, history_body_start)
-        if history_end < 0:
-            return text
-
-        history_lines = [
-            line
-            for line in text[history_body_start:history_end].splitlines()
-            if line.strip()
-        ]
-        if len(history_lines) <= self.max_history_steps_per_prompt:
-            return text
-
-        kept_history_lines = history_lines[-self.max_history_steps_per_prompt :]
-        omitted_count = len(history_lines) - len(kept_history_lines)
-        trimmed_history = "\n".join(
-            [f"- {omitted_count} earlier steps omitted"] + kept_history_lines
-        )
-        return text[:history_body_start] + trimmed_history + text[history_end:]
-
-    def _trim_feature_prompt_history(
-        self,
-        feature: dict[str, Any],
-    ) -> dict[str, Any]:
-        if self.max_history_steps_per_prompt is None:
-            return feature
-
-        messages: list[dict[str, Any]] = []
-        changed = False
-        for message in feature["messages"]:
-            content = message.get("content")
-            if not isinstance(content, list):
-                messages.append(message)
-                continue
-
-            trimmed_content: list[Any] = []
-            for item in content:
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "text"
-                    and isinstance(item.get("text"), str)
-                ):
-                    trimmed_text = self._trim_prompt_history_text(item["text"])
-                    if trimmed_text != item["text"]:
-                        changed = True
-                        trimmed_item = dict(item)
-                        trimmed_item["text"] = trimmed_text
-                        trimmed_content.append(trimmed_item)
-                    else:
-                        trimmed_content.append(item)
-                else:
-                    trimmed_content.append(item)
-
-            if trimmed_content != content:
-                trimmed_message = dict(message)
-                trimmed_message["content"] = trimmed_content
-                messages.append(trimmed_message)
-            else:
-                messages.append(message)
-
-        if not changed:
-            return feature
-        trimmed_feature = dict(feature)
-        trimmed_feature["messages"] = messages
         return trimmed_feature
 
     def _trim_feature_to_last_assistant_turn(
@@ -1463,8 +1707,7 @@ class LazyVisionSFTCollator:
             raise ValueError(
                 "Collator produced no supervised assistant tokens after "
                 f"truncation for samples: {sample_text}. Reduce "
-                "--max-history-steps-per-prompt, reduce --max-images-per-sample, "
-                "or increase --max-length."
+                "--max-images-per-sample or increase --max-length."
             )
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1474,7 +1717,6 @@ class LazyVisionSFTCollator:
         features = [
             self._trim_feature_to_last_assistant_turn(feature) for feature in features
         ]
-        features = [self._trim_feature_prompt_history(feature) for feature in features]
         messages = [feature["messages"] for feature in features]
         images = [self._load_images(feature["image_paths"]) for feature in features]
 

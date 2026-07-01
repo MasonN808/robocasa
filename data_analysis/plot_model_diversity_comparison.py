@@ -16,7 +16,7 @@ if __package__ in (None, ""):
 
 from data_analysis.plotting import (
     METHOD_ORDER,
-    PdfCanvas,
+    PngCanvas,
     TaskMetric,
     axis_ticks,
     blend_color,
@@ -72,7 +72,7 @@ class BaselineDelta:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create PDF comparison charts for Gemini Flash Preview and Gemini Pro "
+            "Create PNG comparison plots for Gemini Flash Preview and Gemini Pro "
             "sampling-method diversity. Diversity is 1 - trajectory_cosine_avg."
         )
     )
@@ -106,7 +106,7 @@ def median_or_none(values: list[float]) -> float | None:
 
 
 def draw_y_axis(
-    canvas: PdfCanvas,
+    canvas: PngCanvas,
     *,
     x0: float,
     y0: float,
@@ -172,7 +172,7 @@ def plot_diversity_by_model_and_method(
     x_step = plot_width / len(methods)
     model_gap = min(52, x_step * 0.23)
 
-    canvas = PdfCanvas(width, height)
+    canvas = PngCanvas(width, height)
     canvas.text(
         left, 30, "Trajectory diversity by model and method", size_class="title"
     )
@@ -300,7 +300,7 @@ def plot_pro_minus_flash_by_method(
     plot_height = height - top - bottom
     x_step = plot_width / len(methods)
 
-    canvas = PdfCanvas(width, height)
+    canvas = PngCanvas(width, height)
     canvas.text(left, 30, "Gemini Pro minus Flash diversity", size_class="title")
     y_scale = draw_y_axis(
         canvas,
@@ -416,7 +416,7 @@ def plot_delta_from_base_by_model(
     x_step = plot_width / len(methods)
     model_gap = min(56, x_step * 0.3)
 
-    canvas = PdfCanvas(width, height)
+    canvas = PngCanvas(width, height)
     canvas.text(left, 30, "Diversity delta from base by model", size_class="title")
     y_scale = draw_y_axis(
         canvas,
@@ -501,7 +501,7 @@ def plot_paired_difference_heatmap(
     width = left + cell_width * len(methods) + 58
     height = top + row_height * len(tasks) + 76
 
-    canvas = PdfCanvas(width, height)
+    canvas = PngCanvas(width, height)
     canvas.text(left, 30, "Pro minus Flash diversity by task", size_class="title")
     for col, method in enumerate(methods):
         x = left + col * cell_width + cell_width / 2
@@ -646,10 +646,10 @@ def write_outputs(
     ]
 
     outputs = [
-        output_dir / "diversity_by_model_and_method.pdf",
-        output_dir / "pro_minus_flash_diversity_by_method.pdf",
-        output_dir / "delta_from_base_by_model.pdf",
-        output_dir / "pro_minus_flash_diversity_heatmap.pdf",
+        output_dir / "diversity_by_model_and_method.png",
+        output_dir / "pro_minus_flash_diversity_by_method.png",
+        output_dir / "delta_from_base_by_model.png",
+        output_dir / "pro_minus_flash_diversity_heatmap.png",
         output_dir / "model_diversity_summary.csv",
         output_dir / "paired_task_method_deltas.csv",
         output_dir / "paired_delta_summary.csv",

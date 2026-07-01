@@ -317,7 +317,7 @@ class PreprocessProgressTests(unittest.TestCase):
         self.assertIsNotNone(shard_writer)
         build_manifest.assert_not_called()
 
-    def test_load_examples_from_cache_filters_before_dataclass_construction(self):
+    def test_load_examples_from_cache_filters_cached_examples(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         cache_path = temp_root / "examples.json"
         fingerprint = {"dataset": "fake"}
@@ -330,10 +330,16 @@ class PreprocessProgressTests(unittest.TestCase):
                 "trajectory_id": "traj_000001",
                 "step_index": 0,
                 "agent_id": "agent_0",
+                "task_instruction": "fake instruction",
                 "observation_views": ["front"],
                 "image_paths": [f"{sample_id}.png"],
+                "history_steps": [],
                 "allowed_tool_specs": {},
                 "tool_schemas": [],
+                "response_schema": {},
+                "target_payload": {},
+                "target_tool_call": {},
+                "target_text": "{}",
                 "messages": [],
             }
 
@@ -354,7 +360,6 @@ class PreprocessProgressTests(unittest.TestCase):
         examples = dataset.load_examples_from_cache(
             cache_path=cache_path,
             expected_fingerprint=fingerprint,
-            granularity="train",
             sample_id_filter=lambda sample_id: sample_id.endswith("keep"),
         )
 

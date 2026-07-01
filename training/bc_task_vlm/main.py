@@ -12,7 +12,7 @@ import random
 import sys
 import time
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,6 @@ except ImportError:  # pragma: no cover - compatibility with older transformers
 
 from training.bc_task_vlm.dataset import (
     CentralizedDataset,
-    DecentralizedDataset,
     LazyVisionSFTCollator,
     SFT_FORMAT_PLAIN,
     SFT_FORMAT_TOOL_CALL,
@@ -38,8 +37,8 @@ from training.bc_task_vlm.dataset import (
     build_example_cache_fingerprint,
     build_example_cache_path,
     build_centralized_examples,
-    build_decentralized_examples,
     build_split_manifest,
+    list_available_task_names,
     list_task_trajectory_ids,
     load_examples_from_cache,
     save_examples_to_cache,
@@ -62,21 +61,23 @@ class RunConfiguration:
     validation_trajectories_per_task: int
     validation_trajectory_fraction: float
     validation_split_seed: int
-    train_example_granularity: str
     sft_format: str
     use_example_cache: bool
     trust_example_cache: bool
     training_samples_cache_dir: str
     output_dir: str
     per_device_batch_size: int
+    per_device_eval_batch_size: int | None
     grad_accum: int
     num_epochs: float
     learning_rate: float
     max_length: int | None
+    max_tokens: int | None
     max_images_per_sample: int | None
-    max_history_steps_per_prompt: int | None
     supervise_last_assistant_turn_only: bool
     num_workers: int
+    example_build_workers: int
+    ddp_timeout_seconds: int
     bf16: bool
     fp16: bool
     gradient_checkpointing: bool
@@ -96,7 +97,9 @@ class RunConfiguration:
     optim: str
     eval_max_new_tokens: int
     eval_generation_batch_size: int
+    eval_max_samples: int | None
     eval_generation_max_samples: int | None
+    eval_generation_max_trajectories: int | None
     report_to: list[str]
     wandb_project: str | None
     wandb_entity: str | None
@@ -178,17 +181,6 @@ def parse_args() -> argparse.Namespace:
         help="Seed for selecting held-out validation trajectories. Defaults to --seed.",
     )
     parser.add_argument(
-        "--train-example-granularity",
-        choices=("centralized", "decentralized"),
-        default="decentralized",
-        help=(
-            "Training example format. 'centralized' is one next-action "
-            "prediction per global step. 'decentralized' turns each joint "
-            "two-agent episode into one conversation per agent and only "
-            "supervises that agent's assistant turns."
-        ),
-    )
-    parser.add_argument(
         "--sft-format",
         choices=SUPPORTED_SFT_FORMATS,
         default=SFT_FORMAT_PLAIN,
@@ -237,14 +229,26 @@ def parse_args() -> argparse.Namespace:
         help=argparse.SUPPRESS,
     )
     parser.add_argument("--per-device-batch-size", type=int, default=1)
+    parser.add_argument(
+        "--per-device-eval-batch-size",
+        type=int,
+        default=None,
+        help=(
+            "Per-device batch size for base evaluation. Defaults to "
+            "--per-device-batch-size when unset."
+        ),
+    )
     parser.add_argument("--grad-accum", type=int, default=8)
     parser.add_argument("--num-epochs", type=float, default=3.0)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument(
         "--max-length",
         type=int,
-        default=None,
-        help="Optional sequence truncation length. Leave unset for VLM training.",
+        default=16384,
+        help=(
+            "Maximum tokenized sequence length, also logged as max_tokens. "
+            "Non-positive values disable token truncation."
+        ),
     )
     parser.add_argument(
         "--max-images-per-sample",
@@ -253,15 +257,6 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Optional cap on recent image observations kept per multimodal SFT "
             "sample before tokenization. Non-positive values disable the cap."
-        ),
-    )
-    parser.add_argument(
-        "--max-history-steps-per-prompt",
-        type=int,
-        default=None,
-        help=(
-            "Optional cap on previous symbolic history lines kept in each user "
-            "prompt before tokenization. Non-positive values disable the cap."
         ),
     )
     parser.add_argument(
@@ -275,6 +270,25 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--example-build-workers",
+        type=int,
+        default=1,
+        help=(
+            "Number of worker threads used while converting staged trajectories "
+            "into in-memory SFT examples before Trainer dataloading starts."
+        ),
+    )
+    parser.add_argument(
+        "--ddp-timeout-seconds",
+        type=int,
+        default=600,
+        help=(
+            "Distributed process-group timeout in seconds. Increase this when "
+            "rank-0-only structured generation evaluation can run longer than "
+            "the default collective watchdog."
+        ),
+    )
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument(
@@ -312,10 +326,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-max-new-tokens", type=int, default=256)
     parser.add_argument("--eval-generation-batch-size", type=int, default=1)
     parser.add_argument(
+        "--eval-max-samples",
+        type=int,
+        default=None,
+        help="Optional cap for the evaluation dataset used by Trainer eval.",
+    )
+    parser.add_argument(
         "--eval-generation-max-samples",
         type=int,
         default=None,
         help="Optional cap for structured generation evaluation.",
+    )
+    parser.add_argument(
+        "--eval-generation-max-trajectories",
+        type=int,
+        default=None,
+        help="Optional trajectory cap for structured generation evaluation.",
     )
     parser.add_argument(
         "--report-to",
@@ -347,15 +373,7 @@ def _available_dataset_task_names(dataset_root: Path) -> list[str]:
     if not dataset_root.is_dir():
         return list(supported_task_names())
 
-    task_names: list[str] = []
-    for path in dataset_root.iterdir():
-        if not path.is_dir():
-            continue
-        try:
-            task_names.append(resolve_task_name(path.name))
-        except ValueError:
-            continue
-    return sorted(set(task_names))
+    return list_available_task_names(dataset_root)
 
 
 def _resolve_task_list(
@@ -552,6 +570,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
             "--validation-trajectory-fraction is positive. "
             f"Overlap: {overlap_text}."
         )
+    max_tokens = args.max_length if args.max_length and args.max_length > 0 else None
     return RunConfiguration(
         dataset_root=str(dataset_root),
         model_name_or_path=args.model_name_or_path,
@@ -565,7 +584,6 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
             if args.validation_split_seed is not None
             else args.seed
         ),
-        train_example_granularity=args.train_example_granularity,
         sft_format=args.sft_format,
         use_example_cache=args.use_example_cache,
         trust_example_cache=args.trust_example_cache,
@@ -576,23 +594,25 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         ),
         output_dir=str(_resolve_output_dir(args.output_dir).resolve()),
         per_device_batch_size=args.per_device_batch_size,
+        per_device_eval_batch_size=(
+            args.per_device_eval_batch_size
+            if args.per_device_eval_batch_size and args.per_device_eval_batch_size > 0
+            else None
+        ),
         grad_accum=args.grad_accum,
         num_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
-        max_length=args.max_length,
+        max_length=max_tokens,
+        max_tokens=max_tokens,
         max_images_per_sample=(
             args.max_images_per_sample
             if args.max_images_per_sample and args.max_images_per_sample > 0
             else None
         ),
-        max_history_steps_per_prompt=(
-            args.max_history_steps_per_prompt
-            if args.max_history_steps_per_prompt
-            and args.max_history_steps_per_prompt > 0
-            else None
-        ),
         supervise_last_assistant_turn_only=args.supervise_last_assistant_turn_only,
         num_workers=args.num_workers,
+        example_build_workers=max(args.example_build_workers, 1),
+        ddp_timeout_seconds=max(args.ddp_timeout_seconds, 1),
         bf16=args.bf16,
         fp16=args.fp16,
         gradient_checkpointing=args.gradient_checkpointing,
@@ -612,7 +632,18 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         optim=args.optim,
         eval_max_new_tokens=args.eval_max_new_tokens,
         eval_generation_batch_size=args.eval_generation_batch_size,
+        eval_max_samples=(
+            args.eval_max_samples
+            if args.eval_max_samples and args.eval_max_samples > 0
+            else None
+        ),
         eval_generation_max_samples=args.eval_generation_max_samples,
+        eval_generation_max_trajectories=(
+            args.eval_generation_max_trajectories
+            if args.eval_generation_max_trajectories
+            and args.eval_generation_max_trajectories > 0
+            else None
+        ),
         report_to=report_targets,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
@@ -641,6 +672,7 @@ def _load_processor(
     tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is not None:
         tokenizer.padding_side = "right"
+        tokenizer.truncation_side = "left"
     return processor
 
 
@@ -728,6 +760,12 @@ def _launcher_world_size() -> int:
         return 1
 
 
+def _bind_distributed_cuda_device(state: PartialState) -> None:
+    if not torch.cuda.is_available() or state.num_processes <= 1:
+        return
+    torch.cuda.set_device(getattr(state, "local_process_index", 0))
+
+
 def _is_primary_process() -> bool:
     raw_value = os.environ.get("RANK", "0")
     try:
@@ -793,35 +831,51 @@ def _log_startup(message: str, *, state: PartialState | None = None) -> None:
     print(f"[{timestamp}] {message}", file=sys.stderr, flush=True)
 
 
+def _task_example_cache_path(
+    *,
+    cache_dir: Path,
+    dataset_root: Path,
+    task_name: str,
+    trajectory_ids: set[str] | None,
+) -> Path:
+    cache_path = build_example_cache_path(
+        cache_dir=cache_dir,
+        dataset_root=dataset_root,
+        task_name=task_name,
+    )
+    if trajectory_ids is None:
+        return cache_path
+
+    selection_key = sha256(
+        "\n".join(sorted(trajectory_ids)).encode("utf-8")
+    ).hexdigest()[:16]
+    return cache_path.with_name(
+        f"{cache_path.stem}.traj-{selection_key}{cache_path.suffix}"
+    )
+
+
 def _build_examples_for_tasks(
     *,
     dataset_root: Path,
     task_names: list[str],
     split_name: str,
-    granularity: str,
     sft_format: str,
     use_example_cache: bool,
     trust_example_cache: bool,
     training_samples_cache_dir: Path,
     trajectory_ids_by_task: dict[str, set[str]] | None = None,
+    example_build_workers: int = 1,
     state: PartialState,
 ) -> list[Any]:
-    if granularity == "decentralized":
-        builder = build_decentralized_examples
-    elif granularity == "centralized":
-        builder = build_centralized_examples
-    else:  # pragma: no cover - parser restricts values
-        raise ValueError(f"Unsupported granularity: {granularity}")
-
     examples: list[Any] = []
     total_tasks = len(task_names)
     for task_index, task_name in enumerate(task_names, start=1):
         task_start = time.perf_counter()
         task_label = (
-            f"{split_name} {granularity} examples for task "
-            f"{task_name} ({task_index}/{total_tasks})"
+            f"{split_name} centralized examples for task {task_name} "
+            f"({task_index}/{total_tasks})"
         )
-        progress_description = f"{split_name} {granularity} {task_name}"
+        progress_description = f"{split_name} centralized {task_name}"
         fingerprint: dict[str, Any] | None = None
         cache_path: Path | None = None
         task_examples: list[Any] | None = None
@@ -832,19 +886,18 @@ def _build_examples_for_tasks(
             task_trajectory_ids = set(trajectory_ids_by_task.get(task_name, set()))
             trajectory_count = len(task_trajectory_ids)
 
-        cache_allowed = use_example_cache and task_trajectory_ids is None
+        cache_allowed = use_example_cache
         if cache_allowed:
-            cache_path = build_example_cache_path(
+            cache_path = _task_example_cache_path(
                 cache_dir=training_samples_cache_dir,
                 dataset_root=dataset_root,
                 task_name=task_name,
-                granularity=granularity,
+                trajectory_ids=task_trajectory_ids,
             )
             if trust_example_cache:
                 task_examples = load_examples_from_cache(
                     cache_path=cache_path,
                     expected_fingerprint=None,
-                    granularity=granularity,
                 )
                 if task_examples is not None:
                     task_source = "trusted-cache"
@@ -859,14 +912,13 @@ def _build_examples_for_tasks(
                 fingerprint = build_example_cache_fingerprint(
                     dataset_root=dataset_root,
                     task_name=task_name,
-                    granularity=granularity,
+                    trajectory_ids=task_trajectory_ids,
                     sft_format=sft_format,
                 )
                 trajectory_count = len(fingerprint.get("trajectories", ()))
                 task_examples = load_examples_from_cache(
                     cache_path=cache_path,
                     expected_fingerprint=fingerprint,
-                    granularity=granularity,
                 )
                 if task_examples is not None:
                     task_source = "cache"
@@ -889,12 +941,11 @@ def _build_examples_for_tasks(
                     task_examples = load_examples_from_cache(
                         cache_path=cache_path,
                         expected_fingerprint=fingerprint,
-                        granularity=granularity,
                     )
                     if task_examples is not None:
                         task_source = "cache"
             else:
-                task_examples = builder(
+                task_examples = build_centralized_examples(
                     dataset_root=dataset_root,
                     task_names=[task_name],
                     show_progress=state.is_main_process,
@@ -905,6 +956,7 @@ def _build_examples_for_tasks(
                         if task_trajectory_ids is None
                         else {task_name: task_trajectory_ids}
                     ),
+                    example_build_workers=example_build_workers,
                 )
                 if cache_allowed and cache_path is not None and fingerprint is not None:
                     try:
@@ -923,7 +975,7 @@ def _build_examples_for_tasks(
                     state.wait_for_everyone()
 
             if task_examples is None:
-                task_examples = builder(
+                task_examples = build_centralized_examples(
                     dataset_root=dataset_root,
                     task_names=[task_name],
                     show_progress=False,
@@ -934,6 +986,7 @@ def _build_examples_for_tasks(
                         if task_trajectory_ids is None
                         else {task_name: task_trajectory_ids}
                     ),
+                    example_build_workers=example_build_workers,
                 )
 
         examples.extend(task_examples)
@@ -948,6 +1001,9 @@ def _build_examples_for_tasks(
             f"dataset/{split_name}/{task_name}/seconds": elapsed_seconds,
             f"dataset/{split_name}/{task_name}/examples": len(task_examples),
             f"dataset/{split_name}/{task_name}/examples_per_second": example_rate,
+            f"dataset/{split_name}/{task_name}/example_build_workers": (
+                example_build_workers
+            ),
             f"dataset/{split_name}/{task_name}/cache_hit": (
                 1 if task_source in {"cache", "trusted-cache"} else 0
             ),
@@ -1044,6 +1100,26 @@ def _select_validation_trajectory_ids(
     return selected_by_task
 
 
+def _select_train_trajectory_ids(
+    *,
+    dataset_root: Path,
+    train_tasks: list[str],
+    selected_validation_trajectory_ids: dict[str, set[str]],
+) -> dict[str, set[str]]:
+    train_ids_by_task: dict[str, set[str]] = {}
+    for task_name in train_tasks:
+        held_out_ids = selected_validation_trajectory_ids.get(task_name, set())
+        train_ids_by_task[task_name] = {
+            trajectory_id
+            for trajectory_id in list_task_trajectory_ids(
+                dataset_root=dataset_root,
+                task_name=task_name,
+            )
+            if trajectory_id not in held_out_ids
+        }
+    return train_ids_by_task
+
+
 def _filter_examples_by_trajectory_ids(
     examples: list[Any],
     trajectory_ids_by_task: dict[str, set[str]],
@@ -1105,6 +1181,37 @@ def _apply_validation_trajectory_split(
     return filtered_train_examples, val_examples
 
 
+def _cap_eval_examples(
+    *,
+    val_examples: list[Any],
+    config: RunConfiguration,
+    state: PartialState,
+) -> list[Any]:
+    if config.eval_max_samples is None or len(val_examples) <= config.eval_max_samples:
+        return val_examples
+
+    rng = random.Random(config.seed)
+    selected_indices = sorted(
+        rng.sample(range(len(val_examples)), config.eval_max_samples)
+    )
+    capped_examples = [val_examples[index] for index in selected_indices]
+    _log_startup(
+        "Capped evaluation examples to "
+        f"{len(capped_examples)}/{len(val_examples)} samples "
+        f"with seed {config.seed}",
+        state=state,
+    )
+    _log_wandb_metrics(
+        {
+            "dataset/eval_cap/original_examples": len(val_examples),
+            "dataset/eval_cap/effective_examples": len(capped_examples),
+            "config/eval_max_samples": config.eval_max_samples,
+        },
+        state=state,
+    )
+    return capped_examples
+
+
 def _build_training_arguments(
     *,
     config: RunConfiguration,
@@ -1115,7 +1222,9 @@ def _build_training_arguments(
     training_kwargs: dict[str, Any] = {
         "output_dir": str(output_dir),
         "per_device_train_batch_size": config.per_device_batch_size,
-        "per_device_eval_batch_size": config.per_device_batch_size,
+        "per_device_eval_batch_size": (
+            config.per_device_eval_batch_size or config.per_device_batch_size
+        ),
         "gradient_accumulation_steps": config.grad_accum,
         "learning_rate": config.learning_rate,
         "num_train_epochs": config.num_epochs,
@@ -1132,7 +1241,7 @@ def _build_training_arguments(
         "run_name": config.wandb_run_name or output_dir.name,
         "dataloader_num_workers": config.num_workers,
         "gradient_checkpointing": config.gradient_checkpointing,
-        "ddp_find_unused_parameters": False,
+        "ddp_find_unused_parameters": True,
         "warmup_ratio": config.warmup_ratio,
         "lr_scheduler_type": config.lr_scheduler_type,
         "optim": config.optim,
@@ -1147,7 +1256,160 @@ def _build_training_arguments(
         training_kwargs["evaluation_strategy"] = evaluation_strategy
     else:
         training_kwargs["eval_strategy"] = evaluation_strategy
+    if "eval_on_start" in signature.parameters:
+        training_kwargs["eval_on_start"] = has_validation
+    if "ddp_timeout" in signature.parameters:
+        training_kwargs["ddp_timeout"] = config.ddp_timeout_seconds
     return TrainingArguments(**training_kwargs)
+
+
+def _is_loggable_metric_value(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _wandb_eval_section_metrics(
+    metrics: dict[str, float],
+    *,
+    metric_key_prefix: str,
+    section: str,
+) -> dict[str, float]:
+    prefix = f"{metric_key_prefix}_"
+    # Hugging Face's W&B callback rewrites only eval_* and test_* keys into
+    # top-level eval/ and test/ namespaces. A literal eval/... key is treated
+    # as a train metric and becomes train/eval/... in W&B.
+    grouped_prefix = f"{metric_key_prefix}_{section}"
+    grouped_metrics: dict[str, float] = {}
+    for key, value in metrics.items():
+        if not _is_loggable_metric_value(value):
+            continue
+        if key.startswith(prefix):
+            grouped_metrics[f"{grouped_prefix}/{key[len(prefix):]}"] = value
+        elif key == "epoch":
+            grouped_metrics[f"{grouped_prefix}/epoch"] = value
+    return grouped_metrics
+
+
+def _wandb_structured_section_metrics(
+    metrics: dict[str, float],
+    *,
+    section: str,
+) -> dict[str, float]:
+    grouped_metrics: dict[str, float] = {}
+    for key, value in metrics.items():
+        if not _is_loggable_metric_value(value):
+            continue
+        if key.startswith("fsm_"):
+            metric_name = key.removeprefix("fsm_")
+            grouped_metrics[f"eval_fsm/{metric_name}"] = value
+        elif key.startswith("structured_eval_"):
+            metric_name = key.removeprefix("structured_eval_")
+            grouped_metrics[f"eval_{section}/{metric_name}"] = value
+    return grouped_metrics
+
+
+class StructuredEvalTrainer(Trainer):
+    """Trainer that runs structured generation on the active evaluation dataset."""
+
+    def __init__(
+        self,
+        *,
+        structured_eval_config: RunConfiguration | None = None,
+        structured_eval_output_dir: Path | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.structured_eval_config = structured_eval_config
+        self.structured_eval_output_dir = structured_eval_output_dir
+        self.latest_structured_metrics: dict[str, float] = {}
+        super().__init__(**kwargs)
+
+    def evaluate(
+        self,
+        eval_dataset: Any | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        metrics = super().evaluate(
+            eval_dataset=eval_dataset,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix,
+        )
+        base_section_metrics = _wandb_eval_section_metrics(
+            metrics,
+            metric_key_prefix=metric_key_prefix,
+            section="base",
+        )
+        if base_section_metrics:
+            self.log(base_section_metrics)
+        structured_metrics = self._run_structured_eval(eval_dataset=eval_dataset)
+        if structured_metrics:
+            metrics.update(structured_metrics)
+        return metrics
+
+    def _run_structured_eval(
+        self,
+        *,
+        eval_dataset: Any | None = None,
+    ) -> dict[str, float]:
+        config = self.structured_eval_config
+        output_dir = self.structured_eval_output_dir
+        if config is None or output_dir is None:
+            return {}
+
+        resolved_eval_dataset = (
+            self.eval_dataset if eval_dataset is None else eval_dataset
+        )
+        if resolved_eval_dataset is None or isinstance(resolved_eval_dataset, dict):
+            return {}
+        try:
+            if len(resolved_eval_dataset) == 0:
+                return {}
+        except TypeError:
+            pass
+
+        self.accelerator.wait_for_everyone()
+        structured_metrics: dict[str, float] = {}
+        try:
+            if self.is_world_process_zero():
+                distributed_state = PartialState()
+                step_output_dir = (
+                    output_dir
+                    / "structured_eval"
+                    / f"step_{self.state.global_step:08d}"
+                )
+                _log_startup(
+                    "Running structured tool-call generation evaluation on "
+                    "the evaluation dataset",
+                    state=distributed_state,
+                )
+                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                structured_metrics = evaluate_structured_generation(
+                    model=unwrapped_model,
+                    eval_dataset=resolved_eval_dataset,
+                    processor_name_or_path=config.processor_name_or_path,
+                    output_dir=step_output_dir,
+                    max_length=config.max_length,
+                    max_new_tokens=config.eval_max_new_tokens,
+                    batch_size=config.eval_generation_batch_size,
+                    num_workers=config.num_workers,
+                    trust_remote_code=config.trust_remote_code,
+                    sft_format=config.sft_format,
+                    max_samples=config.eval_generation_max_samples,
+                    max_trajectories=config.eval_generation_max_trajectories,
+                )
+                self.latest_structured_metrics = dict(structured_metrics)
+                grouped_structured_metrics = _wandb_structured_section_metrics(
+                    structured_metrics,
+                    section="structured",
+                )
+                if grouped_structured_metrics:
+                    self.log(grouped_structured_metrics)
+                _save_json(
+                    output_dir / "structured_eval_metrics.json",
+                    structured_metrics,
+                )
+            return structured_metrics
+        finally:
+            self.accelerator.wait_for_everyone()
 
 
 def main() -> None:
@@ -1159,7 +1421,10 @@ def main() -> None:
 
     _configure_wandb(args, config.report_to, output_dir)
     set_seed(config.seed)
-    distributed_state = PartialState()
+    distributed_state = PartialState(
+        timeout=timedelta(seconds=config.ddp_timeout_seconds)
+    )
+    _bind_distributed_cuda_device(distributed_state)
     _validate_runtime_environment()
     config = _resolve_precision_config(config, state=distributed_state)
     _synchronize_accelerate_precision_env(config)
@@ -1181,6 +1446,31 @@ def main() -> None:
         state=distributed_state,
     )
     _log_startup(f"Using SFT format {config.sft_format}", state=distributed_state)
+    _log_startup(
+        "Using max_tokens "
+        f"{config.max_tokens if config.max_tokens is not None else 'unbounded'}",
+        state=distributed_state,
+    )
+    _log_startup(
+        "Using example build workers "
+        f"{config.example_build_workers} "
+        f"(example cache={'on' if config.use_example_cache else 'off'}, "
+        f"trust={'on' if config.trust_example_cache else 'off'})",
+        state=distributed_state,
+    )
+    if config.max_tokens is not None:
+        _log_wandb_metrics(
+            {"config/max_tokens": config.max_tokens},
+            state=distributed_state,
+        )
+    _log_wandb_metrics(
+        {
+            "config/example_build_workers": config.example_build_workers,
+            "config/use_example_cache": int(config.use_example_cache),
+            "config/trust_example_cache": int(config.trust_example_cache),
+        },
+        state=distributed_state,
+    )
 
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -1202,15 +1492,25 @@ def main() -> None:
             state=distributed_state,
         )
 
+    train_trajectory_ids_by_task = (
+        _select_train_trajectory_ids(
+            dataset_root=dataset_root,
+            train_tasks=config.train_tasks,
+            selected_validation_trajectory_ids=selected_validation_trajectory_ids,
+        )
+        if uses_held_out_validation and selected_validation_trajectory_ids
+        else None
+    )
     train_examples = _build_examples_for_tasks(
         dataset_root=dataset_root,
         task_names=config.train_tasks,
         split_name="train",
-        granularity=config.train_example_granularity,
         sft_format=config.sft_format,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
+        trajectory_ids_by_task=train_trajectory_ids_by_task,
+        example_build_workers=config.example_build_workers,
         state=distributed_state,
     )
     validation_trajectory_ids_by_task = (
@@ -1220,12 +1520,12 @@ def main() -> None:
         dataset_root=dataset_root,
         task_names=config.val_tasks,
         split_name="validation",
-        granularity="centralized",
         sft_format=config.sft_format,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
         trajectory_ids_by_task=validation_trajectory_ids_by_task,
+        example_build_workers=config.example_build_workers,
         state=distributed_state,
     )
     train_examples, val_examples = _apply_validation_trajectory_split(
@@ -1235,12 +1535,14 @@ def main() -> None:
         config=config,
         state=distributed_state,
     )
+    val_examples = _cap_eval_examples(
+        val_examples=val_examples,
+        config=config,
+        state=distributed_state,
+    )
     if not train_examples:
         raise ValueError("Training split is empty after validation holdout filtering.")
-    if config.train_example_granularity == "decentralized":
-        train_dataset = DecentralizedDataset(train_examples)
-    else:
-        train_dataset = CentralizedDataset(train_examples)
+    train_dataset = CentralizedDataset(train_examples)
     val_dataset = CentralizedDataset(val_examples)
 
     _log_startup("Building split manifest", state=distributed_state)
@@ -1276,14 +1578,20 @@ def main() -> None:
         _log_startup("Saving run metadata", state=distributed_state)
         _save_json(output_dir / "run_config.json", run_config_payload)
         _save_json(output_dir / "split_manifest.json", split_manifest)
-        processor.save_pretrained(output_dir / "processor")
-    distributed_state.wait_for_everyone()
+        if distributed_state.num_processes == 1:
+            processor.save_pretrained(output_dir / "processor")
+        else:
+            # The processor is restored from config.processor_name_or_path; avoid
+            # the native save path during distributed startup.
+            _log_startup(
+                "Skipping processor snapshot during distributed startup",
+                state=distributed_state,
+            )
 
     data_collator = LazyVisionSFTCollator(
         processor_name_or_path=config.processor_name_or_path,
         max_length=config.max_length,
         max_images_per_sample=config.max_images_per_sample,
-        max_history_steps_per_prompt=config.max_history_steps_per_prompt,
         supervise_last_assistant_turn_only=config.supervise_last_assistant_turn_only,
         trust_remote_code=config.trust_remote_code,
         sft_format=config.sft_format,
@@ -1302,7 +1610,9 @@ def main() -> None:
     )
 
     _log_startup("Initializing Trainer", state=distributed_state)
-    trainer = Trainer(
+    trainer = StructuredEvalTrainer(
+        structured_eval_config=config if len(val_dataset) > 0 else None,
+        structured_eval_output_dir=output_dir,
         model=model,
         args=training_args,
         data_collator=data_collator,
@@ -1315,6 +1625,14 @@ def main() -> None:
         f"and {len(val_dataset)} validation samples",
         state=distributed_state,
     )
+    if len(val_dataset) > 0 and not getattr(training_args, "eval_on_start", False):
+        _log_startup(
+            "Running initial evaluation before training",
+            state=distributed_state,
+        )
+        initial_eval_metrics = trainer.evaluate()
+        trainer.log_metrics("eval", initial_eval_metrics)
+        trainer.save_metrics("eval", initial_eval_metrics)
     train_result = trainer.train(resume_from_checkpoint=config.resume_from_checkpoint)
     trainer.save_model()
     trainer.save_state()
@@ -1325,33 +1643,14 @@ def main() -> None:
     eval_metrics: dict[str, float] = {}
     if len(val_dataset) > 0:
         eval_metrics = trainer.evaluate()
-        trainer.log(eval_metrics)
         trainer.log_metrics("eval", eval_metrics)
         trainer.save_metrics("eval", eval_metrics)
 
     trainer.accelerator.wait_for_everyone()
     if trainer.is_world_process_zero():
-        final_metrics = train_result.metrics | eval_metrics
-        if len(val_dataset) > 0:
-            _log_startup(
-                "Running structured tool-call generation evaluation",
-                state=distributed_state,
-            )
-            unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
-            structured_metrics = evaluate_structured_generation(
-                model=unwrapped_model,
-                eval_dataset=val_dataset,
-                processor_name_or_path=config.processor_name_or_path,
-                output_dir=output_dir,
-                max_length=config.max_length,
-                max_new_tokens=config.eval_max_new_tokens,
-                batch_size=config.eval_generation_batch_size,
-                trust_remote_code=config.trust_remote_code,
-                sft_format=config.sft_format,
-                max_samples=config.eval_generation_max_samples,
-            )
-            trainer.log(structured_metrics)
-            final_metrics |= structured_metrics
+        final_metrics = (
+            train_result.metrics | eval_metrics | trainer.latest_structured_metrics
+        )
         _save_json(output_dir / "final_metrics.json", final_metrics)
     trainer.accelerator.wait_for_everyone()
     _log_startup("Run complete", state=distributed_state)
