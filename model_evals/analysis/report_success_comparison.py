@@ -218,6 +218,30 @@ def sort_rows(rows: list[dict[str, Any]], sort_mode: str) -> list[dict[str, Any]
     return sorted(rows, key=lambda row: row["task"])
 
 
+def has_value(value: Any) -> bool:
+    return value not in ("", None)
+
+
+def float_or_nan(value: Any) -> float:
+    if not has_value(value):
+        return math.nan
+    return float(value)
+
+
+def finite_diff(lhs: float, rhs: float) -> float:
+    if math.isfinite(lhs) and math.isfinite(rhs):
+        return lhs - rhs
+    return 0.0
+
+
+def count_label(row: dict[str, Any], condition_name: str) -> str:
+    successes = row[f"{condition_name}_successes"]
+    episodes = row[f"{condition_name}_episodes"]
+    if not has_value(successes) or not has_value(episodes):
+        return "missing"
+    return f"{int(successes)}/{int(episodes)}"
+
+
 def fmt_duration(minutes: float) -> str:
     total_seconds = int(round(minutes * 60.0))
     hours, rem = divmod(total_seconds, 3600)
@@ -254,19 +278,19 @@ def plot_summary(
 ) -> None:
     rows = sort_rows(rows, "delta")
     tasks = [row["task"] for row in rows]
-    baseline_rates = [float(row[f"{baseline_name}_success_rate"] or 0.0) * 100 for row in rows]
-    comparison_rates = [float(row[f"{comparison_name}_success_rate"] or 0.0) * 100 for row in rows]
-    baseline_ci_low = [float(row[f"{baseline_name}_success_ci_low"] or 0.0) * 100 for row in rows]
-    baseline_ci_high = [float(row[f"{baseline_name}_success_ci_high"] or 0.0) * 100 for row in rows]
-    comparison_ci_low = [float(row[f"{comparison_name}_success_ci_low"] or 0.0) * 100 for row in rows]
-    comparison_ci_high = [float(row[f"{comparison_name}_success_ci_high"] or 0.0) * 100 for row in rows]
-    deltas = [float(row["delta_success_rate"] or 0.0) * 100 for row in rows]
-    delta_ci_low = [float(row["delta_success_ci_low"] or 0.0) * 100 for row in rows]
-    delta_ci_high = [float(row["delta_success_ci_high"] or 0.0) * 100 for row in rows]
-    baseline_durations = [float(row[f"{baseline_name}_duration_minutes"] or 0.0) for row in rows]
-    comparison_durations = [float(row[f"{comparison_name}_duration_minutes"] or 0.0) for row in rows]
-    duration_multipliers = [float(row["duration_multiplier"] or 0.0) for row in rows]
-    duration_percent_changes = [float(row["duration_percent_change"] or 0.0) for row in rows]
+    baseline_rates = [float_or_nan(row[f"{baseline_name}_success_rate"]) * 100 for row in rows]
+    comparison_rates = [float_or_nan(row[f"{comparison_name}_success_rate"]) * 100 for row in rows]
+    baseline_ci_low = [float_or_nan(row[f"{baseline_name}_success_ci_low"]) * 100 for row in rows]
+    baseline_ci_high = [float_or_nan(row[f"{baseline_name}_success_ci_high"]) * 100 for row in rows]
+    comparison_ci_low = [float_or_nan(row[f"{comparison_name}_success_ci_low"]) * 100 for row in rows]
+    comparison_ci_high = [float_or_nan(row[f"{comparison_name}_success_ci_high"]) * 100 for row in rows]
+    deltas = [float_or_nan(row["delta_success_rate"]) * 100 for row in rows]
+    delta_ci_low = [float_or_nan(row["delta_success_ci_low"]) * 100 for row in rows]
+    delta_ci_high = [float_or_nan(row["delta_success_ci_high"]) * 100 for row in rows]
+    baseline_durations = [float_or_nan(row[f"{baseline_name}_duration_minutes"]) for row in rows]
+    comparison_durations = [float_or_nan(row[f"{comparison_name}_duration_minutes"]) for row in rows]
+    duration_multipliers = [float_or_nan(row["duration_multiplier"]) for row in rows]
+    duration_percent_changes = [float_or_nan(row["duration_percent_change"]) for row in rows]
 
     baseline_color = "#2F6BFF"
     comparison_color = "#F28E2B"
@@ -314,8 +338,14 @@ def plot_summary(
     bar_width = 0.38
     base_x = [x - bar_width / 2 for x in x_positions]
     comp_x = [x + bar_width / 2 for x in x_positions]
-    base_yerr = [[rate - lo for rate, lo in zip(baseline_rates, baseline_ci_low)], [hi - rate for rate, hi in zip(baseline_rates, baseline_ci_high)]]
-    comp_yerr = [[rate - lo for rate, lo in zip(comparison_rates, comparison_ci_low)], [hi - rate for rate, hi in zip(comparison_rates, comparison_ci_high)]]
+    base_yerr = [
+        [finite_diff(rate, lo) for rate, lo in zip(baseline_rates, baseline_ci_low)],
+        [finite_diff(hi, rate) for rate, hi in zip(baseline_rates, baseline_ci_high)],
+    ]
+    comp_yerr = [
+        [finite_diff(rate, lo) for rate, lo in zip(comparison_rates, comparison_ci_low)],
+        [finite_diff(hi, rate) for rate, hi in zip(comparison_rates, comparison_ci_high)],
+    ]
 
     ax_rates.bar(base_x, baseline_rates, width=bar_width, label=baseline_name.replace("_", " "), color=baseline_color, alpha=0.95, yerr=base_yerr, capsize=3, ecolor="#333333", linewidth=0.6)
     ax_rates.bar(comp_x, comparison_rates, width=bar_width, label=comparison_name.replace("_", " "), color=comparison_color, alpha=0.95, yerr=comp_yerr, capsize=3, ecolor="#333333", linewidth=0.6)
@@ -328,16 +358,20 @@ def plot_summary(
     ax_rates.spines[["top", "right"]].set_visible(False)
     ax_rates.legend(loc="upper right", frameon=False, ncols=2)
     for idx, (base, comp, row) in enumerate(zip(baseline_rates, comparison_rates, rows)):
-        base_label = f"{int(row[f'{baseline_name}_successes'])}/{int(row[f'{baseline_name}_episodes'])}"
-        comp_label = f"{int(row[f'{comparison_name}_successes'])}/{int(row[f'{comparison_name}_episodes'])}"
-        ax_rates.text(idx - bar_width / 2, min(max(base, baseline_ci_high[idx]) + 2.0, 108), base_label, va="bottom", ha="center", fontsize=7, rotation=90 if len(tasks) > 14 else 0)
-        ax_rates.text(idx + bar_width / 2, min(max(comp, comparison_ci_high[idx]) + 2.0, 108), comp_label, va="bottom", ha="center", fontsize=7, rotation=90 if len(tasks) > 14 else 0)
+        base_y = min(max(base, baseline_ci_high[idx]) + 2.0, 108) if math.isfinite(base) else 2.0
+        comp_y = min(max(comp, comparison_ci_high[idx]) + 2.0, 108) if math.isfinite(comp) else 2.0
+        ax_rates.text(idx - bar_width / 2, base_y, count_label(row, baseline_name), va="bottom", ha="center", fontsize=7, rotation=90 if len(tasks) > 14 else 0)
+        ax_rates.text(idx + bar_width / 2, comp_y, count_label(row, comparison_name), va="bottom", ha="center", fontsize=7, rotation=90 if len(tasks) > 14 else 0)
 
     colors = [positive_color if value > 0 else negative_color if value < 0 else neutral_color for value in deltas]
-    delta_yerr = [[delta - lo for delta, lo in zip(deltas, delta_ci_low)], [hi - delta for delta, hi in zip(deltas, delta_ci_high)]]
+    delta_yerr = [
+        [finite_diff(delta, lo) for delta, lo in zip(deltas, delta_ci_low)],
+        [finite_diff(hi, delta) for delta, hi in zip(deltas, delta_ci_high)],
+    ]
     ax_delta.bar(x_positions, deltas, color=colors, width=0.58, yerr=delta_yerr, capsize=3, ecolor="#333333")
     ax_delta.axhline(0, color="#222222", linewidth=0.9)
-    max_abs_delta = max([20.0] + [abs(v) for v in delta_ci_low + delta_ci_high])
+    finite_delta_bounds = [abs(v) for v in delta_ci_low + delta_ci_high if math.isfinite(v)]
+    max_abs_delta = max([20.0] + finite_delta_bounds)
     ax_delta.set_ylim(-max_abs_delta - 8, max_abs_delta + 8)
     ax_delta.set_ylabel("Delta (pp)")
     ax_delta.set_title("Success-rate delta, two robot minus one robot", loc="left", fontweight="bold")
@@ -346,6 +380,8 @@ def plot_summary(
     ax_delta.grid(axis="y", alpha=0.18)
     ax_delta.spines[["top", "right"]].set_visible(False)
     for idx, value in enumerate(deltas):
+        if not math.isfinite(value):
+            continue
         va = "bottom" if value >= 0 else "top"
         y = value + (1.0 if value >= 0 else -1.0)
         ax_delta.text(idx, y, f"{value:+.0f}", va=va, ha="center", fontsize=8)
@@ -360,7 +396,16 @@ def plot_summary(
     ax_duration.spines[["top", "right"]].set_visible(False)
     ax_duration.legend(loc="upper right", frameon=False, ncols=2)
     for idx, (multiplier, pct_change) in enumerate(zip(duration_multipliers, duration_percent_changes)):
-        y = max(baseline_durations[idx], comparison_durations[idx]) + 0.6
+        if not math.isfinite(multiplier) or not math.isfinite(pct_change):
+            continue
+        finite_durations = [
+            value
+            for value in (baseline_durations[idx], comparison_durations[idx])
+            if math.isfinite(value)
+        ]
+        if not finite_durations:
+            continue
+        y = max(finite_durations) + 0.6
         color = negative_color if pct_change > 0 else positive_color if pct_change < 0 else neutral_color
         ax_duration.text(
             idx,
@@ -420,6 +465,12 @@ def main() -> None:
         "comparison_spawn_sources": dict(comparison_spawn_sources),
         "timing_note": "Per-task durations are wall-clock estimates from run directory timestamps to stats.json modification times. Aggregate duration is condition-level wall-clock span from first run start to last stats.json write. Current logs do not contain per-episode runtime samples, so timing confidence intervals are not available.",
         "success_ci_note": "Success-rate confidence intervals use Wilson 95% intervals. Delta intervals are conservative independent-binomial bounds from the two Wilson intervals.",
+        "missing_baseline_tasks": [
+            row["task"] for row in rows if not has_value(row[f"{args.baseline_condition}_successes"])
+        ],
+        "missing_comparison_tasks": [
+            row["task"] for row in rows if not has_value(row[f"{args.comparison_condition}_successes"])
+        ],
         "tasks": rows,
     }
 
@@ -439,6 +490,10 @@ def main() -> None:
         f"runtime multiplier: {summary['duration_multiplier']:.2f}x "
         f"({summary['duration_percent_change']:+.1f}%)"
     )
+    if summary["missing_baseline_tasks"]:
+        print(f"missing {args.baseline_condition} stats: {', '.join(summary['missing_baseline_tasks'])}")
+    if summary["missing_comparison_tasks"]:
+        print(f"missing {args.comparison_condition} stats: {', '.join(summary['missing_comparison_tasks'])}")
 
 
 if __name__ == "__main__":
