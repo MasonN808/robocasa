@@ -412,6 +412,7 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
         layout: int | None = None,
         style: int | None = None,
         seed: int | None = None,
+        split: str | None = None,
         camera_names: list[str] | None = None,
         render_width: int = 512,
         render_height: int = 512,
@@ -433,6 +434,12 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
 
         self._full_scene_view = full_scene_view
         self._num_robots = robots
+        self._grid_kwargs = dict(
+            cell_size=cell_size,
+            align_to_wall=align_to_wall,
+            standoff=standoff,
+            sample_spacing=sample_spacing,
+        )
         robot_list = ["PandaOmron"] * robots
 
         env_kwargs = dict(
@@ -444,10 +451,24 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
             use_camera_obs=False,
             ignore_done=True,
         )
+        if split == "target":
+            env_kwargs["obj_instance_split"] = "target"
+            env_kwargs["layout_and_style_ids"] = list(zip(range(1, 11), range(1, 11)))
+        elif split == "pretrain":
+            env_kwargs["obj_instance_split"] = "pretrain"
+            env_kwargs["layout_ids"] = -2
+            env_kwargs["style_ids"] = -2
+        elif split == "all":
+            env_kwargs["layout_ids"] = -3
+            env_kwargs["style_ids"] = -3
+        elif split is not None:
+            raise ValueError("split must be one of None, 'pretrain', 'target', or 'all'")
         if layout is not None:
             env_kwargs["layout_ids"] = [layout]
+            env_kwargs.pop("layout_and_style_ids", None)
         if style is not None:
             env_kwargs["style_ids"] = [style]
+            env_kwargs.pop("layout_and_style_ids", None)
         if seed is not None:
             env_kwargs["seed"] = seed
         if update_fxtr_cfg_dict is not None:
@@ -476,16 +497,13 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
         else:
             self.camera_names = camera_names
 
+        _ = placement  # Grid is the only supported placement backend today.
+        self._refresh_scene_dependent_helpers()
+
+    def _refresh_scene_dependent_helpers(self) -> None:
         # Build fixture index and the active occupancy-grid placement helpers.
         self._fixtures: dict[str, Fixture] = dict(self.env.fixtures)
-        _ = placement  # Grid is the only supported placement backend today.
-        grid_kwargs = dict(
-            cell_size=cell_size,
-            align_to_wall=align_to_wall,
-            standoff=standoff,
-            sample_spacing=sample_spacing,
-        )
-        self._occupancy_grid = OccupancyGrid(self._fixtures, **grid_kwargs)
+        self._occupancy_grid = OccupancyGrid(self._fixtures, **self._grid_kwargs)
 
         base_room_cam_config = CamUtils.LAYOUT_CAMS.get(
             self.env.layout_id, CamUtils.DEFAULT_LAYOUT_CAM
@@ -495,9 +513,14 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
         )
         self._top_cam_config = self._compute_top_cam_config(self._room_cam_config)
 
-        self._scene: dict | None = None
-        self._object_locations: dict[str, str] = {}
-        self._last_placement_diagnostics: dict[str, object] | None = None
+        self._scene = None
+        self._object_locations = {}
+        self._last_placement_diagnostics = None
+
+    def reset_scene(self) -> None:
+        self.env.reset()
+        self._apply_robot_colors()
+        self._refresh_scene_dependent_helpers()
 
     def _placement_debug_enabled(self) -> bool:
         return os.environ.get(_SWEEP_VERBOSE_ENV_VAR, "").strip().lower() in {

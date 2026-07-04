@@ -388,6 +388,7 @@ class SimToolExecutor(
         layout: int | None = None,
         style: int | None = None,
         seed: int | None = None,
+        split: str | None = None,
         camera_names: list[str] | None = None,
         render_width: int = 512,
         render_height: int = 512,
@@ -413,6 +414,7 @@ class SimToolExecutor(
             layout=layout,
             style=style,
             seed=seed,
+            split=split,
             camera_names=camera_names,
             render_width=render_width,
             render_height=render_height,
@@ -451,6 +453,21 @@ class SimToolExecutor(
         self._place_robots_at_spawn()
         self._initialize_support_graph_from_scene()
         self._capture_baseline_state()
+
+    def reset_scene(self) -> None:
+        """Reset the underlying task env and refresh executor caches."""
+        self.runner.reset_scene()
+        self.env = self.runner.env
+        self._held_objects.clear()
+        self._held_object_offsets.clear()
+        self._support_parents.clear()
+        self._recent_opened_sliding_fixture.clear()
+        self._place_robots_at_spawn()
+        self._initialize_support_graph_from_scene()
+        self._capture_baseline_state()
+        invalidate_visual_cache = getattr(self, "_invalidate_visual_cache", None)
+        if callable(invalidate_visual_cache):
+            invalidate_visual_cache()
 
     def _place_robots_at_spawn(self):
         """Move all robots to init_robot_base_ref — the task's ground truth spawn."""
