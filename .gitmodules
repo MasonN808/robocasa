@@ -2,3 +2,15 @@
 	path = robosuite
 	url = https://github.com/MasonN808/robosuite.git
 	branch = dev
+[submodule "external/openpi"]
+	path = external/openpi
+	url = https://github.com/DorianAtSchool/openpi-1.git
+	branch = robocasa-eval
+[submodule "external/rldx-1"]
+	path = external/rldx-1
+	url = https://github.com/DorianAtSchool/RLDX-1.git
+	branch = robocasa-eval
+[submodule "external/Isaac-GR00T"]
+	path = external/Isaac-GR00T
+	url = https://github.com/DorianAtSchool/Isaac-GR00T.git
+	branch = robocasa-eval
