@@ -15,9 +15,16 @@
 
 set -euo pipefail
 
+venv_path="/work/hdd/bgjs/dbenhamougoldfajn/robocasa/.venv"
+if [[ -d "$venv_path" ]]; then
+  source "$venv_path/bin/activate"
+else
+  echo "Warning: venv not found at $venv_path" >&2
+fi
+
 usage() {
   cat <<'EOF'
-Usage: sbatch scripts/sbatch_image_processing_gpuA100x4_4nodes.sh <run_timestamp> [sweep_cli_args...]
+Usage: sbatch scripts/sbatch/sbatch_image_processing_gpuA100x4_4nodes.sh <run_timestamp> [sweep_cli_args...]
 
 Runs task-level image generation across 4 Delta gpuA100x4 nodes.
 Each node renders a deterministic shard of the run timestamp on its local
@@ -80,7 +87,7 @@ for ((gpu_id = 0; gpu_id < gpus_per_node; gpu_id += 1)); do
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
 data_root="${ROBOCASA_TASK_LEVEL_DATA_ROOT:-$repo_root/data_generation/task_level/data}"
 output_dir="$data_root/image/$run_timestamp"
 shard_dir="$output_dir/.slurm_shards"

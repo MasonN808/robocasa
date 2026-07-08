@@ -1,26 +1,28 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=image-processing
 #SBATCH --account=bgjs-delta-gpu
-#SBATCH --partition=gpuA40x4
+#SBATCH --partition=gpuA100x4
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=mnakamura@umass.edu
-#SBATCH --time=15:00:00
-#SBATCH --chdir=/work/hdd/bgjs/mnakamura/robocasa
-#SBATCH --output=slurm-%j.out
+#SBATCH --mail-user=dbenhamougol@umass.edu
+#SBATCH --time=24:00:00
+#SBATCH --chdir=/work/hdd/bgjs/dbenhamougoldfajn/robocasa
+#SBATCH --output=slurm_logs/slurm-%j.out
 
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: sbatch scripts/sbatch_image_processing_gpuA40x4_4nodes.sh <run_timestamp> [sweep_cli_args...]
+Usage: sbatch scripts/sbatch/sbatch_image_processing_gpuA100x4_4nodes.sh <run_timestamp> [sweep_cli_args...]
 
-Runs task-level image generation across 4 Delta gpuA40x4 nodes.
-Each node renders a deterministic shard of the run timestamp on its local 4 GPUs.
+Runs task-level image generation across 4 Delta gpuA100x4 nodes.
+Each node renders a deterministic shard of the run timestamp on its local
+4 A100 GPUs.
+
 Shard logs and summaries are written under:
   data_generation/task_level/data/image/<run_timestamp>/.slurm_shards/
 
@@ -28,10 +30,13 @@ After all nodes finish, the wrapper merges the shard summaries into:
   data_generation/task_level/data/image/<run_timestamp>/sweep_summary.json
 
 Example:
-  sbatch scripts/sbatch_image_processing_gpuA40x4_4nodes.sh 20260401T000000Z
+  sbatch scripts/sbatch_image_processing_gpuA100x4_4nodes.sh 20260401T000000Z
+
+Note:
+  Submit when at least 9 gpuA100x4 nodes are free.
 
 Optional environment overrides:
-  WORKERS_PER_GPU=28
+  WORKERS_PER_GPU=8
   GPUS_PER_NODE=4
 
 Additional args are forwarded to:
@@ -52,7 +57,9 @@ fi
 run_timestamp="$1"
 shift
 
-workers_per_gpu="${WORKERS_PER_GPU:-28}"
+export MUJOCO_GL="egl"
+
+workers_per_gpu="${WORKERS_PER_GPU:-8}"
 gpus_per_node="${GPUS_PER_NODE:-4}"
 
 if ! [[ "$workers_per_gpu" =~ ^[1-9][0-9]*$ ]]; then
@@ -73,7 +80,7 @@ for ((gpu_id = 0; gpu_id < gpus_per_node; gpu_id += 1)); do
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
 data_root="${ROBOCASA_TASK_LEVEL_DATA_ROOT:-$repo_root/data_generation/task_level/data}"
 output_dir="$data_root/image/$run_timestamp"
 shard_dir="$output_dir/.slurm_shards"

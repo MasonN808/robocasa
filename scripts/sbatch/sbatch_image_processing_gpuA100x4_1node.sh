@@ -2,7 +2,7 @@
 #SBATCH --job-name=image-processing
 #SBATCH --account=bgjs-delta-gpu
 #SBATCH --partition=gpuA100x4
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
 #SBATCH --gpus-per-node=4
@@ -17,23 +17,17 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: sbatch scripts/sbatch_image_processing_gpuA100x4_4nodes.sh <run_timestamp> [sweep_cli_args...]
+Usage: sbatch scripts/sbatch/sbatch_image_processing_gpuA100x4_1node.sh <run_timestamp> [sweep_cli_args...]
 
-Runs task-level image generation across 4 Delta gpuA100x4 nodes.
-Each node renders a deterministic shard of the run timestamp on its local
-4 A100 GPUs.
-
+Runs task-level image generation on one Delta gpuA100x4 node.
 Shard logs and summaries are written under:
   data_generation/task_level/data/image/<run_timestamp>/.slurm_shards/
 
-After all nodes finish, the wrapper merges the shard summaries into:
+After completion, the wrapper merges the shard summary into:
   data_generation/task_level/data/image/<run_timestamp>/sweep_summary.json
 
 Example:
-  sbatch scripts/sbatch_image_processing_gpuA100x4_4nodes.sh 20260401T000000Z
-
-Note:
-  Submit when at least 9 gpuA100x4 nodes are free.
+  sbatch scripts/sbatch_image_processing_gpuA100x4_1node.sh 20260401T000000Z
 
 Optional environment overrides:
   WORKERS_PER_GPU=8
@@ -80,7 +74,7 @@ for ((gpu_id = 0; gpu_id < gpus_per_node; gpu_id += 1)); do
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
 data_root="${ROBOCASA_TASK_LEVEL_DATA_ROOT:-$repo_root/data_generation/task_level/data}"
 output_dir="$data_root/image/$run_timestamp"
 shard_dir="$output_dir/.slurm_shards"

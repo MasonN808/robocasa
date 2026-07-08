@@ -1724,15 +1724,14 @@ def _iter_completed_runs(output_root: Path):
         style = run_result["style"]
         seed = run_result["seed"]
 
+        # When called with a task-level dir (output_root.name == task_dir),
+        # the task_dir component is already baked in — don't add it again.
+        task_root = output_root if output_root.name == task_dir else output_root / task_dir
+
         if combo_count == 1:
-            run_dir = output_root / task_dir / f"traj_{traj_idx:06d}"
+            run_dir = task_root / f"traj_{traj_idx:06d}"
         else:
-            run_dir = (
-                output_root
-                / task_dir
-                / f"traj_{traj_idx:06d}"
-                / f"L{layout}_S{style}_sd{seed}"
-            )
+            run_dir = task_root / f"traj_{traj_idx:06d}" / f"L{layout}_S{style}_sd{seed}"
 
         meta_path = run_dir / "trajectory_execution_metadata.json"
         if not meta_path.exists():
@@ -1807,7 +1806,7 @@ def upload_sweep_metadata_files(repo_id: str, output_root: Path) -> None:
 
 def _resolve_step_images(
     image_paths: list[str] | None, image_columns: list[str]
-) -> dict[str, str | None]:
+) -> dict[str, dict | None]:
     images = {col: None for col in image_columns}
     for img_path_str in image_paths or []:
         img_path = Path(img_path_str)
@@ -1818,7 +1817,7 @@ def _resolve_step_images(
         fname = img_path.stem
         for view_token in image_columns:
             if f"_{view_token}_" in f"_{fname}_":
-                images[view_token] = str(img_path)
+                images[view_token] = {"bytes": img_path.read_bytes(), "path": None}
                 break
     return images
 
@@ -1911,8 +1910,60 @@ def _build_step_level_dataset(output_root: Path) -> "datasets.Dataset":
     return ds
 
 
-def _build_trajectory_level_dataset(output_root: Path) -> "datasets.Dataset":
+def _build_trajectory_run_row(
+    run: dict[str, Any],
+    image_columns: list[str],
+) -> dict[str, Any]:
+    """Build one trajectory-level dataset row from a completed run."""
+
+    metadata = run["metadata"]
+    row: dict[str, Any] = {
+        "episode_id": run["episode_id"],
+        "task": run["task"],
+        "task_dir": run["task_dir"],
+        "layout": run["layout"],
+        "style": run["style"],
+        "seed": run["seed"],
+        "num_steps": len(metadata.get("steps", [])),
+        "run_dir": run["run_dir_rel"],
+        "adapted_trajectory": _read_compact_json(
+            run["run_dir"] / "adapted_trajectory.json"
+        ),
+        "original_trajectory": _read_compact_json(
+            run["run_dir"] / "original_trajectory.json"
+        ),
+        "execution_metadata": json.dumps(metadata, separators=(",", ":")),
+        "step_index": [],
+        "tool_name": [],
+        "tool_args": [],
+        "robot_idx": [],
+        "success": [],
+        **{col: [] for col in image_columns},
+    }
+    for step in metadata.get("steps", []):
+        images = _resolve_step_images(step.get("image_paths"), image_columns)
+        args_clean = {
+            k: v for k, v in (step.get("args") or {}).items() if k != "image_paths"
+        }
+        row["step_index"].append(step.get("step_index", 0))
+        row["tool_name"].append(step.get("tool", ""))
+        row["tool_args"].append(json.dumps(args_clean, separators=(",", ":")))
+        row["robot_idx"].append(step.get("robot_idx", 0))
+        row["success"].append(step.get("success", False))
+        for col in image_columns:
+            row[col].append(images[col])
+    return row
+
+
+def _build_trajectory_level_dataset(
+    output_root: Path,
+    *,
+    num_proc: int = 1,
+) -> "datasets.Dataset":
     """Convert sweep output directory into a trajectory-level dataset."""
+
+    from concurrent.futures import ThreadPoolExecutor
+    from functools import partial
 
     from datasets import Dataset, Features, Image as HFImage, Sequence, Value
 
@@ -1926,49 +1977,14 @@ def _build_trajectory_level_dataset(output_root: Path) -> "datasets.Dataset":
         "wrist",
     ]
 
-    rows: list[dict[str, Any]] = []
-    for run in _iter_completed_runs(output_root):
-        metadata = run["metadata"]
-        row = {
-            "episode_id": run["episode_id"],
-            "task": run["task"],
-            "task_dir": run["task_dir"],
-            "layout": run["layout"],
-            "style": run["style"],
-            "seed": run["seed"],
-            "num_steps": len(metadata.get("steps", [])),
-            "run_dir": run["run_dir_rel"],
-            "adapted_trajectory": _read_compact_json(
-                run["run_dir"] / "adapted_trajectory.json"
-            ),
-            "original_trajectory": _read_compact_json(
-                run["run_dir"] / "original_trajectory.json"
-            ),
-            "execution_metadata": json.dumps(metadata, separators=(",", ":")),
-            "step_index": [],
-            "tool_name": [],
-            "tool_args": [],
-            "robot_idx": [],
-            "success": [],
-            **{col: [] for col in image_columns},
-        }
+    runs = list(_iter_completed_runs(output_root))
+    build_row = partial(_build_trajectory_run_row, image_columns=image_columns)
 
-        for step in metadata.get("steps", []):
-            images = _resolve_step_images(step.get("image_paths"), image_columns)
-            images = _resolve_step_images(step.get("image_paths"), image_columns)
-            args_clean = {
-                k: v for k, v in (step.get("args") or {}).items() if k != "image_paths"
-            }
-
-            row["step_index"].append(step.get("step_index", 0))
-            row["tool_name"].append(step.get("tool", ""))
-            row["tool_args"].append(json.dumps(args_clean, separators=(",", ":")))
-            row["robot_idx"].append(step.get("robot_idx", 0))
-            row["success"].append(step.get("success", False))
-            for col in image_columns:
-                row[col].append(images[col])
-
-        rows.append(row)
+    if num_proc > 1:
+        with ThreadPoolExecutor(max_workers=num_proc) as pool:
+            rows = list(pool.map(build_row, runs))
+    else:
+        rows = [build_row(run) for run in runs]
 
     features = Features(
         {
@@ -1989,7 +2005,6 @@ def _build_trajectory_level_dataset(output_root: Path) -> "datasets.Dataset":
             "robot_idx": Sequence(Value("int32")),
             "success": Sequence(Value("bool")),
             **{col: Sequence(HFImage()) for col in image_columns},
-            **{col: Sequence(HFImage()) for col in image_columns},
         }
     )
 
@@ -2001,14 +2016,15 @@ def _build_trajectory_level_dataset(output_root: Path) -> "datasets.Dataset":
 def sweep_output_to_dataset(
     output_root: Path,
     *,
-    row_granularity: str = "step",
+    row_granularity: str = "trajectory",
+    num_proc: int = 1,
 ) -> "datasets.Dataset":
     """Convert sweep output into a dataset with configurable row granularity."""
 
     if row_granularity == "step":
         return _build_step_level_dataset(output_root)
     if row_granularity == "trajectory":
-        return _build_trajectory_level_dataset(output_root)
+        return _build_trajectory_level_dataset(output_root, num_proc=num_proc)
     raise ValueError(f"Unsupported row granularity: {row_granularity}")
 
 
@@ -2016,7 +2032,7 @@ def build_dataset_card(
     repo_id: str,
     ds: "datasets.Dataset",
     *,
-    row_granularity: str = "step",
+    row_granularity: str = "trajectory",
 ) -> str:
     """Build a readable HuggingFace dataset card."""
 
@@ -2130,7 +2146,7 @@ def upload_dataset_card(
     repo_id: str,
     ds: "datasets.Dataset",
     *,
-    row_granularity: str = "step",
+    row_granularity: str = "trajectory",
 ) -> None:
     """Overwrite the auto-generated Hub README with a readable dataset card."""
 
@@ -2304,8 +2320,8 @@ def main() -> None:
     parser.add_argument(
         "--row-granularity",
         choices=["step", "trajectory"],
-        default="step",
-        help="Dataset row shape when exporting or pushing (default: step)",
+        default="trajectory",
+        help="Dataset row shape when exporting or pushing (default: trajectory)",
     )
     parser.add_argument(
         "--videos",

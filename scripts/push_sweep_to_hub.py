@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sweep_trajectories import (
     sweep_output_to_dataset,
     upload_dataset_card,
-    upload_sweep_sidecars,
+    upload_sweep_metadata_files,
 )
 
 
@@ -27,8 +27,14 @@ def main():
     parser.add_argument(
         "--row-granularity",
         choices=["step", "trajectory"],
-        default="step",
-        help="Dataset row shape to publish (default: step)",
+        default="trajectory",
+        help="Dataset row shape to publish (default: trajectory)",
+    )
+    parser.add_argument(
+        "--num-proc",
+        type=int,
+        default=1,
+        help="Number of threads for parallel dataset row building (default: 1)",
     )
     args = parser.parse_args()
 
@@ -38,7 +44,9 @@ def main():
         sys.exit(1)
 
     print(f"Converting {sweep_dir} to HuggingFace dataset...")
-    ds = sweep_output_to_dataset(sweep_dir, row_granularity=args.row_granularity)
+    ds = sweep_output_to_dataset(
+        sweep_dir, row_granularity=args.row_granularity, num_proc=args.num_proc
+    )
     print(f"\nDataset info:")
     print(f"  rows: {len(ds)}")
     print(f"  columns: {ds.column_names}")
@@ -46,7 +54,7 @@ def main():
     ds.push_to_hub(args.repo_id)
     if args.row_granularity == "step":
         print("Uploading sweep metadata sidecars...")
-        upload_sweep_sidecars(args.repo_id, sweep_dir)
+        upload_sweep_metadata_files(args.repo_id, sweep_dir)
     print("Uploading dataset card...")
     upload_dataset_card(args.repo_id, ds, row_granularity=args.row_granularity)
     print(f"Done! Dataset at https://huggingface.co/datasets/{args.repo_id}")

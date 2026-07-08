@@ -202,6 +202,8 @@ data_analysis/raw_gemini_pro_traj
 
 data_analysis/model_sampling_comparison
 
+data_generation/task_level/data_probe/
+
 # model evaluation outputs
 logs/
 

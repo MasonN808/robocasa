@@ -121,7 +121,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 data_root="${ROBOCASA_TASK_LEVEL_DATA_ROOT:-$repo_root/data_generation/task_level/data}"
 input_dir="$data_root/pre_image/$run_timestamp"
-output_dir="$data_root/image/$run_timestamp"
+output_dir="$data_root/image/${OUTPUT_TIMESTAMP:-$run_timestamp}"
 
 if [[ ! -d "$input_dir" ]]; then
   echo "Timestamp directory not found under pre_image: $input_dir" >&2

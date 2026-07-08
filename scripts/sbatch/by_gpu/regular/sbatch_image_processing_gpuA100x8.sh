@@ -8,16 +8,23 @@
 #SBATCH --gpus=8
 #SBATCH --mem=256g
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=mnakamura@umass.edu
-#SBATCH --time=15:00:00
-#SBATCH --chdir=/work/hdd/bgjs/mnakamura/robocasa
-#SBATCH --output=slurm-%j.out
+#SBATCH --mail-user=dbenhamougol@umass.edu
+#SBATCH --time=48:00:00
+#SBATCH --chdir=/work/hdd/bgjs/dbenhamougoldfajn/robocasa
+#SBATCH --output=slurm_logs/slurm-%j.out
 
 set -euo pipefail
 
+venv_path="/work/hdd/bgjs/dbenhamougoldfajn/robocasa/.venv"
+if [[ -d "$venv_path" ]]; then
+  source "$venv_path/bin/activate"
+else
+  echo "Warning: venv not found at $venv_path" >&2
+fi
+
 usage() {
   cat <<'EOF'
-Usage: sbatch scripts/sbatch_image_processing_gpuA100x8.sh <run_timestamp> [sweep_cli_args...]
+Usage: sbatch scripts/sbatch/sbatch_image_processing_gpuA100x8.sh <run_timestamp> [sweep_cli_args...]
 
 Runs task-level image generation on one Delta gpuA100x8 node using all 8 GPUs.
 
@@ -29,6 +36,8 @@ Additional args are forwarded to:
 EOF
 }
 
+export MUJOCO_GL="egl"
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
@@ -39,12 +48,13 @@ if [[ $# -lt 1 ]]; then
   exit 1
 fi
 
+export MUJOCO_GL="egl"
 run_timestamp="$1"
 shift
 
 bash scripts/generate_and_insert_images.sh "$run_timestamp" \
-  --workers 120 \
+  --workers 64 \
   --gpu-ids 0 1 2 3 4 5 6 7 \
-  --procs-per-gpu 15 15 15 15 15 15 15 15 \
+  --procs-per-gpu 8 8 8 8 8 8 8 8 \
   --gl-backend egl \
   "$@"
