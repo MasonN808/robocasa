@@ -4,7 +4,7 @@
 #SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=64g
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=dbenhamougoldfajn@umass.edu
@@ -35,7 +35,7 @@ time python -m data_generation.task_level.generation.raw.cli \
   --model gemini-3-flash-preview \
   --location global \
   --thinking-level low \
-  --max-workers 4 \
+  --max-workers 16 \
   --max-retries 5 \
   --enable-validation
 

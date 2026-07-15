@@ -33,6 +33,13 @@
 # 87.6 min) -- so this is a clean apples-to-apples comparison on the same
 # workload, varying only the concurrency strategy.
 #
+# gemini-3-flash-preview is only reachable via the "global" endpoint for this
+# project -- confirmed directly with single minimal generate_content calls
+# per region (not a paid batch): every named Vertex AI region (us-central1,
+# us-east1/4/5, us-south1, us-west1/4) returns 404 "your project does not
+# have access to it", while "global" succeeds. So --location is fixed to
+# GOOGLE_CLOUD_LOCATION (default "global") here, not swept.
+#
 # Usage:
 #   CONFIRM_SPEND=yes sbatch scripts/full_traj_gen/probe_parallelize_tasks_structured_random.sh
 #   CONFIRM_SPEND=yes NUM_RUNS=100 sbatch scripts/full_traj_gen/probe_parallelize_tasks_structured_random.sh
@@ -80,8 +87,8 @@ run_dir="${probe_root}/${run_stamp}"
 summary_path="${run_dir}/summary.json"
 
 printf 'Confirming --parallelize-tasks throughput for %s.\n' "${sampling}"
-printf 'Tasks: verified (%s) | num-runs/task: %s | max-workers/task: %s | model: %s\n' \
-  "${num_tasks}" "${num_runs}" "${max_workers}" "${model}"
+printf 'Tasks: verified (%s) | num-runs/task: %s | max-workers/task: %s | model: %s | location: %s\n' \
+  "${num_tasks}" "${num_runs}" "${max_workers}" "${model}" "${location}"
 printf 'Projected: %s trajectories, ~$%s USD (at $%s/trajectory observed baseline rate)\n' \
   "${projected_trajectories}" "${projected_cost_usd}" "${avg_cost_per_trajectory_usd}"
 

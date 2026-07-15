@@ -8,6 +8,8 @@ import json
 import math
 import os
 import pickle
+import random
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from hashlib import sha256
@@ -356,6 +358,57 @@ def list_task_trajectory_ids(*, dataset_root: Path, task_name: str) -> list[str]
     return sorted(path.name for path in trajectory_dirs)
 
 
+def task_split_seed(seed: int, task_name: str) -> int:
+    """Derives one deterministic per-task RNG seed for trajectory holdout."""
+
+    digest = sha256(f"{seed}:{task_name}".encode("utf-8")).hexdigest()
+    return int(digest[:16], 16)
+
+
+def select_held_out_trajectory_ids(
+    *,
+    dataset_root: Path,
+    val_tasks: list[str],
+    train_tasks: list[str],
+    trajectories_per_task: int,
+    trajectory_fraction: float,
+    seed: int,
+) -> dict[str, set[str]]:
+    """Selects deterministic held-out validation trajectory ids per task.
+
+    This is the single source of truth for the trajectory holdout: both
+    training (main.py) and eval manifest construction must call it with the
+    same (dataset_root, seed, fraction/count) so their splits provably match.
+    """
+
+    if trajectories_per_task <= 0 and trajectory_fraction <= 0.0:
+        return {}
+
+    train_task_set = set(train_tasks)
+    selected_by_task: dict[str, set[str]] = {}
+    for task_name in sorted(val_tasks):
+        task_trajectory_ids = list_task_trajectory_ids(
+            dataset_root=dataset_root,
+            task_name=task_name,
+        )
+        max_selectable = len(task_trajectory_ids)
+        if task_name in train_task_set:
+            max_selectable = max(max_selectable - 1, 0)
+        if trajectories_per_task > 0:
+            selected_count = min(trajectories_per_task, max_selectable)
+        else:
+            requested_count = math.ceil(len(task_trajectory_ids) * trajectory_fraction)
+            selected_count = min(max(requested_count, 1), max_selectable)
+        if selected_count <= 0:
+            continue
+
+        sampler = random.Random(task_split_seed(seed, task_name))
+        sampler.shuffle(task_trajectory_ids)
+        selected_by_task[task_name] = set(task_trajectory_ids[:selected_count])
+
+    return selected_by_task
+
+
 def build_same_task_trajectory_split(
     *,
     dataset_root: Path,
@@ -528,12 +581,35 @@ def _ensure_image_paths_exist(
     )
 
 
+def _canonicalize_image_paths(
+    *,
+    trajectory_dir: Path,
+    trajectory_id: str,
+    image_paths: list[str],
+) -> list[str]:
+    """Remaps image paths recorded at generation/staging time onto the
+    trajectory's current on-disk location.
+
+    Staged trajectories store absolute paths from the machine/directory they
+    were staged on; after relocation (tar → node-local extraction) only
+    ``<trajectory_dir>/images/<trajectory_id>/<filename>`` is valid.
+    """
+
+    canonical: list[str] = []
+    for image_path in image_paths:
+        recorded = Path(image_path)
+        local = trajectory_dir / "images" / trajectory_id / recorded.name
+        canonical.append(str(local) if local.exists() else image_path)
+    return canonical
+
+
 def _record_latest_observation(
     *,
     latest_observations_by_agent: dict[str, tuple[list[str], list[str]]],
     plan_step: dict[str, Any],
     task_name: str,
     trajectory_id: str,
+    trajectory_dir: Path,
 ) -> None:
     if plan_step.get("tool") != "get_image":
         return
@@ -549,6 +625,11 @@ def _record_latest_observation(
     if not image_paths:
         return
 
+    image_paths = _canonicalize_image_paths(
+        trajectory_dir=trajectory_dir,
+        trajectory_id=trajectory_id,
+        image_paths=image_paths,
+    )
     _ensure_image_paths_exist(
         task_name=task_name,
         trajectory_id=trajectory_id,
@@ -666,6 +747,7 @@ def _build_centralized_examples_for_trajectory(
             plan_step=plan_step,
             task_name=task_name,
             trajectory_id=trajectory_id,
+            trajectory_dir=trajectory_dir,
         )
         if raw_step["tool"] == "get_image":
             continue
@@ -1201,6 +1283,22 @@ def deserialize_pretokenized_tensors(blob: bytes) -> dict[str, Any]:
     return value
 
 
+def _get_size_edge(size, edge_name: str):
+    """Reads one edge from a processor size, which may be a dict or a
+    SizeDict-style attribute object."""
+
+    if isinstance(size, dict):
+        return size.get(edge_name)
+    return getattr(size, edge_name, None)
+
+
+def _set_size_edge(size, edge_name: str, value) -> None:
+    if isinstance(size, dict):
+        size[edge_name] = value
+    else:
+        setattr(size, edge_name, value)
+
+
 def _set_processor_image_resolution(processor, image_resolution: int | None):
     image_pixels = image_resolution_to_pixels(image_resolution)
     if image_pixels is None:
@@ -1210,11 +1308,38 @@ def _set_processor_image_resolution(processor, image_resolution: int | None):
     if image_processor is None:
         return None
 
+    # Pin EVERY pixel-area knob the processor exposes to exactly image_pixels so
+    # the effective resolution is identical regardless of which family the
+    # installed transformers version consults (min/max_pixels vs
+    # size.shortest_edge/longest_edge), matching the historical exact-area
+    # behavior. Both edges go to image_pixels (not min(...)) so the two
+    # families cannot disagree.
     previous_values = {}
     for attribute_name in ("min_pixels", "max_pixels"):
-        if hasattr(image_processor, attribute_name):
+        if getattr(image_processor, attribute_name, None) is not None:
             previous_values[attribute_name] = getattr(image_processor, attribute_name)
             setattr(image_processor, attribute_name, image_pixels)
+
+    size = getattr(image_processor, "size", None)
+    if size is not None:
+        for edge_name in ("shortest_edge", "longest_edge"):
+            if _get_size_edge(size, edge_name) is not None:
+                previous_values[f"size.{edge_name}"] = _get_size_edge(size, edge_name)
+                _set_size_edge(size, edge_name, image_pixels)
+
+    if not previous_values:
+        # Fixed-resolution processors (e.g. size={'height','width'}) have no
+        # pixel-area budget to tune. Warn and leave the processor untouched
+        # rather than crashing mid-run inside a DataLoader worker; the model
+        # runs at its native resolution.
+        warnings.warn(
+            f"image_resolution={image_resolution} was requested but "
+            f"{type(image_processor).__name__} exposes no pixel-area knob "
+            "(min/max_pixels or size.*_edge); leaving native resolution.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
     return image_processor, previous_values
 
 
@@ -1223,7 +1348,12 @@ def _restore_processor_image_resolution(state) -> None:
         return
     image_processor, previous_values = state
     for attribute_name, value in previous_values.items():
-        setattr(image_processor, attribute_name, value)
+        if attribute_name.startswith("size."):
+            _set_size_edge(
+                image_processor.size, attribute_name.removeprefix("size."), value
+            )
+        else:
+            setattr(image_processor, attribute_name, value)
 
 
 def build_batched_pretokenized_tensors(
@@ -1275,6 +1405,7 @@ class LazyVisionSFTCollator:
         supervise_last_assistant_turn_only: bool = False,
         trust_remote_code: bool,
         sft_format: str = SFT_FORMAT_TOOL_CALL,
+        image_resolution: int | None = None,
     ) -> None:
         self.processor_name_or_path = processor_name_or_path
         self.max_length = max_length
@@ -1286,6 +1417,7 @@ class LazyVisionSFTCollator:
         self.supervise_last_assistant_turn_only = supervise_last_assistant_turn_only
         self.trust_remote_code = trust_remote_code
         self.sft_format = _validate_sft_format(sft_format)
+        self.image_resolution = image_resolution
         self._processor = None
 
     def _get_processor(self):
@@ -1299,6 +1431,8 @@ class LazyVisionSFTCollator:
             if tokenizer is not None:
                 tokenizer.padding_side = "right"
                 tokenizer.truncation_side = "left"
+            if self.image_resolution and self.image_resolution > 0:
+                _set_processor_image_resolution(processor, self.image_resolution)
             self._processor = processor
         return self._processor
 

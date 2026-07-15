@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,8 @@ class VisionGenerationCollator:
         max_length: int | None,
         trust_remote_code: bool,
         sft_format: str,
+        image_resolution: int | None = None,
+        enable_thinking: bool = False,
     ) -> None:
         self.processor = AutoProcessor.from_pretrained(
             processor_name_or_path,
@@ -44,8 +47,13 @@ class VisionGenerationCollator:
         if tokenizer is not None:
             tokenizer.padding_side = "left"
             tokenizer.truncation_side = "left"
+        if image_resolution and image_resolution > 0:
+            from training.bc_task_vlm.dataset import _set_processor_image_resolution
+
+            _set_processor_image_resolution(self.processor, image_resolution)
         self.max_length = max_length
         self.sft_format = sft_format
+        self.enable_thinking = enable_thinking
 
     @staticmethod
     def _load_images(image_paths: list[str]):
@@ -121,7 +129,7 @@ class VisionGenerationCollator:
         template_kwargs: dict[str, Any] = {
             "tokenize": False,
             "add_generation_prompt": add_generation_prompt,
-            "enable_thinking": False,
+            "enable_thinking": self.enable_thinking,
         }
         if self.sft_format == "tool_call":
             template_kwargs["tools"] = feature["tool_schemas"]
@@ -248,6 +256,186 @@ def _plain_tool_call_to_single_step_payload(
     )
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def split_reasoning(decoded_text: str) -> tuple[str, str]:
+    """Separates a thinking model's `<think>...</think>` reasoning from its
+    answer. Returns (reasoning_text, answer_text). Handles an unterminated
+    <think> (truncated generation) by treating everything after the opening
+    tag as reasoning with an empty answer. Text without think tags is all
+    answer.
+    """
+
+    if "<think>" not in decoded_text:
+        return "", decoded_text
+    if "</think>" not in decoded_text:
+        return decoded_text.split("<think>", 1)[1], ""
+    reasoning_parts = _THINK_BLOCK_RE.findall(decoded_text)
+    answer_text = _THINK_BLOCK_RE.sub("", decoded_text).strip()
+    reasoning_text = "\n".join(reasoning_parts)
+    return reasoning_text, answer_text
+
+
+def score_structured_prediction(
+    *,
+    decoded_text: str,
+    metadata: dict[str, Any],
+    sft_format: str,
+) -> dict[str, Any]:
+    """Parses, validates, and exact-matches one decoded prediction.
+
+    Returns the per-sample record written to structured_eval_predictions.jsonl.
+    `metadata` needs: sample_id, task_name, trajectory_id, step_index, agent_id,
+    target_payload, target_tool_call, target_text, allowed_tool_specs.
+    A thinking model's <think>...</think> block is stripped before parsing so
+    reasoning braces cannot be mistaken for the answer JSON.
+    """
+
+    reasoning_text, decoded_text = split_reasoning(decoded_text)
+    target_payload = metadata["target_payload"]
+    parsed_tool_call = None
+    normalized_prediction = None
+    parse_error = None
+    validation_error = None
+    exact_tool_match = False
+    exact_args_match = False
+    exact_tool_call_match = False
+    exact_action_match = False
+
+    try:
+        if sft_format == "plain":
+            parsed_tool_call = _parse_plain_json_tool_call(decoded_text)
+        else:
+            parsed_tool_call = parse_first_qwen_tool_call(decoded_text)
+    except Exception as exc:  # pragma: no cover - defensive eval logging
+        parse_error = str(exc)
+
+    if parsed_tool_call is not None:
+        try:
+            if sft_format == "plain":
+                normalized_prediction = _plain_tool_call_to_single_step_payload(
+                    parsed_tool_call,
+                    step_index=metadata["step_index"],
+                    agent_id=metadata["agent_id"],
+                    allowed_tool_specs=metadata["allowed_tool_specs"],
+                )
+            else:
+                normalized_prediction = tool_call_to_single_step_payload(
+                    parsed_tool_call,
+                    step_index=metadata["step_index"],
+                    agent_id=metadata["agent_id"],
+                    agent_ids=AGENT_IDS,
+                    allowed_tool_specs=metadata["allowed_tool_specs"],
+                )
+        except Exception as exc:  # pragma: no cover - defensive eval logging
+            validation_error = str(exc)
+
+    if normalized_prediction is not None:
+        predicted_step = normalized_prediction["steps"][0]
+        target_step = target_payload["steps"][0]
+        exact_tool_match = predicted_step["tool"] == target_step["tool"]
+        exact_args_match = canonicalize_for_comparison(
+            predicted_step["args"]
+        ) == canonicalize_for_comparison(target_step["args"])
+        exact_tool_call_match = exact_tool_match and exact_args_match
+        exact_action_match = canonicalize_for_comparison(
+            {
+                "step": predicted_step["step"],
+                "agent": predicted_step["agent"],
+                "tool": predicted_step["tool"],
+                "args": predicted_step["args"],
+            }
+        ) == canonicalize_for_comparison(
+            {
+                "step": target_step["step"],
+                "agent": target_step["agent"],
+                "tool": target_step["tool"],
+                "args": target_step["args"],
+            }
+        )
+
+    return {
+        "sample_id": metadata["sample_id"],
+        "task_name": metadata["task_name"],
+        "trajectory_id": metadata["trajectory_id"],
+        "step_index": metadata["step_index"],
+        "prediction_text": decoded_text,
+        "reasoning_text": reasoning_text,
+        "target_text": metadata["target_text"],
+        "target_tool_call": metadata["target_tool_call"],
+        "target_payload": compact_json_dumps(target_payload),
+        "parsed_tool_call": parsed_tool_call,
+        "parse_error": parse_error,
+        "validation_error": validation_error,
+        "exact_tool_match": exact_tool_match,
+        "exact_args_match": exact_args_match,
+        "exact_tool_call_match": exact_tool_call_match,
+        "exact_action_step_match": exact_action_match,
+    }
+
+
+def _is_communicate_record(record: dict[str, Any]) -> bool:
+    return (record.get("target_tool_call") or {}).get("name") == "communicate"
+
+
+def metrics_from_prediction_records(
+    records: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Reduces per-sample prediction records to the structured eval metrics."""
+
+    total_samples = len(records)
+    parsed = sum(1 for record in records if record["parse_error"] is None)
+    valid = sum(
+        1
+        for record in records
+        if record["parse_error"] is None and record["validation_error"] is None
+    )
+    metrics = build_structured_eval_metrics(
+        total_samples=total_samples,
+        parsed_tool_calls=parsed,
+        valid_tool_calls=valid,
+        exact_tool_matches=sum(bool(r["exact_tool_match"]) for r in records),
+        exact_args_matches=sum(bool(r["exact_args_match"]) for r in records),
+        exact_tool_call_matches=sum(bool(r["exact_tool_call_match"]) for r in records),
+        exact_action_matches=sum(bool(r["exact_action_step_match"]) for r in records),
+    )
+
+    # Communication steps carry free-text messages, where exact match is a
+    # near-impossible bar for un-finetuned models; report the two step
+    # families separately so physical-action competence is visible on its own.
+    comm_records = [r for r in records if _is_communicate_record(r)]
+    action_records = [r for r in records if not _is_communicate_record(r)]
+    if comm_records:
+        metrics["structured_eval_comm_step_fraction"] = len(comm_records) / max(
+            total_samples, 1
+        )
+        metrics["structured_eval_comm_tool_selected_rate"] = sum(
+            bool(r["exact_tool_match"]) for r in comm_records
+        ) / len(comm_records)
+        metrics["structured_eval_comm_exact_call_accuracy"] = sum(
+            bool(r["exact_tool_call_match"]) for r in comm_records
+        ) / len(comm_records)
+    if action_records:
+        metrics["structured_eval_action_tool_name_accuracy"] = sum(
+            bool(r["exact_tool_match"]) for r in action_records
+        ) / len(action_records)
+        metrics["structured_eval_action_exact_call_accuracy"] = sum(
+            bool(r["exact_tool_call_match"]) for r in action_records
+        ) / len(action_records)
+    return metrics
+
+
+def load_prediction_records(predictions_path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with predictions_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
+
+
 def evaluate_structured_generation(
     *,
     model,
@@ -262,6 +450,7 @@ def evaluate_structured_generation(
     sft_format: str,
     max_samples: int | None = None,
     max_trajectories: int | None = None,
+    image_resolution: int | None = None,
 ) -> dict[str, float]:
     """Runs generation over the validation split and computes structured metrics."""
 
@@ -283,6 +472,7 @@ def evaluate_structured_generation(
         max_length=max_length,
         trust_remote_code=trust_remote_code,
         sft_format=sft_format,
+        image_resolution=image_resolution,
     )
     dataloader = DataLoader(
         dataset,
@@ -301,13 +491,7 @@ def evaluate_structured_generation(
         unwrapped_model = model.module
     device = next(unwrapped_model.parameters()).device
 
-    total_samples = 0
-    parsed_tool_calls = 0
-    valid_tool_calls = 0
-    exact_tool_matches = 0
-    exact_args_matches = 0
-    exact_tool_call_matches = 0
-    exact_action_matches = 0
+    records: list[dict[str, Any]] = []
 
     previous_use_cache = getattr(unwrapped_model.config, "use_cache", None)
     if previous_use_cache is not None:
@@ -341,123 +525,18 @@ def evaluate_structured_generation(
                     decoded_outputs,
                     strict=True,
                 ):
-                    total_samples += 1
-                    target_payload = metadata["target_payload"]
-                    parsed_tool_call = None
-                    normalized_prediction = None
-                    parse_error = None
-                    validation_error = None
-                    exact_tool_match = False
-                    exact_args_match = False
-                    exact_tool_call_match = False
-                    exact_action_match = False
-
-                    try:
-                        if sft_format == "plain":
-                            parsed_tool_call = _parse_plain_json_tool_call(decoded_text)
-                        else:
-                            parsed_tool_call = parse_first_qwen_tool_call(decoded_text)
-                        parsed_tool_calls += 1
-                    except Exception as exc:  # pragma: no cover - defensive eval logging
-                        parse_error = str(exc)
-
-                    if parsed_tool_call is not None:
-                        try:
-                            if sft_format == "plain":
-                                normalized_prediction = (
-                                    _plain_tool_call_to_single_step_payload(
-                                        parsed_tool_call,
-                                        step_index=metadata["step_index"],
-                                        agent_id=metadata["agent_id"],
-                                        allowed_tool_specs=metadata[
-                                            "allowed_tool_specs"
-                                        ],
-                                    )
-                                )
-                            else:
-                                normalized_prediction = (
-                                    tool_call_to_single_step_payload(
-                                        parsed_tool_call,
-                                        step_index=metadata["step_index"],
-                                        agent_id=metadata["agent_id"],
-                                        agent_ids=AGENT_IDS,
-                                        allowed_tool_specs=metadata[
-                                            "allowed_tool_specs"
-                                        ],
-                                    )
-                                )
-                            valid_tool_calls += 1
-                        except Exception as exc:  # pragma: no cover - defensive eval logging
-                            validation_error = str(exc)
-
-                    if normalized_prediction is not None:
-                        predicted_step = normalized_prediction["steps"][0]
-                        target_step = target_payload["steps"][0]
-                        exact_tool_match = predicted_step["tool"] == target_step["tool"]
-                        exact_args_match = canonicalize_for_comparison(
-                            predicted_step["args"]
-                        ) == canonicalize_for_comparison(target_step["args"])
-                        exact_tool_call_match = exact_tool_match and exact_args_match
-                        exact_action_match = canonicalize_for_comparison(
-                            {
-                                "step": predicted_step["step"],
-                                "agent": predicted_step["agent"],
-                                "tool": predicted_step["tool"],
-                                "args": predicted_step["args"],
-                            }
-                        ) == canonicalize_for_comparison(
-                            {
-                                "step": target_step["step"],
-                                "agent": target_step["agent"],
-                                "tool": target_step["tool"],
-                                "args": target_step["args"],
-                            }
-                        )
-                        if exact_tool_match:
-                            exact_tool_matches += 1
-                        if exact_args_match:
-                            exact_args_matches += 1
-                        if exact_tool_call_match:
-                            exact_tool_call_matches += 1
-                        if exact_action_match:
-                            exact_action_matches += 1
-
-                    handle.write(
-                        json.dumps(
-                            {
-                                "sample_id": metadata["sample_id"],
-                                "task_name": metadata["task_name"],
-                                "trajectory_id": metadata["trajectory_id"],
-                                "step_index": metadata["step_index"],
-                                "prediction_text": decoded_text,
-                                "target_text": metadata["target_text"],
-                                "target_tool_call": metadata["target_tool_call"],
-                                "target_payload": compact_json_dumps(target_payload),
-                                "parsed_tool_call": parsed_tool_call,
-                                "parse_error": parse_error,
-                                "validation_error": validation_error,
-                                "exact_tool_match": exact_tool_match,
-                                "exact_args_match": exact_args_match,
-                                "exact_tool_call_match": exact_tool_call_match,
-                                "exact_action_step_match": exact_action_match,
-                            },
-                            ensure_ascii=True,
-                        )
-                        + "\n"
+                    record = score_structured_prediction(
+                        decoded_text=decoded_text,
+                        metadata=metadata,
+                        sft_format=sft_format,
                     )
+                    records.append(record)
+                    handle.write(json.dumps(record, ensure_ascii=True) + "\n")
 
     if previous_use_cache is not None:
         unwrapped_model.config.use_cache = previous_use_cache
 
-    metrics = build_structured_eval_metrics(
-        total_samples=total_samples,
-        parsed_tool_calls=parsed_tool_calls,
-        valid_tool_calls=valid_tool_calls,
-        exact_tool_matches=exact_tool_matches,
-        exact_args_matches=exact_args_matches,
-        exact_tool_call_matches=exact_tool_call_matches,
-        exact_action_matches=exact_action_matches,
-    )
+    metrics = metrics_from_prediction_records(records)
     if trajectory_count is not None:
         metrics["structured_eval_num_trajectories"] = float(trajectory_count)
     metrics["structured_eval_num_workers"] = float(max(num_workers, 0))

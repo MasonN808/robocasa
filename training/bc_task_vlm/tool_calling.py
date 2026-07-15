@@ -6,7 +6,10 @@ import json
 import re
 from typing import Any
 
-from training.bc_task_vlm.schema_utils import validate_single_step_payload
+from training.bc_task_vlm.schema_utils import (
+    declared_tool_arg_names,
+    validate_single_step_payload,
+)
 
 _TOOL_CALL_PATTERN = re.compile(
     r"<tool_call>\s*<function=([^>\n]+)>\s*(.*?)</function>\s*</tool_call>",
@@ -78,13 +81,19 @@ def build_tool_schemas(
 
     tool_schemas: list[dict[str, Any]] = []
     for tool_name, tool_spec in allowed_tool_specs.items():
-        required_args = list(tool_spec.get("tool_args", ()))
+        required_args, allowed_args = declared_tool_arg_names(tool_spec)
+        schema_args = required_args + sorted(allowed_args.difference(required_args))
+        description = tool_spec.get("description", "").strip()
+        any_of_groups = [list(group) for group in tool_spec.get("tool_arg_any_of", ())]
+        for group in any_of_groups:
+            group_text = " or ".join(group)
+            description = f"{description} Requires at least one of: {group_text}."
         tool_schemas.append(
             {
                 "type": "function",
                 "function": {
                     "name": tool_name,
-                    "description": tool_spec.get("description", "").strip(),
+                    "description": description.strip(),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -93,7 +102,7 @@ def build_tool_schemas(
                                 agent_ids=agent_ids,
                                 tool_spec=tool_spec,
                             )
-                            for arg_name in required_args
+                            for arg_name in schema_args
                         },
                         "required": required_args,
                         "additionalProperties": False,
@@ -205,7 +214,7 @@ def tool_call_to_single_step_payload(
         raise ValueError("Tool call arguments must be an object.")
 
     tool_spec = allowed_tool_specs[tool_name]
-    expected_args = list(tool_spec.get("tool_args", ()))
+    expected_args, allowed_args = declared_tool_arg_names(tool_spec)
     missing_args = [
         arg_name for arg_name in expected_args if arg_name not in raw_arguments
     ]
@@ -213,7 +222,7 @@ def tool_call_to_single_step_payload(
         missing_text = ", ".join(missing_args)
         raise ValueError(f"Tool call is missing required arguments: {missing_text}.")
 
-    unexpected_args = sorted(set(raw_arguments).difference(expected_args))
+    unexpected_args = sorted(set(raw_arguments).difference(allowed_args))
     if unexpected_args:
         unexpected_text = ", ".join(unexpected_args)
         raise ValueError(
@@ -222,7 +231,12 @@ def tool_call_to_single_step_payload(
 
     tool_arg_types = dict(tool_spec.get("tool_arg_types", {}))
     normalized_args: dict[str, Any] = {}
-    for arg_name in expected_args:
+    # Required args first, then any provided optional/any-of args; the
+    # terminal validate_single_step_payload enforces any-of group presence.
+    provided_extra_args = sorted(
+        set(raw_arguments).intersection(allowed_args).difference(expected_args)
+    )
+    for arg_name in expected_args + provided_extra_args:
         raw_value = raw_arguments[arg_name]
         if not isinstance(raw_value, str):
             raise ValueError(f"Parsed argument {arg_name!r} must be a string.")

@@ -127,3 +127,58 @@ def build_structured_eval_metrics(
         ),
         "structured_eval_action_prediction_accuracy": float(rate(exact_action_matches)),
     }
+
+
+def build_trajectory_aggregate_metrics(
+    records: list[dict[str, object]],
+) -> dict[str, float]:
+    """Aggregates per-step prediction records into trajectory-level metrics.
+
+    Steps are grouped by (task_name, trajectory_id) and ordered by step_index;
+    "correct" means exact_tool_call_match (tool name + args) and the tool_name
+    variants use exact_tool_match only.
+    """
+
+    trajectories: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for record in records:
+        key = (str(record["task_name"]), str(record["trajectory_id"]))
+        trajectories.setdefault(key, []).append(record)
+
+    if not trajectories:
+        return {"structured_eval_num_trajectories": 0.0}
+
+    def prefix_fraction(flags: list[bool]) -> float:
+        prefix = 0
+        for flag in flags:
+            if not flag:
+                break
+            prefix += 1
+        return prefix / len(flags)
+
+    call_all_correct = 0
+    name_all_correct = 0
+    call_prefix_sum = 0.0
+    name_prefix_sum = 0.0
+    for steps in trajectories.values():
+        steps = sorted(steps, key=lambda record: int(record["step_index"]))
+        call_flags = [bool(record["exact_tool_call_match"]) for record in steps]
+        name_flags = [bool(record["exact_tool_match"]) for record in steps]
+        call_all_correct += all(call_flags)
+        name_all_correct += all(name_flags)
+        call_prefix_sum += prefix_fraction(call_flags)
+        name_prefix_sum += prefix_fraction(name_flags)
+
+    count = len(trajectories)
+    return {
+        "structured_eval_num_trajectories": float(count),
+        "structured_eval_trajectory_all_steps_correct_rate": call_all_correct / count,
+        "structured_eval_trajectory_all_tool_names_correct_rate": (
+            name_all_correct / count
+        ),
+        "structured_eval_trajectory_mean_correct_prefix_fraction": (
+            call_prefix_sum / count
+        ),
+        "structured_eval_trajectory_mean_tool_name_prefix_fraction": (
+            name_prefix_sum / count
+        ),
+    }

@@ -87,6 +87,23 @@ def canonicalize_for_comparison(value: Any) -> Any:
     return value
 
 
+def declared_tool_arg_names(
+    tool_spec: dict[str, Any],
+) -> tuple[list[str], set[str]]:
+    """Returns (required_args, all_allowed_args) for one tool spec.
+
+    Mirrors the generation-side schema vocabulary: `tool_args` are required,
+    `optional_tool_args` may appear, and each `tool_arg_any_of` group requires
+    at least one member (enforced by validate_single_step_payload).
+    """
+
+    required = list(tool_spec.get("tool_args", ()))
+    allowed = set(required).union(tool_spec.get("optional_tool_args", ()))
+    for group in tool_spec.get("tool_arg_any_of", ()):
+        allowed.update(group)
+    return required, allowed
+
+
 def _allowed_ids_key_for_arg_name(arg_name: str) -> str | None:
     if not arg_name.endswith("_id"):
         return None
@@ -147,7 +164,11 @@ def validate_single_step_payload(
         raise ValueError("steps[0].args must be an object.")
 
     tool_spec = allowed_tool_specs[normalized_tool]
-    expected_args = list(tool_spec.get("tool_args", ()))
+    expected_args, _ = declared_tool_arg_names(tool_spec)
+    optional_args = list(tool_spec.get("optional_tool_args", ()))
+    any_of_groups = [
+        list(group) for group in tool_spec.get("tool_arg_any_of", ())
+    ]
     provided_arg_names = set(raw_args)
     missing_arg_names = [
         arg_name for arg_name in expected_args if arg_name not in raw_args
@@ -155,8 +176,17 @@ def validate_single_step_payload(
     if missing_arg_names:
         missing = ", ".join(missing_arg_names)
         raise ValueError(f"steps[0].args is missing required fields: {missing}.")
+    for group in any_of_groups:
+        if not provided_arg_names.intersection(group):
+            group_text = ", ".join(group)
+            raise ValueError(
+                f"steps[0].args must include at least one of: {group_text}."
+            )
 
-    unexpected_arg_names = provided_arg_names.difference(expected_args)
+    allowed_arg_names = set(expected_args).union(optional_args)
+    for group in any_of_groups:
+        allowed_arg_names.update(group)
+    unexpected_arg_names = provided_arg_names.difference(allowed_arg_names)
     if unexpected_arg_names:
         unexpected = ", ".join(sorted(unexpected_arg_names))
         raise ValueError(
@@ -165,7 +195,13 @@ def validate_single_step_payload(
 
     tool_arg_types = dict(tool_spec.get("tool_arg_types", {}))
     normalized_args: dict[str, Any] = {}
-    for arg_name in expected_args:
+    # Normalize every provided allowed argument; required args are already
+    # guaranteed present, optional/any-of args are validated when supplied.
+    for arg_name in expected_args + [
+        arg_name
+        for arg_name in sorted(allowed_arg_names.difference(expected_args))
+        if arg_name in raw_args
+    ]:
         schema_type = tool_arg_types.get(arg_name, "STRING")
         raw_value = raw_args[arg_name]
         if schema_type == "STRING":

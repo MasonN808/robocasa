@@ -222,3 +222,21 @@ external/*/dist/
 model_evals/backends/*/assets/
 model_evals/backends/*/ckpts/
 model_evals/backends/*/logs/
+
+# --- bc_task_vlm experiment data & artifacts (large / regenerable) ---
+# Staged datasets (hundreds of GB) and derived data subsets
+training/bc_task_vlm/staged_tars/
+training/bc_task_vlm/staged_hf/
+training/bc_task_vlm/eval_data_subset/
+training/bc_task_vlm/local_train_subset/
+# Eval run outputs (predictions/judge jsonl, per-run metrics, figures)
+training/bc_task_vlm/eval_runs/
+# Generated eval manifests (rebuild via build_eval_manifest.py)
+training/bc_task_vlm/eval_manifests/
+# Model checkpoints / adapters
+training/bc_task_vlm/runs/
+# Stray SLURM logs written to repo root
+slurm-*.out
+
+# Local agent config
+.claude/

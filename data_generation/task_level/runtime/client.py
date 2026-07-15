@@ -61,6 +61,19 @@ MODEL_TEXT_PRICING_USD_PER_MILLION = {
             "output": 1.50,
         },
     },
+    # Vertex list prices as of 2026-07 (<=200K-token prompts).
+    "gemini-3.5-flash": {
+        "ON_DEMAND": {
+            "input": 1.50,
+            "output": 9.00,
+        },
+    },
+    "gemini-3.1-pro-preview": {
+        "ON_DEMAND": {
+            "input": 2.00,
+            "output": 12.00,
+        },
+    },
 }
 # google-genai reads Vertex routing from environment variables.
 GOOGLE_GENAI_VERTEX_ENV_VAR = "GOOGLE_GENAI_USE_VERTEXAI"

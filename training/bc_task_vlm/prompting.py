@@ -122,6 +122,64 @@ def build_system_message() -> dict[str, Any]:
     }
 
 
+def build_few_shot_block(example_trajectory: dict[str, Any]) -> str:
+    """Renders one spec example trajectory as an in-context demonstration.
+
+    Eval-time ablation only: the SFT training prompt never includes this.
+    """
+
+    steps = [
+        {
+            "step": step.get("step"),
+            "agent": step.get("agent"),
+            "tool": step.get("tool"),
+            "args": step.get("args", {}),
+        }
+        for step in example_trajectory.get("steps", [])
+    ]
+    return (
+        "Example of one complete valid trajectory for this task family "
+        "(for format and ordering reference only):\n"
+        f"{format_history_steps(steps)}"
+    )
+
+
+def append_few_shot_block(
+    messages: list[dict[str, Any]],
+    few_shot_block: str,
+) -> list[dict[str, Any]]:
+    """Returns a copy of chat messages with the example appended to the last user text."""
+
+    updated_messages: list[dict[str, Any]] = []
+    last_user_index = max(
+        index
+        for index, message in enumerate(messages)
+        if message.get("role") == "user"
+    )
+    for index, message in enumerate(messages):
+        if index != last_user_index:
+            updated_messages.append(message)
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            updated_messages.append(
+                {**message, "content": f"{content}\n\n{few_shot_block}"}
+            )
+            continue
+        updated_content = [dict(item) for item in content]
+        text_indices = [
+            item_index
+            for item_index, item in enumerate(updated_content)
+            if item.get("type") == "text"
+        ]
+        target_index = text_indices[-1]
+        updated_content[target_index]["text"] = (
+            f"{updated_content[target_index]['text']}\n\n{few_shot_block}"
+        )
+        updated_messages.append({**message, "content": updated_content})
+    return updated_messages
+
+
 def build_user_message(*, user_prompt: str, num_images: int) -> dict[str, Any]:
     """Builds one multimodal user turn with placeholder image slots."""
 

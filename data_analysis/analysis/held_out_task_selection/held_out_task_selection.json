@@ -1,0 +1,705 @@
+{
+  "availability": {
+    "add_lemon_to_fish": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "add_sugar_cubes": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "alcohol_serving_prep": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "align_silverware": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "arrange_bread_bowl": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "arrange_drinkware": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "arrange_tea": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "beverage_organization": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "bowl_and_cup": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "candle_cleanup": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "cheese_mixing": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "cluster_items_for_clearing": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "colorful_salsa": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "condiment_collection": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "cut_buffet_pizza": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "date_night": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "deliver_straw": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "dessert_assembly": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "display_meat_variety": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "distribute_chicken": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "garnish_cake": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "garnish_cupcake": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "garnish_pancake": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "gather_marinade_ingredients": {
+      "hf": true,
+      "local_rendered": false
+    },
+    "hot_dog_setup": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "lemon_seasoning_fish": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "line_up_condiments": {
+      "hf": false,
+      "local_rendered": true
+    },
+    "match_cup_and_drink": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "meat_skewer_assembly": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "organize_condiments": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "plate_store_dinner": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "portion_hot_dogs": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "portion_yogurt": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "prepare_cheese_station": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "prepare_cocktail_station": {
+      "hf": false,
+      "local_rendered": true
+    },
+    "prepare_coffee": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "prepare_drink_station": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "prepare_sausage_cheese": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "prepare_soup_serving": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "seasoning_steak": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "serve_meal_juice": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "serve_steak": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "set_bowls_for_soup": {
+      "hf": false,
+      "local_rendered": true
+    },
+    "set_up_spice_station": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "setup_bowls": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "setup_butter_plate": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "setup_soda_bowl": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "setup_wine_glasses": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "spicy_marinade": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "sweeten_coffee": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "tong_buffet_setup": {
+      "hf": true,
+      "local_rendered": true
+    },
+    "veggie_dip_prep": {
+      "hf": true,
+      "local_rendered": true
+    }
+  },
+  "held_out_tasks": [
+    "garnish_cake",
+    "meat_skewer_assembly",
+    "hot_dog_setup",
+    "cluster_items_for_clearing",
+    "beverage_organization"
+  ],
+  "rejections": {
+    "add_sugar_cubes": "tool set too similar to already selected garnish_cake",
+    "align_silverware": "tool set too similar to already selected cluster_items_for_clearing",
+    "colorful_salsa": "tool set too similar to already selected garnish_cake",
+    "display_meat_variety": "tool set too similar to already selected meat_skewer_assembly",
+    "portion_hot_dogs": "tool set too similar to already selected garnish_cake",
+    "portion_yogurt": "tool set too similar to already selected garnish_cake",
+    "prepare_coffee": "tools not covered by >= 2 train tasks: ['place_under', 'press_button']",
+    "set_up_spice_station": "tool set too similar to already selected cluster_items_for_clearing",
+    "sweeten_coffee": "tool set too similar to already selected meat_skewer_assembly"
+  },
+  "scores": {
+    "add_lemon_to_fish": {
+      "novelty": 0.038915869046114666,
+      "tool_frequency_jsd": 0.09240613065122799,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.07462686567164178,
+      "unseen_trigram_mass": 0.0
+    },
+    "add_sugar_cubes": {
+      "novelty": 0.07657423227408178,
+      "tool_frequency_jsd": 0.12195853721483882,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.26657780739753417,
+      "unseen_trigram_mass": 0.0
+    },
+    "alcohol_serving_prep": {
+      "novelty": 0.03356740113464696,
+      "tool_frequency_jsd": 0.11044833567248843,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.002886002886002886,
+      "unseen_trigram_mass": 0.0
+    },
+    "align_silverware": {
+      "novelty": 0.09064911352078994,
+      "tool_frequency_jsd": 0.09398069105294576,
+      "unseen_arg_signature_mass": 0.13227513227513227,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.2840909090909091,
+      "unseen_trigram_mass": 0.0
+    },
+    "arrange_bread_bowl": {
+      "novelty": 0.050152449034129236,
+      "tool_frequency_jsd": 0.06331896598707146,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.20771172825338535,
+      "unseen_trigram_mass": 0.0
+    },
+    "arrange_drinkware": {
+      "novelty": 0.06197669068104955,
+      "tool_frequency_jsd": 0.11925974311309759,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.17465845164746852,
+      "unseen_trigram_mass": 0.0
+    },
+    "arrange_tea": {
+      "novelty": 0.05032515360227226,
+      "tool_frequency_jsd": 0.1149678675271317,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0011094674556213018,
+      "unseen_symbolic_vocab_mass": 0.10245901639344263,
+      "unseen_trigram_mass": 0.0011980830670926517
+    },
+    "beverage_organization": {
+      "novelty": 0.07635507385616538,
+      "tool_frequency_jsd": 0.13407658708458467,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0005458515283842794,
+      "unseen_symbolic_vocab_mass": 0.23696682464454977,
+      "unseen_trigram_mass": 0.0020207852193995382
+    },
+    "bowl_and_cup": {
+      "novelty": 0.049378037347726556,
+      "tool_frequency_jsd": 0.0810355063432754,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.16711590296495957,
+      "unseen_trigram_mass": 0.0
+    },
+    "candle_cleanup": {
+      "novelty": 0.05848413154962753,
+      "tool_frequency_jsd": 0.1044967816310689,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.17663943475380878,
+      "unseen_trigram_mass": 0.002556727388942154
+    },
+    "cheese_mixing": {
+      "novelty": 0.04999825894116577,
+      "tool_frequency_jsd": 0.08812683172360666,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.15706806282722513,
+      "unseen_trigram_mass": 0.0
+    },
+    "cluster_items_for_clearing": {
+      "novelty": 0.09216013621410091,
+      "tool_frequency_jsd": 0.10978414889817746,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.3912618193674601,
+      "unseen_trigram_mass": 0.0021424745581146223
+    },
+    "colorful_salsa": {
+      "novelty": 0.105888518475742,
+      "tool_frequency_jsd": 0.18047358681219736,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.344976282880552,
+      "unseen_trigram_mass": 0.0
+    },
+    "condiment_collection": {
+      "novelty": 0.02638558703202448,
+      "tool_frequency_jsd": 0.08795195677341493,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.0,
+      "unseen_trigram_mass": 0.0
+    },
+    "cut_buffet_pizza": {
+      "novelty": 0.06738449372226711,
+      "tool_frequency_jsd": 0.14791680584313877,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.14942099364960776,
+      "unseen_trigram_mass": 0.002385211687537269
+    },
+    "date_night": {
+      "novelty": 0.04798720036177261,
+      "tool_frequency_jsd": 0.11103365547857669,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.09784735812133072,
+      "unseen_trigram_mass": 0.0
+    },
+    "deliver_straw": {
+      "novelty": 0.0591259328087885,
+      "tool_frequency_jsd": 0.12296311470665429,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.14727540500736377,
+      "unseen_trigram_mass": 0.0005827505827505828
+    },
+    "dessert_assembly": {
+      "novelty": 0.07618638842099104,
+      "tool_frequency_jsd": 0.11886513127834572,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.2701789935832489,
+      "unseen_trigram_mass": 0.0
+    },
+    "display_meat_variety": {
+      "novelty": 0.0806720724654062,
+      "tool_frequency_jsd": 0.09670094294053615,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.3416856492027335,
+      "unseen_trigram_mass": 0.0016357688113413304
+    },
+    "distribute_chicken": {
+      "novelty": 0.056258985022086816,
+      "tool_frequency_jsd": 0.08817575235876927,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.19870839542970692,
+      "unseen_trigram_mass": 0.0
+    },
+    "garnish_cake": {
+      "novelty": 0.11591908817743118,
+      "tool_frequency_jsd": 0.13728664030673976,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.498220640569395,
+      "unseen_trigram_mass": 0.0
+    },
+    "garnish_cupcake": {
+      "novelty": 0.06702922543988506,
+      "tool_frequency_jsd": 0.05801030312242522,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.3257328990228013,
+      "unseen_trigram_mass": 0.003064798598949212
+    },
+    "garnish_pancake": {
+      "novelty": 0.061205795524240755,
+      "tool_frequency_jsd": 0.09278461318610472,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.22246941045606228,
+      "unseen_trigram_mass": 0.0
+    },
+    "gather_marinade_ingredients": {
+      "novelty": 0.05041784695530921,
+      "tool_frequency_jsd": 0.06714191961652839,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.2003606491685033,
+      "unseen_trigram_mass": 0.0008846947803007962
+    },
+    "hot_dog_setup": {
+      "novelty": 0.11232533438526478,
+      "tool_frequency_jsd": 0.07302292909705727,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0015499870834409714,
+      "unseen_symbolic_vocab_mass": 0.5730911655792629,
+      "unseen_trigram_mass": 0.016889131026968127
+    },
+    "lemon_seasoning_fish": {
+      "novelty": 0.04962450647659479,
+      "tool_frequency_jsd": 0.09147786816905597,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.1478743068391867,
+      "unseen_trigram_mass": 0.0
+    },
+    "line_up_condiments": {
+      "novelty": 0.023112089616266214,
+      "tool_frequency_jsd": 0.07674280726727528,
+      "unseen_arg_signature_mass": 0.0003324468085106383,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.00026253609871357313,
+      "unseen_trigram_mass": 0.0
+    },
+    "match_cup_and_drink": {
+      "novelty": 0.06721118648516461,
+      "tool_frequency_jsd": 0.09393060080014538,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.2602133749674733,
+      "unseen_trigram_mass": 0.0
+    },
+    "meat_skewer_assembly": {
+      "novelty": 0.11363142421376465,
+      "tool_frequency_jsd": 0.11022492193443537,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.5370929842228936,
+      "unseen_trigram_mass": 0.0
+    },
+    "organize_condiments": {
+      "novelty": 0.03973790035665037,
+      "tool_frequency_jsd": 0.09584304390822918,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.07323324789454412,
+      "unseen_trigram_mass": 0.0
+    },
+    "plate_store_dinner": {
+      "novelty": 0.03758119296692132,
+      "tool_frequency_jsd": 0.051788102910754794,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.00022629554197782303,
+      "unseen_symbolic_vocab_mass": 0.1329124439275627,
+      "unseen_trigram_mass": 0.008295804693055226
+    },
+    "portion_hot_dogs": {
+      "novelty": 0.10132402049332491,
+      "tool_frequency_jsd": 0.1696251343062254,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.3356408642752255,
+      "unseen_trigram_mass": 0.0003614022406938923
+    },
+    "portion_yogurt": {
+      "novelty": 0.11421493082217757,
+      "tool_frequency_jsd": 0.20419392945433124,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.353045013239188,
+      "unseen_trigram_mass": 0.0
+    },
+    "prepare_cheese_station": {
+      "novelty": 0.06372886830634814,
+      "tool_frequency_jsd": 0.1161414551133764,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.00035842293906810036,
+      "unseen_symbolic_vocab_mass": 0.1909307875894988,
+      "unseen_trigram_mass": 0.0007722007722007722
+    },
+    "prepare_cocktail_station": {
+      "novelty": 0.02795887160153799,
+      "tool_frequency_jsd": 0.056282248269430804,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.073827980804725,
+      "unseen_trigram_mass": 0.0
+    },
+    "prepare_coffee": {
+      "novelty": 0.28082039419711224,
+      "tool_frequency_jsd": 0.18172596490370535,
+      "unseen_arg_signature_mass": 0.15955325089748704,
+      "unseen_bigram_mass": 0.26007802340702213,
+      "unseen_symbolic_vocab_mass": 0.45703250724171224,
+      "unseen_trigram_mass": 0.37921214997626956
+    },
+    "prepare_drink_station": {
+      "novelty": 0.019899337122455087,
+      "tool_frequency_jsd": 0.06560795336257569,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.0,
+      "unseen_trigram_mass": 0.0008678044547295343
+    },
+    "prepare_sausage_cheese": {
+      "novelty": 0.023883528488189157,
+      "tool_frequency_jsd": 0.07961176162729719,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.0,
+      "unseen_trigram_mass": 0.0
+    },
+    "prepare_soup_serving": {
+      "novelty": 0.04877024491629299,
+      "tool_frequency_jsd": 0.10623552634680229,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0003835826620636747,
+      "unseen_symbolic_vocab_mass": 0.11089548100914888,
+      "unseen_trigram_mass": 0.0008309098462816784
+    },
+    "seasoning_steak": {
+      "novelty": 0.027995632375632396,
+      "tool_frequency_jsd": 0.09331877458544133,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.0,
+      "unseen_trigram_mass": 0.0
+    },
+    "serve_meal_juice": {
+      "novelty": 0.05875054209133931,
+      "tool_frequency_jsd": 0.09355950747398623,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.20455126566095627,
+      "unseen_trigram_mass": 0.0
+    },
+    "serve_steak": {
+      "novelty": 0.022676012338395803,
+      "tool_frequency_jsd": 0.07558670779465268,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.0,
+      "unseen_trigram_mass": 0.0
+    },
+    "set_bowls_for_soup": {
+      "novelty": 0.02391640600195064,
+      "tool_frequency_jsd": 0.0794355737330682,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.0,
+      "unseen_trigram_mass": 0.0003429355281207133
+    },
+    "set_up_spice_station": {
+      "novelty": 0.08321389843345914,
+      "tool_frequency_jsd": 0.10663197697360449,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.3396728794218334,
+      "unseen_trigram_mass": 0.0010934937124111536
+    },
+    "setup_bowls": {
+      "novelty": 0.04369712708569977,
+      "tool_frequency_jsd": 0.09403086416279548,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.10325245224574084,
+      "unseen_trigram_mass": 0.0
+    },
+    "setup_butter_plate": {
+      "novelty": 0.04836603266345425,
+      "tool_frequency_jsd": 0.05471891505267676,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.20822488287350338,
+      "unseen_trigram_mass": 0.0028665028665028664
+    },
+    "setup_soda_bowl": {
+      "novelty": 0.06448305723010461,
+      "tool_frequency_jsd": 0.07748647942680921,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.27491408934707906,
+      "unseen_trigram_mass": 0.0
+    },
+    "setup_wine_glasses": {
+      "novelty": 0.060112996445711185,
+      "tool_frequency_jsd": 0.09466840957590833,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.21141649048625794,
+      "unseen_trigram_mass": 0.0
+    },
+    "spicy_marinade": {
+      "novelty": 0.038405816365862724,
+      "tool_frequency_jsd": 0.08467224398385123,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.002720751916893396,
+      "unseen_symbolic_vocab_mass": 0.0661922885983783,
+      "unseen_trigram_mass": 0.010668748373666407
+    },
+    "sweeten_coffee": {
+      "novelty": 0.09119182050595723,
+      "tool_frequency_jsd": 0.06962389002487919,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.4686976899899565,
+      "unseen_trigram_mass": 0.0
+    },
+    "tong_buffet_setup": {
+      "novelty": 0.07430181526489668,
+      "tool_frequency_jsd": 0.13053097604243188,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.23428348301444749,
+      "unseen_trigram_mass": 0.0
+    },
+    "veggie_dip_prep": {
+      "novelty": 0.0744509256727566,
+      "tool_frequency_jsd": 0.1312520479558875,
+      "unseen_arg_signature_mass": 0.0,
+      "unseen_bigram_mass": 0.0,
+      "unseen_symbolic_vocab_mass": 0.19985011241568823,
+      "unseen_trigram_mass": 0.02039117769454848
+    }
+  },
+  "selection_config": {
+    "max_tool_set_jaccard": 0.8,
+    "min_train_tasks_per_tool": 2,
+    "num_held_out": 5,
+    "raw_root": "data_generation/task_level/data/raw/20260430T030150Z_full_run",
+    "seed": 0,
+    "trajectories_per_task": 200
+  },
+  "train_tasks": [
+    "add_lemon_to_fish",
+    "add_sugar_cubes",
+    "alcohol_serving_prep",
+    "align_silverware",
+    "arrange_bread_bowl",
+    "arrange_drinkware",
+    "arrange_tea",
+    "bowl_and_cup",
+    "candle_cleanup",
+    "cheese_mixing",
+    "colorful_salsa",
+    "condiment_collection",
+    "cut_buffet_pizza",
+    "date_night",
+    "deliver_straw",
+    "dessert_assembly",
+    "display_meat_variety",
+    "distribute_chicken",
+    "garnish_cupcake",
+    "garnish_pancake",
+    "gather_marinade_ingredients",
+    "lemon_seasoning_fish",
+    "line_up_condiments",
+    "match_cup_and_drink",
+    "organize_condiments",
+    "plate_store_dinner",
+    "portion_hot_dogs",
+    "portion_yogurt",
+    "prepare_cheese_station",
+    "prepare_cocktail_station",
+    "prepare_coffee",
+    "prepare_drink_station",
+    "prepare_sausage_cheese",
+    "prepare_soup_serving",
+    "seasoning_steak",
+    "serve_meal_juice",
+    "serve_steak",
+    "set_bowls_for_soup",
+    "set_up_spice_station",
+    "setup_bowls",
+    "setup_butter_plate",
+    "setup_soda_bowl",
+    "setup_wine_glasses",
+    "spicy_marinade",
+    "sweeten_coffee",
+    "tong_buffet_setup",
+    "veggie_dip_prep"
+  ]
+}

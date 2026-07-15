@@ -42,6 +42,7 @@ from training.bc_task_vlm.dataset import (
     list_task_trajectory_ids,
     load_examples_from_cache,
     save_examples_to_cache,
+    select_held_out_trajectory_ids,
 )
 from data_generation.task_level.runtime.client import load_dotenv_file
 from training.bc_task_vlm.evaluation import evaluate_structured_generation
@@ -73,6 +74,7 @@ class RunConfiguration:
     learning_rate: float
     max_length: int | None
     max_tokens: int | None
+    image_resolution: int | None
     max_images_per_sample: int | None
     supervise_last_assistant_turn_only: bool
     num_workers: int
@@ -248,6 +250,17 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Maximum tokenized sequence length, also logged as max_tokens. "
             "Non-positive values disable token truncation."
+        ),
+    )
+    parser.add_argument(
+        "--image-resolution",
+        type=int,
+        default=None,
+        help=(
+            "Square pixel budget (N*N) applied to the processor's "
+            "min/max_pixels for live (non-pretokenized) training, matching "
+            "the pretokenization pipeline's --image-resolution. Unset keeps "
+            "the processor's native resolution."
         ),
     )
     parser.add_argument(
@@ -604,6 +617,11 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         learning_rate=args.learning_rate,
         max_length=max_tokens,
         max_tokens=max_tokens,
+        image_resolution=(
+            args.image_resolution
+            if args.image_resolution and args.image_resolution > 0
+            else None
+        ),
         max_images_per_sample=(
             args.max_images_per_sample
             if args.max_images_per_sample and args.max_images_per_sample > 0
@@ -1029,11 +1047,6 @@ def _build_examples_for_tasks(
     return examples
 
 
-def _task_split_seed(seed: int, task_name: str) -> int:
-    digest = sha256(f"{seed}:{task_name}".encode("utf-8")).hexdigest()
-    return int(digest[:16], 16)
-
-
 def _select_validation_trajectory_ids(
     *,
     dataset_root: Path,
@@ -1044,45 +1057,42 @@ def _select_validation_trajectory_ids(
     seed: int,
     state: PartialState,
 ) -> dict[str, set[str]]:
-    if trajectories_per_task <= 0 and trajectory_fraction <= 0.0:
+    selected_by_task = select_held_out_trajectory_ids(
+        dataset_root=dataset_root,
+        val_tasks=val_tasks,
+        train_tasks=train_tasks,
+        trajectories_per_task=trajectories_per_task,
+        trajectory_fraction=trajectory_fraction,
+        seed=seed,
+    )
+    if not selected_by_task and (
+        trajectories_per_task <= 0 and trajectory_fraction <= 0.0
+    ):
         return {}
 
-    train_task_set = set(train_tasks)
-    selected_by_task: dict[str, set[str]] = {}
     metrics: dict[str, float | int] = {}
     for task_name in sorted(val_tasks):
-        task_trajectory_ids = list_task_trajectory_ids(
-            dataset_root=dataset_root,
-            task_name=task_name,
-        )
-        max_selectable = len(task_trajectory_ids)
-        if task_name in train_task_set:
-            max_selectable = max(max_selectable - 1, 0)
-        if trajectories_per_task > 0:
-            selected_count = min(trajectories_per_task, max_selectable)
-        else:
-            requested_count = math.ceil(len(task_trajectory_ids) * trajectory_fraction)
-            selected_count = min(max(requested_count, 1), max_selectable)
-        if selected_count <= 0:
+        selected_ids = selected_by_task.get(task_name)
+        if not selected_ids:
             _log_startup(
                 "Selected 0 validation trajectories for task "
                 f"{task_name}; not enough trajectories to hold out.",
                 state=state,
             )
             continue
-
-        sampler = random.Random(_task_split_seed(seed, task_name))
-        sampler.shuffle(task_trajectory_ids)
-        selected_ids = set(task_trajectory_ids[:selected_count])
-        selected_by_task[task_name] = selected_ids
-
+        task_trajectory_ids = list_task_trajectory_ids(
+            dataset_root=dataset_root,
+            task_name=task_name,
+        )
         _log_startup(
             "Selected "
-            f"{selected_count}/{len(task_trajectory_ids)} validation "
+            f"{len(selected_ids)}/{len(task_trajectory_ids)} validation "
             f"trajectories for task {task_name}",
             state=state,
         )
-        metrics[f"dataset/validation_split/{task_name}/trajectories"] = selected_count
+        metrics[f"dataset/validation_split/{task_name}/trajectories"] = len(
+            selected_ids
+        )
         metrics[f"dataset/validation_split/{task_name}/available_trajectories"] = len(
             task_trajectory_ids
         )
@@ -1395,6 +1405,7 @@ class StructuredEvalTrainer(Trainer):
                     sft_format=config.sft_format,
                     max_samples=config.eval_generation_max_samples,
                     max_trajectories=config.eval_generation_max_trajectories,
+                    image_resolution=config.image_resolution,
                 )
                 self.latest_structured_metrics = dict(structured_metrics)
                 grouped_structured_metrics = _wandb_structured_section_metrics(
@@ -1595,6 +1606,7 @@ def main() -> None:
         supervise_last_assistant_turn_only=config.supervise_last_assistant_turn_only,
         trust_remote_code=config.trust_remote_code,
         sft_format=config.sft_format,
+        image_resolution=config.image_resolution,
     )
 
     evaluation_strategy = "steps" if len(val_dataset) > 0 else "no"
