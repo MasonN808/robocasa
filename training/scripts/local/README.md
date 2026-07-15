@@ -1,42 +1,47 @@
 # Local LoRA SFT (single-GPU box, e.g. RTX 5090)
 
-Fine-tune a small Qwen3-VL model on a subset of the 47-task experiment without
-the cluster or the full ~170 GB corpus. Three steps:
+Fine-tune a small Qwen3-VL model on a subset of the 47-task experiment on your
+own GPU — no cluster, no rsync. The training tasks all live on HuggingFace, so
+the subset is pulled directly.
 
-## 1. Stage a subset (on the cluster)
+Scripts (run in order):
 
-```bash
-TRAJ_PER_TASK=30 bash training/scripts/local/stage_subset.sh
-```
+| Script | Where | What |
+|---|---|---|
+| `stage_subset.sh` | local | download N traj/task from HF into a subset root |
+| `probe_throughput.sh` | local | measure samples/sec, recommend TRAJ_PER_TASK |
+| `train_qwen3vl_8b.sh` | local | the actual LoRA SFT run |
+| `_launch_args.sh` | — | shared config sourced by probe + train (not run directly) |
 
-Writes `training/bc_task_vlm/local_train_subset/<task>/traj_XXXXXX/…`
-(~4 GB at 30 traj/task). Trajectories are taken in sorted order, so the subset
-is deterministic.
+Prereqs on the box: this repo checked out and importable, a Python env with a
+CUDA torch build for your GPU plus `transformers`, `peft`, `accelerate`,
+`xgrammar`, `huggingface_hub`, `datasets`, `Pillow`. Set `HF_TOKEN` if the
+datasets are gated. Point `PYTHON_BIN` at your interpreter if it isn't `python`.
 
-## 2. Pull it to the local box
-
-```bash
-rsync -avhP --info=progress2 \
-  <cluster-host>:/work/hdd/bgjs/dbenhamougoldfajn/robocasa/training/bc_task_vlm/local_train_subset/ \
-  ~/robocasa_local_train_subset/
-```
-
-The scripts only read `data_analysis/analysis/held_out_task_selection/held_out_task_selection.json`
-(committed) for the task list, so a normal clone of the repo plus the rsync'd
-data is enough.
-
-## 3. Probe, then train (on the local box)
-
-Measure throughput first — a fresh box's samples/sec is the one number that
-decides how much data fits in your window:
+## 1. Stage a subset (~4 GB at 30 traj/task)
 
 ```bash
-PROBE=1 DATA_ROOT=~/robocasa_local_train_subset \
-  bash training/scripts/local/train_qwen3vl_8b.sh
+TRAJ_PER_TASK=30 SUBSET_ROOT=~/robocasa_local_train_subset \
+  bash training/scripts/local/stage_subset.sh
 ```
 
-It trains ~40 steps and prints e.g. `for 3 epochs in 9h -> ~30 traj/task`.
-Re-stage with that `TRAJ_PER_TASK` if needed, then launch the real run:
+Writes `~/robocasa_local_train_subset/<task>/traj_XXXXXX/…`. Deterministic
+(first N episodes per task), resumable.
+
+## 2. Probe throughput (5–10 min)
+
+A fresh box's samples/sec is the one number that decides how much data fits in
+your window, so measure it before committing:
+
+```bash
+DATA_ROOT=~/robocasa_local_train_subset \
+  bash training/scripts/local/probe_throughput.sh
+```
+
+Prints e.g. `3 epochs in 9h -> ~30 traj/task`. If it suggests a different
+number, re-run step 1 with that `TRAJ_PER_TASK`.
+
+## 3. Train
 
 ```bash
 DATA_ROOT=~/robocasa_local_train_subset \
@@ -44,16 +49,15 @@ DATA_ROOT=~/robocasa_local_train_subset \
 ```
 
 Defaults: Qwen3-VL-8B, LoRA (r=16), 512² images, bf16, gradient checkpointing,
-`sdpa` attention (no flash-attn needed), 3 epochs, effective batch 8
-(per-device 2 × grad-accum 4). Override any via env vars (`MODEL_PATH`,
-`NUM_EPOCHS`, `IMAGE_RESOLUTION`, `PER_DEVICE_BATCH_SIZE`, `MAX_STEPS`, …).
-
-To cap the wall-clock regardless of epochs, set `MAX_STEPS`; training stops at
+`sdpa` attention, 3 epochs, effective batch 8 (per-device 2 × grad-accum 4).
+Override via env vars. Set `MAX_STEPS` to hard-cap wall-clock; training stops at
 whichever of `--num-epochs` / `MAX_STEPS` comes first.
 
-## Evaluate the adapter
+## 4. Evaluate the adapter
 
-Reuse the standalone eval harness against the exported eval subset:
+Reuse the standalone eval harness against the exported eval subset (which you
+can also stage locally with `stage_subset.sh` pointed at the eval manifests, or
+copy from the cluster):
 
 ```bash
 python -m training.bc_task_vlm.eval_standalone \
@@ -62,4 +66,9 @@ python -m training.bc_task_vlm.eval_standalone \
   --manifest training/bc_task_vlm/eval_manifests/exp52/eval_manifest_heldout_trajectories.json \
   --dataset-root training/bc_task_vlm/eval_data_subset \
   --sft-format tool_call --image-resolution 512 --batch-size 4
+
+python -m training.bc_task_vlm.judge_communications \
+  --run-dir training/bc_task_vlm/eval_runs/<your-run-dir>
 ```
+
+Then add its rows to the comparison table via `export_results_table.py`.
