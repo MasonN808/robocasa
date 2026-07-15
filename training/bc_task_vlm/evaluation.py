@@ -307,7 +307,25 @@ def score_structured_prediction(
         if sft_format == "plain":
             parsed_tool_call = _parse_plain_json_tool_call(decoded_text)
         else:
-            parsed_tool_call = parse_first_qwen_tool_call(decoded_text)
+            # Prefer the Qwen-style <tool_call> parser, but accept a plain
+            # forced-JSON object as a fallback. This handles cases where the
+            # generation backend (hf/gemini) was constrained to emit the
+            # plain {"tool","args"} schema (e.g. --forced-json) even when
+            # the SFT format used during training was the <tool_call> block.
+            try:
+                parsed_tool_call = parse_first_qwen_tool_call(decoded_text)
+            except Exception as exc:  # pragma: no cover - defensive eval logging
+                # If parsing failed because there's no <tool_call> block,
+                # try the plain JSON parser before giving up.
+                msg = str(exc)
+                if "<tool_call>" in msg or "did not contain" in msg:
+                    try:
+                        parsed_tool_call = _parse_plain_json_tool_call(decoded_text)
+                    except Exception as exc2:
+                        # Prefer the original error if the fallback also fails.
+                        raise exc2
+                else:
+                    raise
     except Exception as exc:  # pragma: no cover - defensive eval logging
         parse_error = str(exc)
 

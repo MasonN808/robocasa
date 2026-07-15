@@ -695,15 +695,29 @@ def _build_target_metadata(
         }
         return target_payload, target_tool_call, _plain_target_text(raw_step)
 
-    target_payload = validate_single_step_payload(
-        _raw_step_payload(raw_step),
-        agent_ids=AGENT_IDS,
-        allowed_tool_specs=allowed_tool_specs,
-    )
-    target_tool_call = {
-        "name": target_payload["steps"][0]["tool"],
-        "arguments": dict(target_payload["steps"][0]["args"]),
-    }
+    # The target is expert ground truth, so a tool it uses is valid by
+    # definition. A few tasks' verified specs omit a tool the generated data
+    # actually uses (e.g. prepare_cheese_station opens a cabinet with
+    # open_hinged_part, absent from its allowed_tool_specs). Rather than reject
+    # the demonstration, fall back to the raw-step target (as the plain path
+    # does) so example-building never crashes on such spec/data mismatches.
+    # Model predictions remain schema-validated separately during scoring.
+    try:
+        target_payload = validate_single_step_payload(
+            _raw_step_payload(raw_step),
+            agent_ids=AGENT_IDS,
+            allowed_tool_specs=allowed_tool_specs,
+        )
+        target_tool_call = {
+            "name": target_payload["steps"][0]["tool"],
+            "arguments": dict(target_payload["steps"][0]["args"]),
+        }
+    except ValueError:
+        target_payload = _raw_step_payload(raw_step)
+        target_tool_call = {
+            "name": raw_step["tool"],
+            "arguments": dict(raw_step["args"]),
+        }
     target_text = compact_json_dumps(target_tool_call)
     return target_payload, target_tool_call, target_text
 
