@@ -1,6 +1,6 @@
 # SFT-necessity experiment: multi-agent tool-calling VLMs
 
-Does supervised fine-tuning (SFT) buy anything over a strong zero-shot VLM on
+Does supervised fine-tuning (SFT) buy anything over a strong out-of-the-box VLM on
 RoboCasa two-agent kitchen tasks? This directory holds the full pipeline:
 data staging, a model-agnostic eval harness, an LLM judge, and the training
 scripts. This doc is the map.
@@ -24,7 +24,7 @@ the **next** tool call as JSON. Every model sees byte-identical prompts.
 - `heldout_tasks` — 75 trajectories of **5 tasks fully excluded** from SFT.
   Measures transfer to novel tasks.
 
-For zero-shot models nothing is truly "held out"; the splits are just two fixed
+For out-of-the-box models nothing is truly "held out"; the splits are just two fixed
 sample sets scored under identical rules so all models are comparable. Held-out
 tasks are intrinsically harder (they cover different tools/fixtures), so only
 compare **within a split**.
@@ -57,7 +57,7 @@ Scoring is sequencing-aware: under teacher forcing the "correct" answer at each
 step is what the expert did *at that point in the order*. Predicting a sensible
 action where the expert first does a `communicate` handshake scores wrong.
 Caveat: teacher forcing penalizes valid alternative orderings, so absolute
-numbers understate raw competence — but the zero-shot-vs-SFT **gap** is fair.
+numbers understate raw competence — but the out-of-the-box-vs-fine-tuned **gap** is fair.
 
 ## 3. Pipeline / file map
 
@@ -115,15 +115,15 @@ scale (0.505 vs 0.524 greedy), thinking-on-top-of-everything *hurt* on 3 Flash
 (0.641 → 0.620, communication collapsed), and Pro is ~6× the cost with zero
 spec gain.
 
-## 5. Key findings (zero-shot, corrected judge)
+## 5. Key findings (out-of-the-box models, corrected judge)
 
 Full numbers in `training/bc_task_vlm/eval_runs/results_table.{csv,md}`.
 
-- **Trajectory-level all-steps-correct is 0.000 in every zero-shot config**
+- **Trajectory-level all-steps-correct is 0.000 in every out-of-the-box config**
   (4 models × 7 prompt variants × 2 splits). No frontier model completes a
   single one of 150 trajectories. Step accuracy improves with aids; sequential
   competence does not.
-- **Best zero-shot ≈ 0.65 judged-overall** (3.5 Flash / 3 Flash +spec+few-shot,
+- **Best out-of-the-box ≈ 0.65 judged-overall** (3.5 Flash / 3 Flash +spec+few-shot,
   held-out trajectories). This is the bar SFT must clear.
 - **Task spec helps weak models, not strong ones**: it doubles 3 Flash's
   comm-selection (0.30 → 0.52) but does nothing for Pro (0.25 → 0.24) — a strong
@@ -145,7 +145,7 @@ Verified findings, all fixed (see git history):
    and `build_tool_schemas` only knew `tool_args`, so a perfect SFT prediction
    for placement tools scored invalid and the prompt schema contradicted the
    supervised target. Fixed via shared `declared_tool_arg_names`. (Would have
-   sunk the SFT eval; no zero-shot run affected — all use plain format.)
+   sunk the SFT eval; no out-of-the-box run affected — all use plain format.)
 3. **Resume treated failed generations as done** — transient API/GPU outages
    permanently deflated scores. Now regenerated on resume.
 4. **Judge failures / config mixing** — error verdicts persisted forever;
@@ -166,7 +166,7 @@ Verified findings, all fixed (see git history):
 - [x] **Stage 2** — tar-staging (inode-safe); manifests + eval subset;
       leakage guards pass.
 - [x] **Stage 2.5** — pilot ablations (forced JSON, thinking, temp, few-shot).
-- [x] **Stage 3a** — zero-shot headline evals: 4 models × up to 7 prompt
+- [x] **Stage 3a** — out-of-the-box headline evals: 4 models × up to 7 prompt
       variants (see matrix). LLM-judge on all.
 - [x] **Reviews** — physical/communication metric split; LLM judge;
       task-spec-detail prompt; high-effort bug review (6 fixes).

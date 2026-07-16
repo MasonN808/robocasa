@@ -179,6 +179,30 @@ def process_run(run_dir: Path, client, args: argparse.Namespace) -> None:
     judge_failures = len(comm_sample_ids) - len(scored)
     comm_judged_matches = sum(bool(v["equivalent"]) for v in scored.values())
     action_exact = sum(bool(r["exact_tool_call_match"]) for r in action_records)
+
+    # Trajectory completion, judged. The exact-match trajectory rate is ~0 for
+    # every model because free-text communicate steps (~40% of steps) can
+    # essentially never match verbatim; scoring those by judge equivalence
+    # instead measures whether a model actually carries a whole episode.
+    trajectories: dict[tuple[str, str], list[bool]] = {}
+    for record in records:
+        if _is_communicate_record(record):
+            step_ok = bool(scored.get(record["sample_id"], {}).get("equivalent"))
+        else:
+            step_ok = bool(record["exact_tool_call_match"])
+        trajectories.setdefault(
+            (record["task_name"], record["trajectory_id"]), []
+        ).append(step_ok)
+    traj_full = sum(1 for flags in trajectories.values() if all(flags))
+    prefix_fractions = []
+    for flags in trajectories.values():
+        correct_prefix = 0
+        for step_ok in flags:
+            if not step_ok:
+                break
+            correct_prefix += 1
+        prefix_fractions.append(correct_prefix / max(len(flags), 1))
+
     metrics = {
         "comm_step_count": len(comm_records),
         "comm_judged_match_rate": comm_judged_matches / max(len(comm_records), 1),
@@ -186,6 +210,11 @@ def process_run(run_dir: Path, client, args: argparse.Namespace) -> None:
         "action_exact_call_accuracy": action_exact / max(len(action_records), 1),
         "judged_exact_call_accuracy": (action_exact + comm_judged_matches)
         / max(len(records), 1),
+        "judged_trajectory_count": len(trajectories),
+        "judged_trajectory_all_steps_rate": traj_full / max(len(trajectories), 1),
+        "judged_trajectory_mean_prefix_fraction": (
+            sum(prefix_fractions) / max(len(prefix_fractions), 1)
+        ),
         "judge_model": args.judge_model,
     }
     (run_dir / "comm_judge_metrics.json").write_text(

@@ -26,8 +26,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from training.bc_task_vlm.evaluation import load_prediction_records
-
 # Pre-validated reference categorical palette (dataviz skill), slots 1-3 in
 # fixed order: one hue per metric series across every panel.
 METRIC_SERIES = (
@@ -51,6 +49,12 @@ SPLIT_TITLES = {
     "heldout_trajectories": "Held-out trajectories (train tasks)",
     "heldout_tasks": "Held-out tasks (never seen in SFT)",
 }
+
+
+def load_prediction_records(predictions_path: Path) -> list[dict[str, Any]]:
+    """Load JSONL records without importing the heavyweight eval stack."""
+    with predictions_path.open("r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
 
 
 def parse_args() -> argparse.Namespace:
@@ -221,7 +225,7 @@ def plot(runs: list[dict[str, Any]], output_dir: Path) -> None:
     axes[0].set_ylabel("Rate (per-step teacher-forced eval)", fontsize=10)
     axes[0].legend(loc="upper left", frameon=False, fontsize=9)
     fig.suptitle(
-        "Tool-calling accuracy: SFT vs zero-shot task VLMs",
+        "Tool-calling accuracy: SFT vs out-of-the-box task VLMs",
         fontsize=13,
         y=1.0,
     )

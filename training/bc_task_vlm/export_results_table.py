@@ -1,4 +1,4 @@
-"""Exports the consolidated zero-shot/SFT eval table (markdown + CSV).
+"""Exports the consolidated out-of-the-box/SFT eval table (markdown + CSV).
 
 Collects structured_eval_metrics.json + comm_judge_metrics.json from every
 known run dir under eval_runs/ and writes eval_runs/results_table.{csv,md}.
@@ -13,11 +13,6 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-
-from training.bc_task_vlm.evaluation import (
-    load_prediction_records,
-    metrics_from_prediction_records,
-)
 
 BASE = Path("training/bc_task_vlm/eval_runs")
 
@@ -61,12 +56,24 @@ RUNS = [
     ("Gemini-3.5 Flash", "+few-shot", "heldout_tasks", "gemini35flash_fewshot__heldout_tasks"),
     ("Gemini-3.5 Flash", "+spec+few-shot", "heldout_trajectories", "gemini35flash_spec_fewshot__heldout_trajectories"),
     ("Gemini-3.5 Flash", "+spec+few-shot", "heldout_tasks", "gemini35flash_spec_fewshot__heldout_tasks"),
+    ("Gemini-3.5 Flash", "+spec+few-shot (native tools)", "heldout_trajectories", "gemini35flash_nativetools_spec_fewshot__heldout_trajectories"),
+    ("Gemini-3.5 Flash", "+spec+few-shot (native tools)", "heldout_tasks", "gemini35flash_nativetools_spec_fewshot__heldout_tasks"),
+    ("Gemini-3.5 Flash", "think+spec+few-shot", "heldout_trajectories", "gemini35flash_think_spec_fewshot__heldout_trajectories"),
+    ("Gemini-3.5 Flash", "think+spec+few-shot", "heldout_tasks", "gemini35flash_think_spec_fewshot__heldout_tasks"),
     ("Gemini-3.1 Pro", "baseline", "heldout_trajectories", "gemini31pro_base__heldout_trajectories"),
     ("Gemini-3.1 Pro", "baseline", "heldout_tasks", "gemini31pro_base__heldout_tasks"),
     ("Gemini-3.1 Pro", "+task spec", "heldout_trajectories", "gemini31pro_specdetail__heldout_trajectories"),
     ("Gemini-3.1 Pro", "+task spec", "heldout_tasks", "gemini31pro_specdetail__heldout_tasks"),
     ("Gemini-3.1 Pro", "think+spec+few-shot", "heldout_trajectories", "gemini31pro_think_spec_fewshot__heldout_trajectories"),
     ("Gemini-3.1 Pro", "think+spec+few-shot", "heldout_tasks", "gemini31pro_think_spec_fewshot__heldout_tasks"),
+    # The 8B runs are plain "baseline" prompts (no spec/few-shot/thinking); they
+    # differ only in output interface, marked with * = native tool-calling.
+    ("Qwen3-VL-8B base", "baseline", "heldout_trajectories", "qwen3vl_8b_base_tc__heldout_trajectories"),
+    ("Qwen3-VL-8B base", "baseline", "heldout_tasks", "qwen3vl_8b_base_tc__heldout_tasks"),
+    ("Qwen3-VL-8B base", "baseline (plain fmt control)", "heldout_trajectories", "qwen3vl_8b_base_plain__heldout_trajectories"),
+    ("Qwen3-VL-8B base", "baseline (plain fmt control)", "heldout_tasks", "qwen3vl_8b_base_plain__heldout_tasks"),
+    ("Qwen3-VL-8B SFT", "baseline", "heldout_trajectories", "qwen3vl_8b_sft__heldout_trajectories"),
+    ("Qwen3-VL-8B SFT", "baseline", "heldout_tasks", "qwen3vl_8b_sft__heldout_tasks"),
     ("Qwen3.6-27B SFT", "baseline", "heldout_trajectories", "qwen36_27b_sft__heldout_trajectories"),
     ("Qwen3.6-27B SFT", "baseline", "heldout_tasks", "qwen36_27b_sft__heldout_tasks"),
 ]
@@ -87,6 +94,8 @@ COLUMNS = [
 JUDGE_COLUMNS = [
     ("comm_judged_acc", "comm_judged_match_rate", "{:.3f}"),
     ("judged_overall_acc", "judged_exact_call_accuracy", "{:.3f}"),
+    ("judged_traj_all", "judged_trajectory_all_steps_rate", "{:.3f}"),
+    ("judged_traj_prefix", "judged_trajectory_mean_prefix_fraction", "{:.3f}"),
 ]
 
 
@@ -97,6 +106,11 @@ def collect_row(run_dir: Path) -> dict[str, str] | None:
     metrics = json.loads(metrics_path.read_text())
     if "structured_eval_action_exact_call_accuracy" not in metrics:
         # Older run predating the comm/action split: recompute from records.
+        from training.bc_task_vlm.evaluation import (
+            load_prediction_records,
+            metrics_from_prediction_records,
+        )
+
         metrics.update(
             metrics_from_prediction_records(
                 load_prediction_records(run_dir / "structured_eval_predictions.jsonl")

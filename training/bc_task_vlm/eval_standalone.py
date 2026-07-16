@@ -50,7 +50,10 @@ from training.bc_task_vlm.prompting import (
     append_few_shot_block,
     build_few_shot_block,
 )
-from training.bc_task_vlm.schema_utils import build_single_step_response_schema
+from training.bc_task_vlm.schema_utils import (
+    build_single_step_response_schema,
+    declared_tool_arg_names,
+)
 from training.bc_task_vlm.task_registry import AGENT_IDS
 
 PREDICTIONS_FILENAME = "structured_eval_predictions.jsonl"
@@ -85,6 +88,14 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Constrain generation to the plain tool-call JSON schema.",
+    )
+    parser.add_argument(
+        "--native-tools",
+        action="store_true",
+        help="Gemini backend: use Vertex's native function-calling API "
+        "(FunctionDeclaration tools + forced ANY mode) instead of a "
+        "response_schema. The returned function call is scored identically. "
+        "Makes Gemini comparable to the hf backend's tool_call format.",
     )
     parser.add_argument(
         "--task-spec-detail",
@@ -236,7 +247,7 @@ def _load_few_shot_blocks(task_names: list[str]) -> dict[str, str]:
 def _load_task_spec_blocks(task_names: list[str]) -> dict[str, str]:
     """Builds per-task prompt blocks with authoritative task-spec details.
 
-    Tests the lack-of-knowledge hypothesis: zero-shot models fail largely on
+    Tests the lack-of-knowledge hypothesis: out-of-the-box models fail largely on
     unstated conventions (goal specifics, execution rules, where objects
     start, the communicate-first protocol) that SFT models absorb from data.
     """
@@ -378,6 +389,48 @@ def dump_prompts(
 # ---------------------------------------------------------------------------
 # Forced-JSON schema (plain format)
 # ---------------------------------------------------------------------------
+
+
+def build_vertex_function_declarations(
+    allowed_tool_specs: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Builds one Vertex FunctionDeclaration per allowed tool.
+
+    Reuses the shared response-schema helpers so a tool's argument names and
+    types are declared exactly as they are for the forced-JSON path — the only
+    difference is the delivery mechanism (native function calling vs a
+    response_schema), keeping the two comparable.
+    """
+
+    from data_generation.task_level.tasks.shared.schema import (
+        _build_symbolic_field_schema,
+        _iter_declared_tool_arg_names,
+        _resolve_tool_arg_schema_type,
+    )
+
+    declarations: list[dict[str, Any]] = []
+    for tool_name, tool_spec in allowed_tool_specs.items():
+        required_args, _ = declared_tool_arg_names(tool_spec)
+        properties = {
+            field_name: _build_symbolic_field_schema(
+                field_name,
+                AGENT_IDS,
+                _resolve_tool_arg_schema_type(field_name, tool_spec),
+            )
+            for field_name in _iter_declared_tool_arg_names(tool_spec)
+        }
+        declarations.append(
+            {
+                "name": tool_name,
+                "description": (tool_spec.get("description") or "").strip(),
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": properties,
+                    "required": list(required_args),
+                },
+            }
+        )
+    return declarations
 
 
 def build_plain_response_schema(
@@ -733,8 +786,24 @@ def run_gemini_backend(
             config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
                 thinking_budget=args.thinking_budget
             )
-        if args.forced_json:
-            task_name = feature["task_name"]
+        task_name = feature["task_name"]
+        if args.native_tools:
+            # Native function calling: declare the task's tools and force the
+            # model to emit one of them (mode=ANY).
+            if task_name not in schemas_by_task:
+                schemas_by_task[task_name] = [
+                    genai_types.FunctionDeclaration(**declaration)
+                    for declaration in build_vertex_function_declarations(
+                        feature["allowed_tool_specs"]
+                    )
+                ]
+            config_kwargs["tools"] = [
+                genai_types.Tool(function_declarations=schemas_by_task[task_name])
+            ]
+            config_kwargs["tool_config"] = genai_types.ToolConfig(
+                function_calling_config=genai_types.FunctionCallingConfig(mode="ANY")
+            )
+        elif args.forced_json:
             if task_name not in schemas_by_task:
                 schemas_by_task[task_name] = build_plain_response_schema(
                     feature["allowed_tool_specs"]
@@ -742,6 +811,26 @@ def run_gemini_backend(
             config_kwargs["response_mime_type"] = "application/json"
             config_kwargs["response_schema"] = schemas_by_task[task_name]
         return parts, genai_types.GenerateContentConfig(**config_kwargs)
+
+    def decoded_text_from(response: Any) -> str:
+        """Returns the model's answer as plain {"tool","args"} JSON text.
+
+        With native tools the answer arrives as a structured function_call
+        part; rendering it into the same plain shape lets the existing scorer
+        handle both paths identically.
+        """
+
+        if args.native_tools:
+            for candidate in getattr(response, "candidates", None) or []:
+                content = getattr(candidate, "content", None)
+                for part in (getattr(content, "parts", None) or []):
+                    call = getattr(part, "function_call", None)
+                    if call is not None and getattr(call, "name", None):
+                        return json.dumps(
+                            {"tool": call.name, "args": dict(call.args or {})}
+                        )
+            return ""
+        return getattr(response, "text", None) or ""
 
     def observed_cost(usage_metadata: Any) -> float:
         if pricing is None or usage_metadata is None:
@@ -768,7 +857,7 @@ def run_gemini_backend(
                     contents=parts,
                     config=config,
                 )
-                decoded_text = getattr(response, "text", None) or ""
+                decoded_text = decoded_text_from(response)
                 usage_metadata = getattr(response, "usage_metadata", None)
                 record = score_structured_prediction(
                     decoded_text=decoded_text,
@@ -781,6 +870,7 @@ def run_gemini_backend(
                     "model": args.model,
                     "attempts": attempt,
                     "forced_json": bool(args.forced_json),
+                    "native_tools": bool(args.native_tools),
                     "thinking_budget": args.thinking_budget,
                     "temperature": args.temperature,
                     "prompt_tokens": getattr(
@@ -860,6 +950,7 @@ _PROMPT_DEFINING_CONFIG_KEYS = (
     "task_spec_detail",
     "few_shot",
     "forced_json",
+    "native_tools",
     "temperature",
     "thinking_budget",
     "enable_thinking",
