@@ -1,0 +1,11 @@
+{
+  "comm_step_count": 456,
+  "comm_judged_match_rate": 0.008771929824561403,
+  "comm_judge_failures": 0,
+  "action_exact_call_accuracy": 0.6020114942528736,
+  "judged_exact_call_accuracy": 0.3671875,
+  "judged_trajectory_count": 75,
+  "judged_trajectory_all_steps_rate": 0.0,
+  "judged_trajectory_mean_prefix_fraction": 0.0,
+  "judge_model": "gemini-3-flash-preview"
+}
