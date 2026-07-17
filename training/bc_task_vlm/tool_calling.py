@@ -19,6 +19,15 @@ _PARAMETER_PATTERN = re.compile(
     r"<parameter=([^>\n]+)>\s*(.*?)\s*</parameter>",
     re.DOTALL,
 )
+# Qwen's chat template renders assistant tool calls with a JSON body:
+#   <tool_call>\n{"name": ..., "arguments": {...}}\n</tool_call>
+# which is what a tool_call-format SFT model is trained on and emits. The
+# <function=…>/<parameter=…> dialect above is a different rendering; support
+# both so native generations parse.
+_TOOL_CALL_JSON_PATTERN = re.compile(
+    r"<tool_call>\s*(\{.*?\})\s*</tool_call>",
+    re.DOTALL,
+)
 _THINK_BLOCK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
@@ -139,17 +148,32 @@ def parse_first_qwen_tool_call(text: str) -> dict[str, Any]:
     """Extracts the first rendered Qwen tool call from decoded model text."""
 
     match = _TOOL_CALL_PATTERN.search(text)
-    if match is None:
-        raise ValueError("Response did not contain a <tool_call> block.")
+    if match is not None:
+        tool_name = match.group(1).strip()
+        body = match.group(2)
+        arguments: dict[str, str] = {}
+        for parameter_match in _PARAMETER_PATTERN.finditer(body):
+            arg_name = parameter_match.group(1).strip()
+            arguments[arg_name] = parameter_match.group(2).strip()
+        return {"name": tool_name, "arguments": arguments}
 
-    tool_name = match.group(1).strip()
-    body = match.group(2)
-    arguments: dict[str, str] = {}
-    for parameter_match in _PARAMETER_PATTERN.finditer(body):
-        arg_name = parameter_match.group(1).strip()
-        arguments[arg_name] = parameter_match.group(2).strip()
+    json_match = _TOOL_CALL_JSON_PATTERN.search(text)
+    if json_match is not None:
+        try:
+            payload = json.loads(json_match.group(1))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"<tool_call> body is not valid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("<tool_call> body must be a JSON object.")
+        tool_name = payload.get("name")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            raise ValueError('<tool_call> body must contain a non-empty "name".')
+        raw_arguments = payload.get("arguments", {})
+        if not isinstance(raw_arguments, dict):
+            raise ValueError('<tool_call> body must contain object "arguments".')
+        return {"name": tool_name.strip(), "arguments": dict(raw_arguments)}
 
-    return {"name": tool_name, "arguments": arguments}
+    raise ValueError("Response did not contain a <tool_call> block.")
 
 
 def extract_pre_tool_call_text(text: str) -> str:
@@ -238,19 +262,24 @@ def tool_call_to_single_step_payload(
     )
     for arg_name in expected_args + provided_extra_args:
         raw_value = raw_arguments[arg_name]
-        if not isinstance(raw_value, str):
-            raise ValueError(f"Parsed argument {arg_name!r} must be a string.")
         schema_type = tool_arg_types.get(arg_name, "STRING")
+        if schema_type not in {"STRING", "INTEGER", "STRING_ARRAY"}:
+            raise ValueError(
+                f"Unsupported tool arg schema type {schema_type!r} for {arg_name}."
+            )
+        if not isinstance(raw_value, str):
+            # A JSON-body <tool_call> yields already-typed values; pass them
+            # through and let validate_single_step_payload type-check them.
+            # (The <function=…>/<parameter=…> dialect yields raw strings, which
+            # still need the per-type parsing below.)
+            normalized_args[arg_name] = raw_value
+            continue
         if schema_type == "STRING":
             normalized_args[arg_name] = _parse_string_value(raw_value)
         elif schema_type == "INTEGER":
             normalized_args[arg_name] = _parse_integer_value(raw_value)
-        elif schema_type == "STRING_ARRAY":
-            normalized_args[arg_name] = _parse_string_array_value(raw_value)
         else:
-            raise ValueError(
-                f"Unsupported tool arg schema type {schema_type!r} for {arg_name}."
-            )
+            normalized_args[arg_name] = _parse_string_array_value(raw_value)
 
     return validate_single_step_payload(
         {

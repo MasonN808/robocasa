@@ -144,6 +144,10 @@ def process_run(run_dir: Path, client, args: argparse.Namespace) -> None:
     action_records = [r for r in records if not _is_communicate_record(r)]
 
     judge_path = run_dir / "comm_judge.jsonl"
+    current_args = {
+        r["sample_id"]: (r.get("parsed_tool_call") or {}).get("arguments", {})
+        for r in comm_records
+    }
     done: dict[str, dict[str, Any]] = {}
     if judge_path.exists():
         for line in judge_path.read_text(encoding="utf-8").splitlines():
@@ -156,7 +160,16 @@ def process_run(run_dir: Path, client, args: argparse.Namespace) -> None:
                     "target_args"
                 ):
                     continue
-                done[verdict["sample_id"]] = verdict
+                # A verdict is only valid for the prediction it judged. Re-scoring
+                # a run (e.g. after a parser fix) changes predictions under stable
+                # sample_ids, so a verdict whose predicted_args no longer match is
+                # stale and must be re-judged rather than silently reused.
+                sample_id = verdict["sample_id"]
+                if sample_id in current_args and verdict.get(
+                    "predicted_args", {}
+                ) != current_args[sample_id]:
+                    continue
+                done[sample_id] = verdict
 
     pending = [r for r in comm_records if r["sample_id"] not in done]
     print(f"[{run_dir.name}] {len(comm_records)} comm steps, {len(pending)} to judge")
