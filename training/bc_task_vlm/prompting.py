@@ -12,6 +12,16 @@ SYSTEM_PROMPT = (
     "image paths, do not output get_image, and do not describe the images."
 )
 
+# Agent-prediction (v2) variant: the model chooses which agent acts next
+# instead of being told, and may declare the task finished.
+SYSTEM_PROMPT_PREDICT_AGENT = (
+    "You are a robot task planner. Decide which agent should act next and "
+    'predict exactly one next tool call for it, passing the agent as the "agent" '
+    "argument. When the task goal is already satisfied, call task_complete. Use "
+    "the images only as scene context. Do not output image paths, do not output "
+    "get_image, and do not describe the images."
+)
+
 
 def _format_allowed_values(tool_spec: dict[str, Any]) -> str:
     chunks: list[str] = []
@@ -44,14 +54,23 @@ def format_allowed_tool_block(
 
 
 def format_history_steps(history_steps: Iterable[dict[str, Any]]) -> str:
-    """Renders prior symbolic action history compactly."""
+    """Renders prior symbolic action history compactly.
+
+    A step may carry an "error" key (live-sim rejected attempts); it renders as
+    a trailing `FAILED: <reason>` so the model can see why nothing changed.
+    Training data never sets it, so v1 prompts are unaffected.
+    """
 
     rendered_steps = []
     for step in history_steps:
-        rendered_steps.append(
+        line = (
             f"- step={step['step']} agent={step['agent']} tool={step['tool']} "
             f"args={compact_json_dumps(step['args'])}"
         )
+        error_text = step.get("error")
+        if error_text:
+            line = f"{line} FAILED: {error_text}"
+        rendered_steps.append(line)
     if not rendered_steps:
         return "- none"
     return "\n".join(rendered_steps)
@@ -67,22 +86,42 @@ def build_user_prompt(
     history_steps: list[dict[str, Any]],
     allowed_tool_specs: dict[str, dict[str, Any]],
     sft_format: str = "tool_call",
+    predict_agent: bool = False,
 ) -> str:
-    """Builds the text block that accompanies the current image observation."""
+    """Builds the text block that accompanies the current image observation.
+
+    With predict_agent (v2), the acting agent is not given: the model chooses
+    it, emits it as the "agent" argument, and may call task_complete when the
+    goal is already satisfied. Default keeps the v1 prompt byte-identical.
+    """
 
     observations_text = ", ".join(observation_views) if observation_views else "unknown"
+    if predict_agent:
+        agent_rule = (
+            '- First decide which agent acts next; pass it as the "agent" argument.\n'
+            "- If the task goal is already fully satisfied, call task_complete.\n"
+        )
+    else:
+        agent_rule = (
+            "- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n"
+        )
     if sft_format == "plain":
         output_rules = (
             "Rules:\n"
             "- Predict exactly one next action.\n"
             "- Use symbolic IDs only, never concrete simulator IDs.\n"
-            "- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n"
+            f"{agent_rule}"
             "- The tool must be one of the allowed tools listed above.\n"
             "- Supply exactly the arguments required by the selected tool.\n"
             "- Prefer the most immediate executable next action.\n\n"
             "Output format:\n"
             '- Return exactly one compact JSON object with keys "tool" and "args".\n'
-            "- Do not emit markdown or narrative outside the JSON object."
+            + (
+                '- Include the acting agent as the "agent" entry inside "args".\n'
+                if predict_agent
+                else ""
+            )
+            + "- Do not emit markdown or narrative outside the JSON object."
         )
     elif sft_format == "tool_call":
         output_rules = (
@@ -90,7 +129,7 @@ def build_user_prompt(
             "Rules:\n"
             "- Predict exactly one next tool call.\n"
             "- Use symbolic IDs only, never concrete simulator IDs.\n"
-            "- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n"
+            f"{agent_rule}"
             "- The tool must be one of the allowed tools listed above.\n"
             "- Supply exactly the arguments required by the selected tool.\n"
             "- Prefer the most immediate executable next action.\n"
@@ -99,10 +138,11 @@ def build_user_prompt(
     else:
         raise ValueError(f"Unsupported SFT format: {sft_format!r}")
 
+    acting_agent_line = "" if predict_agent else f"Current acting agent: {agent_id}\n"
     return (
         f"Task family: {composite_task}\n"
         f"Task instruction: {task_instruction}\n"
-        f"Current acting agent: {agent_id}\n"
+        f"{acting_agent_line}"
         f"Next global step index: {next_step_index}\n"
         f"Observation views attached in order: {observations_text}\n\n"
         "Previous executed symbolic action history:\n"
@@ -113,12 +153,13 @@ def build_user_prompt(
     )
 
 
-def build_system_message() -> dict[str, Any]:
+def build_system_message(*, predict_agent: bool = False) -> dict[str, Any]:
     """Builds the fixed system instruction for one chat conversation."""
 
+    system_text = SYSTEM_PROMPT_PREDICT_AGENT if predict_agent else SYSTEM_PROMPT
     return {
         "role": "system",
-        "content": [{"type": "text", "text": SYSTEM_PROMPT}],
+        "content": [{"type": "text", "text": system_text}],
     }
 
 
@@ -206,6 +247,7 @@ def build_messages(
     num_images: int,
     target_tool_call: dict[str, Any] | None = None,
     target_text: str | None = None,
+    predict_agent: bool = False,
 ) -> list[dict[str, Any]]:
     """Builds one chat conversation for training or generation."""
 
@@ -213,7 +255,7 @@ def build_messages(
         raise ValueError("Provide either target_tool_call or target_text, not both.")
 
     messages: list[dict[str, Any]] = [
-        build_system_message(),
+        build_system_message(predict_agent=predict_agent),
         build_user_message(user_prompt=user_prompt, num_images=num_images),
     ]
     if target_text is not None:

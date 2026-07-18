@@ -8,6 +8,28 @@ from typing import Any
 
 from data_generation.task_level.tasks.shared.schema import build_task_response_schema
 
+# Synthetic terminal tool for agent-prediction (v2) training: trajectories in
+# the data simply end with no signal, so a task_complete step is synthesized
+# after each trajectory's last action. It is never present in task specs.
+TASK_COMPLETE_TOOL_NAME = "task_complete"
+TASK_COMPLETE_TOOL_SPEC: dict[str, Any] = {
+    "tool_args": [],
+    "description": (
+        "Declare that the whole task goal is already satisfied and no further "
+        "actions are needed by either agent."
+    ),
+}
+
+
+def augment_tool_specs_for_agent_prediction(
+    allowed_tool_specs: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Returns the task's tool specs plus the synthetic task_complete tool."""
+
+    augmented = dict(allowed_tool_specs)
+    augmented[TASK_COMPLETE_TOOL_NAME] = deepcopy(TASK_COMPLETE_TOOL_SPEC)
+    return augmented
+
 
 def build_single_step_response_schema(
     *,

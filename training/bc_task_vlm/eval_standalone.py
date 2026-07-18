@@ -104,6 +104,15 @@ def parse_args() -> argparse.Namespace:
         "object locations, and communication protocol to each prompt.",
     )
     parser.add_argument(
+        "--predict-acting-agent",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Agent-prediction (v2) eval: the prompt does not name the acting "
+        'agent; the model chooses it via a required "agent" argument and may '
+        "call task_complete. Requires --no-forced-json (hf) or --native-tools "
+        "(gemini) — the plain forced-JSON schema has no agent slot.",
+    )
+    parser.add_argument(
         "--few-shot",
         type=int,
         default=0,
@@ -296,6 +305,7 @@ def load_eval_samples(
     task_spec_detail: bool,
     max_samples: int | None,
     example_build_workers: int,
+    predict_agent: bool = False,
 ) -> list[EvalSample]:
     manifest_samples = manifest["samples"]
     if max_samples is not None:
@@ -316,6 +326,7 @@ def load_eval_samples(
         example_build_workers=example_build_workers,
         show_progress=True,
         progress_description="Building eval examples",
+        predict_agent=predict_agent,
     )
     examples_by_id = {example.sample_id: example for example in examples}
 
@@ -326,13 +337,7 @@ def load_eval_samples(
         _load_task_spec_blocks(task_names) if task_spec_detail else {}
     )
 
-    eval_samples: list[EvalSample] = []
-    missing_ids: list[str] = []
-    for sample in manifest_samples:
-        example = examples_by_id.get(sample["sample_id"])
-        if example is None:
-            missing_ids.append(sample["sample_id"])
-            continue
+    def decorated_sample(example: Any) -> EvalSample:
         feature = example.to_feature_dict()
         if few_shot > 0 or task_spec_detail:
             feature = dict(feature)
@@ -347,7 +352,35 @@ def load_eval_samples(
                 feature["messages"],
                 few_shot_blocks[feature["task_name"]],
             )
-        eval_samples.append(EvalSample(sample_id=example.sample_id, feature=feature))
+        return EvalSample(sample_id=example.sample_id, feature=feature)
+
+    eval_samples: list[EvalSample] = []
+    missing_ids: list[str] = []
+    for sample in manifest_samples:
+        example = examples_by_id.get(sample["sample_id"])
+        if example is None:
+            missing_ids.append(sample["sample_id"])
+            continue
+        eval_samples.append(decorated_sample(example))
+
+    if predict_agent:
+        # Manifests predate v2 and only list real expert steps; the synthetic
+        # terminal task_complete examples (one per selected trajectory) would
+        # otherwise be dropped by the manifest filter. Downstream (resume,
+        # metrics) keys off this function's output, so appending here is
+        # sufficient.
+        manifest_id_set = {sample["sample_id"] for sample in manifest_samples}
+        terminal_examples = sorted(
+            (
+                example
+                for example in examples
+                if example.sample_id not in manifest_id_set
+            ),
+            key=lambda example: example.sample_id,
+        )
+        eval_samples.extend(
+            decorated_sample(example) for example in terminal_examples
+        )
 
     if missing_ids:
         raise RuntimeError(
@@ -393,6 +426,8 @@ def dump_prompts(
 
 def build_vertex_function_declarations(
     allowed_tool_specs: dict[str, dict[str, Any]],
+    *,
+    include_agent_param: bool = False,
 ) -> list[dict[str, Any]]:
     """Builds one Vertex FunctionDeclaration per allowed tool.
 
@@ -411,14 +446,20 @@ def build_vertex_function_declarations(
     declarations: list[dict[str, Any]] = []
     for tool_name, tool_spec in allowed_tool_specs.items():
         required_args, _ = declared_tool_arg_names(tool_spec)
-        properties = {
-            field_name: _build_symbolic_field_schema(
+        properties: dict[str, Any] = {}
+        if include_agent_param:
+            properties["agent"] = {
+                "type": "STRING",
+                "enum": list(AGENT_IDS),
+                "description": "The agent that performs this call.",
+            }
+            required_args = ["agent", *required_args]
+        for field_name in _iter_declared_tool_arg_names(tool_spec):
+            properties[field_name] = _build_symbolic_field_schema(
                 field_name,
                 AGENT_IDS,
                 _resolve_tool_arg_schema_type(field_name, tool_spec),
             )
-            for field_name in _iter_declared_tool_arg_names(tool_spec)
-        }
         declarations.append(
             {
                 "name": tool_name,
@@ -684,6 +725,7 @@ def run_hf_backend(
                         decoded_text=decoded_text,
                         metadata=metadata,
                         sft_format=args.sft_format,
+                        predict_agent=args.predict_acting_agent,
                     )
                     truncated = False
                     if attention_mask is not None and args.max_length is not None:
@@ -794,7 +836,8 @@ def run_gemini_backend(
                 schemas_by_task[task_name] = [
                     genai_types.FunctionDeclaration(**declaration)
                     for declaration in build_vertex_function_declarations(
-                        feature["allowed_tool_specs"]
+                        feature["allowed_tool_specs"],
+                        include_agent_param=args.predict_acting_agent,
                     )
                 ]
             config_kwargs["tools"] = [
@@ -863,6 +906,7 @@ def run_gemini_backend(
                     decoded_text=decoded_text,
                     metadata=sample.metadata,
                     sft_format=args.sft_format,
+                    predict_agent=args.predict_acting_agent,
                 )
                 cost = observed_cost(usage_metadata)
                 record["generation_info"] = {
@@ -951,6 +995,7 @@ _PROMPT_DEFINING_CONFIG_KEYS = (
     "few_shot",
     "forced_json",
     "native_tools",
+    "predict_acting_agent",
     "temperature",
     "thinking_budget",
     "enable_thinking",
@@ -1028,6 +1073,13 @@ def finalize_metrics(
 
 def main() -> None:
     args = parse_args()
+    if args.predict_acting_agent and args.forced_json and not args.native_tools:
+        raise SystemExit(
+            "--predict-acting-agent needs the agent inside the emitted "
+            "arguments, which the plain forced-JSON schema cannot express. "
+            "Use --no-forced-json (hf backend, native tool calls) or "
+            "--native-tools (gemini backend)."
+        )
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     dataset_root = args.dataset_root or Path(manifest["dataset_root"])
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1047,6 +1099,7 @@ def main() -> None:
         task_spec_detail=args.task_spec_detail,
         max_samples=args.max_samples,
         example_build_workers=args.example_build_workers,
+        predict_agent=args.predict_acting_agent,
     )
     manifest_sample_ids = [sample.sample_id for sample in eval_samples]
     dump_prompts(eval_samples, count=args.dump_prompts, output_dir=args.output_dir)

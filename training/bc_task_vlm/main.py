@@ -63,6 +63,8 @@ class RunConfiguration:
     validation_trajectory_fraction: float
     validation_split_seed: int
     sft_format: str
+    predict_acting_agent: bool
+    init_adapter_path: str | None
     use_example_cache: bool
     trust_example_cache: bool
     training_samples_cache_dir: str
@@ -190,6 +192,28 @@ def parse_args() -> argparse.Namespace:
             "'plain' trains assistant text tokens directly. 'tool_call' trains "
             "Qwen/Hugging Face function-call messages and enables structured "
             "generation evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--predict-acting-agent",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Agent-prediction (v2) SFT: drop the acting agent from the prompt, "
+            'supervise it as a required "agent" argument, add the synthetic '
+            "task_complete terminal step, and include task_complete in the "
+            "tool schemas."
+        ),
+    )
+    parser.add_argument(
+        "--init-adapter-path",
+        type=str,
+        default=None,
+        help=(
+            "Initialize LoRA weights from an existing adapter (local dir or "
+            "HF repo) and continue training it, instead of a fresh LoRA. "
+            "Unlike --resume-from-checkpoint this does not restore optimizer "
+            "state."
         ),
     )
     parser.add_argument(
@@ -598,6 +622,8 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
             else args.seed
         ),
         sft_format=args.sft_format,
+        predict_acting_agent=args.predict_acting_agent,
+        init_adapter_path=args.init_adapter_path,
         use_example_cache=args.use_example_cache,
         trust_example_cache=args.trust_example_cache,
         training_samples_cache_dir=str(
@@ -755,6 +781,18 @@ def _load_model(config: RunConfiguration):
         if hasattr(model.config, "use_cache"):
             model.config.use_cache = False
 
+    if config.init_adapter_path:
+        # v2-continue: start from a published adapter's weights and keep
+        # training them (fresh optimizer state, unlike --resume-from-checkpoint).
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(
+            model,
+            config.init_adapter_path,
+            is_trainable=True,
+        )
+        return model
+
     lora_config = LoraConfig(
         r=config.lora_r,
         lora_alpha=config.lora_alpha,
@@ -878,6 +916,7 @@ def _build_examples_for_tasks(
     task_names: list[str],
     split_name: str,
     sft_format: str,
+    predict_agent: bool = False,
     use_example_cache: bool,
     trust_example_cache: bool,
     training_samples_cache_dir: Path,
@@ -932,6 +971,7 @@ def _build_examples_for_tasks(
                     task_name=task_name,
                     trajectory_ids=task_trajectory_ids,
                     sft_format=sft_format,
+                    predict_agent=predict_agent,
                 )
                 trajectory_count = len(fingerprint.get("trajectories", ()))
                 task_examples = load_examples_from_cache(
@@ -969,6 +1009,7 @@ def _build_examples_for_tasks(
                     show_progress=state.is_main_process,
                     progress_description=progress_description,
                     sft_format=sft_format,
+                    predict_agent=predict_agent,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -999,6 +1040,7 @@ def _build_examples_for_tasks(
                     show_progress=False,
                     progress_description=progress_description,
                     sft_format=sft_format,
+                    predict_agent=predict_agent,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1406,6 +1448,7 @@ class StructuredEvalTrainer(Trainer):
                     max_samples=config.eval_generation_max_samples,
                     max_trajectories=config.eval_generation_max_trajectories,
                     image_resolution=config.image_resolution,
+                    predict_agent=config.predict_acting_agent,
                 )
                 self.latest_structured_metrics = dict(structured_metrics)
                 grouped_structured_metrics = _wandb_structured_section_metrics(
@@ -1517,6 +1560,7 @@ def main() -> None:
         task_names=config.train_tasks,
         split_name="train",
         sft_format=config.sft_format,
+        predict_agent=config.predict_acting_agent,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
@@ -1532,6 +1576,7 @@ def main() -> None:
         task_names=config.val_tasks,
         split_name="validation",
         sft_format=config.sft_format,
+        predict_agent=config.predict_acting_agent,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),

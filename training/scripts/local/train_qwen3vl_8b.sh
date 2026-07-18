@@ -19,6 +19,15 @@ num_epochs="${NUM_EPOCHS:-3}"
 if [[ -n "${MAX_STEPS:-}" ]]; then
   launch_args+=(--max-steps "${MAX_STEPS}")
 fi
+# Agent-prediction (v2) SFT: PREDICT_ACTING_AGENT=1 supervises the acting agent
+# + task_complete; INIT_ADAPTER_PATH continues from a published adapter
+# (v2-continue) instead of a fresh LoRA.
+if [[ "${PREDICT_ACTING_AGENT:-0}" == "1" ]]; then
+  launch_args+=(--predict-acting-agent)
+fi
+if [[ -n "${INIT_ADAPTER_PATH:-}" ]]; then
+  launch_args+=(--init-adapter-path "${INIT_ADAPTER_PATH}")
+fi
 
 echo "Training ${model_path} (LoRA) on ${data_root}"
 echo "  epochs=${num_epochs} per_device=${per_device_batch} grad_accum=${grad_accum} res=${image_resolution}"

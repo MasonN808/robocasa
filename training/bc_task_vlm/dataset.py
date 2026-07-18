@@ -56,6 +56,8 @@ from training.bc_task_vlm.prompting import (
     build_user_prompt,
 )
 from training.bc_task_vlm.schema_utils import (
+    TASK_COMPLETE_TOOL_NAME,
+    augment_tool_specs_for_agent_prediction,
     build_single_step_response_schema,
     compact_json_dumps,
     validate_single_step_payload,
@@ -671,13 +673,34 @@ def _raw_step_payload(
     return {"steps": [step]}
 
 
-def _plain_target_text(raw_step: dict[str, Any]) -> str:
+def _plain_target_text(raw_step: dict[str, Any], *, predict_agent: bool = False) -> str:
+    args = dict(raw_step["args"])
+    if predict_agent:
+        args = {"agent": raw_step["agent"], **args}
     return compact_json_dumps(
         {
             "tool": raw_step["tool"],
-            "args": dict(raw_step["args"]),
+            "args": args,
         }
     )
+
+
+def _agent_augmented_tool_call(
+    target_tool_call: dict[str, Any],
+    *,
+    agent_id: str,
+) -> dict[str, Any]:
+    """The v2 supervision/emission form: agent leads the arguments.
+
+    The canonical target_tool_call stays agent-free (scoring and the comm judge
+    compare pure tool arguments); the agent-augmented copy is only what the
+    model is trained to emit.
+    """
+
+    return {
+        "name": target_tool_call["name"],
+        "arguments": {"agent": agent_id, **target_tool_call["arguments"]},
+    }
 
 
 def _build_target_metadata(
@@ -685,6 +708,7 @@ def _build_target_metadata(
     raw_step: dict[str, Any],
     allowed_tool_specs: dict[str, dict[str, Any]],
     sft_format: str = SFT_FORMAT_TOOL_CALL,
+    predict_agent: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     sft_format = _validate_sft_format(sft_format)
     if sft_format == SFT_FORMAT_PLAIN:
@@ -693,7 +717,11 @@ def _build_target_metadata(
             "name": raw_step["tool"],
             "arguments": dict(raw_step["args"]),
         }
-        return target_payload, target_tool_call, _plain_target_text(raw_step)
+        return (
+            target_payload,
+            target_tool_call,
+            _plain_target_text(raw_step, predict_agent=predict_agent),
+        )
 
     # The target is expert ground truth, so a tool it uses is valid by
     # definition. A few tasks' verified specs omit a tool the generated data
@@ -718,7 +746,13 @@ def _build_target_metadata(
             "name": raw_step["tool"],
             "arguments": dict(raw_step["args"]),
         }
-    target_text = compact_json_dumps(target_tool_call)
+    emitted_tool_call = target_tool_call
+    if predict_agent:
+        emitted_tool_call = _agent_augmented_tool_call(
+            target_tool_call,
+            agent_id=target_payload["steps"][0]["agent"],
+        )
+    target_text = compact_json_dumps(emitted_tool_call)
     return target_payload, target_tool_call, target_text
 
 
@@ -729,8 +763,14 @@ def _build_centralized_examples_for_trajectory(
     sft_format: str,
     response_schema: dict[str, Any],
     tool_schemas: list[dict[str, Any]],
+    predict_agent: bool = False,
 ) -> list[CentralizedExample]:
     task_metadata = get_task_metadata(task_name)
+    allowed_tool_specs = task_metadata.allowed_tool_specs
+    if predict_agent:
+        allowed_tool_specs = augment_tool_specs_for_agent_prediction(
+            allowed_tool_specs
+        )
     original_trajectory = _load_json(trajectory_dir / "original_trajectory.json")
     plan_steps = _load_json(trajectory_dir / "plan.json")
     metadata = _load_json(trajectory_dir / "metadata.json")
@@ -777,8 +817,9 @@ def _build_centralized_examples_for_trajectory(
 
         target_payload, target_tool_call, target_text = _build_target_metadata(
             raw_step=raw_step,
-            allowed_tool_specs=task_metadata.allowed_tool_specs,
+            allowed_tool_specs=allowed_tool_specs,
             sft_format=sft_format,
+            predict_agent=predict_agent,
         )
         user_prompt = build_user_prompt(
             composite_task=task_metadata.composite_task,
@@ -787,12 +828,20 @@ def _build_centralized_examples_for_trajectory(
             next_step_index=raw_step["step"],
             observation_views=observation_views,
             history_steps=history_steps,
-            allowed_tool_specs=task_metadata.allowed_tool_specs,
+            allowed_tool_specs=allowed_tool_specs,
             sft_format=sft_format,
+            predict_agent=predict_agent,
         )
         message_kwargs: dict[str, Any]
         if sft_format == SFT_FORMAT_PLAIN:
             message_kwargs = {"target_text": target_text}
+        elif predict_agent:
+            message_kwargs = {
+                "target_tool_call": _agent_augmented_tool_call(
+                    target_tool_call,
+                    agent_id=target_payload["steps"][0]["agent"],
+                )
+            }
         else:
             message_kwargs = {"target_tool_call": target_tool_call}
         sample_id = (
@@ -811,7 +860,7 @@ def _build_centralized_examples_for_trajectory(
                 observation_views=observation_views,
                 image_paths=list(image_paths),
                 history_steps=list(history_steps),
-                allowed_tool_specs=task_metadata.allowed_tool_specs,
+                allowed_tool_specs=allowed_tool_specs,
                 tool_schemas=tool_schemas,
                 response_schema=response_schema,
                 target_payload=target_payload,
@@ -820,13 +869,119 @@ def _build_centralized_examples_for_trajectory(
                 messages=build_messages(
                     user_prompt=user_prompt,
                     num_images=len(image_paths),
+                    predict_agent=predict_agent,
                     **message_kwargs,
                 ),
             )
         )
         history_steps.append(_normalize_history_step(raw_step))
 
+    if predict_agent and examples:
+        examples.append(
+            _build_task_complete_example(
+                task_metadata=task_metadata,
+                metadata=metadata,
+                trajectory_id=trajectory_id,
+                raw_steps=raw_steps,
+                history_steps=history_steps,
+                latest_observations_by_agent=latest_observations_by_agent,
+                allowed_tool_specs=allowed_tool_specs,
+                sft_format=sft_format,
+                response_schema=response_schema,
+                tool_schemas=tool_schemas,
+            )
+        )
+
     return examples
+
+
+def _build_task_complete_example(
+    *,
+    task_metadata: Any,
+    metadata: dict[str, Any],
+    trajectory_id: str,
+    raw_steps: list[dict[str, Any]],
+    history_steps: list[dict[str, Any]],
+    latest_observations_by_agent: dict[str, tuple[list[str], list[str]]],
+    allowed_tool_specs: dict[str, dict[str, Any]],
+    sft_format: str,
+    response_schema: dict[str, Any],
+    tool_schemas: list[dict[str, Any]],
+) -> CentralizedExample:
+    """Synthesizes the terminal task_complete step for agent-prediction SFT.
+
+    Trajectories in the data end with no signal, so the "task is done" state is
+    manufactured: prompt = full history + the freshest observation, target =
+    task_complete. Supervised as the last-acting agent (the announcer is
+    genuinely ambiguous, so completion is scored agent-agnostically).
+    """
+
+    last_agent = history_steps[-1]["agent"]
+    terminal_step_index = int(raw_steps[-1]["step"]) + 1
+    image_paths, observation_views = _require_latest_observation(
+        latest_observations_by_agent=latest_observations_by_agent,
+        before_index=terminal_step_index,
+        agent_id=last_agent,
+    )
+    raw_step = {
+        "step": terminal_step_index,
+        "agent": last_agent,
+        "tool": TASK_COMPLETE_TOOL_NAME,
+        "args": {},
+    }
+    target_payload, target_tool_call, target_text = _build_target_metadata(
+        raw_step=raw_step,
+        allowed_tool_specs=allowed_tool_specs,
+        sft_format=sft_format,
+        predict_agent=True,
+    )
+    user_prompt = build_user_prompt(
+        composite_task=task_metadata.composite_task,
+        task_instruction=metadata["task"],
+        agent_id=last_agent,
+        next_step_index=terminal_step_index,
+        observation_views=observation_views,
+        history_steps=history_steps,
+        allowed_tool_specs=allowed_tool_specs,
+        sft_format=sft_format,
+        predict_agent=True,
+    )
+    if sft_format == SFT_FORMAT_PLAIN:
+        message_kwargs: dict[str, Any] = {"target_text": target_text}
+    else:
+        message_kwargs = {
+            "target_tool_call": _agent_augmented_tool_call(
+                target_tool_call,
+                agent_id=last_agent,
+            )
+        }
+    return CentralizedExample(
+        sample_id=(
+            f"{task_metadata.dataset_name}/{trajectory_id}/"
+            f"step_{terminal_step_index:06d}"
+        ),
+        task_name=task_metadata.dataset_name,
+        composite_task=task_metadata.composite_task,
+        trajectory_id=trajectory_id,
+        step_index=terminal_step_index,
+        agent_id=last_agent,
+        task_instruction=metadata["task"],
+        observation_views=observation_views,
+        image_paths=list(image_paths),
+        history_steps=list(history_steps),
+        allowed_tool_specs=allowed_tool_specs,
+        tool_schemas=tool_schemas,
+        response_schema=response_schema,
+        target_payload=target_payload,
+        target_tool_call=target_tool_call,
+        target_text=target_text,
+        messages=build_messages(
+            user_prompt=user_prompt,
+            num_images=len(image_paths),
+            predict_agent=True,
+            **message_kwargs,
+        ),
+    )
 
 
 def build_centralized_examples(
@@ -838,8 +993,15 @@ def build_centralized_examples(
     sft_format: str = SFT_FORMAT_TOOL_CALL,
     trajectory_ids_by_task: dict[str, set[str]] | None = None,
     example_build_workers: int = 1,
+    predict_agent: bool = False,
 ) -> list[CentralizedExample]:
-    """Builds one SFT example per successful non-image action step."""
+    """Builds one SFT example per successful non-image action step.
+
+    With predict_agent (v2): the acting agent moves from the prompt into the
+    supervised output (as the "agent" argument), the tool set gains
+    task_complete, and one synthetic terminal task_complete example is added
+    per trajectory.
+    """
 
     sft_format = _validate_sft_format(sft_format)
     example_build_workers = max(example_build_workers, 1)
@@ -847,6 +1009,11 @@ def build_centralized_examples(
 
     for task_name in task_names:
         task_metadata = get_task_metadata(task_name)
+        effective_tool_specs = task_metadata.allowed_tool_specs
+        if predict_agent:
+            effective_tool_specs = augment_tool_specs_for_agent_prediction(
+                effective_tool_specs
+            )
         trajectory_dirs = _trajectory_dirs_for_task(
             dataset_root=dataset_root,
             task_name=task_metadata.dataset_name,
@@ -855,13 +1022,14 @@ def build_centralized_examples(
         if sft_format == SFT_FORMAT_TOOL_CALL:
             response_schema = build_single_step_response_schema(
                 agent_ids=AGENT_IDS,
-                allowed_tool_specs=task_metadata.allowed_tool_specs,
+                allowed_tool_specs=effective_tool_specs,
             )
         else:
             response_schema = {}
         tool_schemas = build_tool_schemas(
             agent_ids=AGENT_IDS,
-            allowed_tool_specs=task_metadata.allowed_tool_specs,
+            allowed_tool_specs=effective_tool_specs,
+            include_agent_param=predict_agent,
         )
         include_trajectory_ids = None
         if trajectory_ids_by_task is not None:
@@ -881,6 +1049,7 @@ def build_centralized_examples(
                 sft_format=sft_format,
                 response_schema=response_schema,
                 tool_schemas=tool_schemas,
+                predict_agent=predict_agent,
             )
 
         if example_build_workers > 1 and len(selected_trajectory_dirs) > 1:
@@ -923,6 +1092,7 @@ def build_example_cache_fingerprint(
     task_name: str,
     trajectory_ids: list[str] | set[str] | None = None,
     sft_format: str = SFT_FORMAT_TOOL_CALL,
+    predict_agent: bool = False,
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
 
@@ -937,7 +1107,7 @@ def build_example_cache_fingerprint(
         trajectory_dirs = [
             path for path in trajectory_dirs if path.name in selected_trajectory_ids
         ]
-    return {
+    fingerprint: dict[str, Any] = {
         "cache_format_version": _EXAMPLE_CACHE_FORMAT_VERSION,
         "dataset_root": str(dataset_root.resolve()),
         "task_name": task_metadata.dataset_name,
@@ -964,6 +1134,11 @@ def build_example_cache_fingerprint(
             for trajectory_dir in trajectory_dirs
         ],
     }
+    # Only stamped when enabled so every existing v1 cache fingerprint stays
+    # valid; a v2 build can never silently reuse a v1 cache (and vice versa).
+    if predict_agent:
+        fingerprint["predict_acting_agent"] = True
+    return fingerprint
 
 
 def build_example_cache_path(

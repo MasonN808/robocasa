@@ -81,12 +81,23 @@ def _build_parameter_schema(
     raise ValueError(f"Unsupported tool arg schema type: {schema_type!r}")
 
 
+# Argument name carrying the model-chosen acting agent when agent prediction
+# is enabled. It is a schema-level parameter, never a task-spec tool arg.
+AGENT_ARGUMENT_NAME = "agent"
+
+
 def build_tool_schemas(
     *,
     agent_ids: tuple[str, ...],
     allowed_tool_specs: dict[str, dict[str, Any]],
+    include_agent_param: bool = False,
 ) -> list[dict[str, Any]]:
-    """Builds Hugging Face / OpenAI-style function schemas for one task."""
+    """Builds Hugging Face / OpenAI-style function schemas for one task.
+
+    With include_agent_param, every tool gains a required leading "agent"
+    parameter (enum of agent_ids) so the model expresses which agent acts —
+    the agent-prediction (v2) response format.
+    """
 
     tool_schemas: list[dict[str, Any]] = []
     for tool_name, tool_spec in allowed_tool_specs.items():
@@ -97,6 +108,21 @@ def build_tool_schemas(
         for group in any_of_groups:
             group_text = " or ".join(group)
             description = f"{description} Requires at least one of: {group_text}."
+        properties: dict[str, Any] = {}
+        schema_required = list(required_args)
+        if include_agent_param:
+            properties[AGENT_ARGUMENT_NAME] = {
+                "type": "string",
+                "enum": list(agent_ids),
+                "description": "The agent that performs this call.",
+            }
+            schema_required = [AGENT_ARGUMENT_NAME, *schema_required]
+        for arg_name in schema_args:
+            properties[arg_name] = _build_parameter_schema(
+                arg_name=arg_name,
+                agent_ids=agent_ids,
+                tool_spec=tool_spec,
+            )
         tool_schemas.append(
             {
                 "type": "function",
@@ -105,21 +131,37 @@ def build_tool_schemas(
                     "description": description.strip(),
                     "parameters": {
                         "type": "object",
-                        "properties": {
-                            arg_name: _build_parameter_schema(
-                                arg_name=arg_name,
-                                agent_ids=agent_ids,
-                                tool_spec=tool_spec,
-                            )
-                            for arg_name in schema_args
-                        },
-                        "required": required_args,
+                        "properties": properties,
+                        "required": schema_required,
                         "additionalProperties": False,
                     },
                 },
             }
         )
     return tool_schemas
+
+
+def pop_agent_argument(
+    tool_call: dict[str, Any],
+) -> tuple[str | None, dict[str, Any]]:
+    """Splits the model-chosen agent out of a parsed tool call's arguments.
+
+    Returns (agent_or_None, tool_call_with_agent_removed). The canonical
+    parsed/target tool-call representation keeps arguments agent-free; the
+    agent lives at the payload step level.
+    """
+
+    raw_arguments = tool_call.get("arguments")
+    if not isinstance(raw_arguments, dict) or AGENT_ARGUMENT_NAME not in raw_arguments:
+        return None, tool_call
+    arguments = dict(raw_arguments)
+    agent_value = arguments.pop(AGENT_ARGUMENT_NAME)
+    stripped = dict(tool_call)
+    stripped["arguments"] = arguments
+    return (
+        agent_value if isinstance(agent_value, str) else None,
+        stripped,
+    )
 
 
 def build_assistant_tool_call_message(

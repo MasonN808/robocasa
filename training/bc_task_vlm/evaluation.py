@@ -22,6 +22,7 @@ from training.bc_task_vlm.schema_utils import (
 from training.bc_task_vlm.task_registry import AGENT_IDS
 from training.bc_task_vlm.tool_calling import (
     parse_first_qwen_tool_call,
+    pop_agent_argument,
     tool_call_to_single_step_payload,
 )
 
@@ -282,6 +283,7 @@ def score_structured_prediction(
     decoded_text: str,
     metadata: dict[str, Any],
     sft_format: str,
+    predict_agent: bool = False,
 ) -> dict[str, Any]:
     """Parses, validates, and exact-matches one decoded prediction.
 
@@ -290,6 +292,11 @@ def score_structured_prediction(
     target_payload, target_tool_call, target_text, allowed_tool_specs.
     A thinking model's <think>...</think> block is stripped before parsing so
     reasoning braces cannot be mistaken for the answer JSON.
+
+    With predict_agent (v2), the model chooses the acting agent and emits it as
+    the "agent" argument; it is popped out of the parsed arguments (keeping the
+    canonical tool-call representation agent-free for args comparison and the
+    comm judge) and scored against the expert's agent separately.
     """
 
     reasoning_text, decoded_text = split_reasoning(decoded_text)
@@ -298,10 +305,12 @@ def score_structured_prediction(
     normalized_prediction = None
     parse_error = None
     validation_error = None
+    predicted_agent = None
     exact_tool_match = False
     exact_args_match = False
     exact_tool_call_match = False
     exact_action_match = False
+    exact_agent_match = False
 
     try:
         if sft_format == "plain":
@@ -329,20 +338,35 @@ def score_structured_prediction(
     except Exception as exc:  # pragma: no cover - defensive eval logging
         parse_error = str(exc)
 
-    if parsed_tool_call is not None:
+    if parsed_tool_call is not None and predict_agent:
+        predicted_agent, parsed_tool_call = pop_agent_argument(parsed_tool_call)
+        if predicted_agent is None:
+            validation_error = 'Prediction is missing the required "agent" argument.'
+        elif predicted_agent not in AGENT_IDS:
+            validation_error = (
+                f'Predicted "agent" must be one of {AGENT_IDS}, '
+                f"got {predicted_agent!r}."
+            )
+
+    if parsed_tool_call is not None and validation_error is None:
+        # In v2 the normalized payload's agent is the MODEL's choice, so the
+        # exact-step comparison below scores the agent decision for real.
+        effective_agent_id = (
+            predicted_agent if predict_agent else metadata["agent_id"]
+        )
         try:
             if sft_format == "plain":
                 normalized_prediction = _plain_tool_call_to_single_step_payload(
                     parsed_tool_call,
                     step_index=metadata["step_index"],
-                    agent_id=metadata["agent_id"],
+                    agent_id=effective_agent_id,
                     allowed_tool_specs=metadata["allowed_tool_specs"],
                 )
             else:
                 normalized_prediction = tool_call_to_single_step_payload(
                     parsed_tool_call,
                     step_index=metadata["step_index"],
-                    agent_id=metadata["agent_id"],
+                    agent_id=effective_agent_id,
                     agent_ids=AGENT_IDS,
                     allowed_tool_specs=metadata["allowed_tool_specs"],
                 )
@@ -352,6 +376,7 @@ def score_structured_prediction(
     if normalized_prediction is not None:
         predicted_step = normalized_prediction["steps"][0]
         target_step = target_payload["steps"][0]
+        exact_agent_match = predicted_step["agent"] == target_step["agent"]
         exact_tool_match = predicted_step["tool"] == target_step["tool"]
         exact_args_match = canonicalize_for_comparison(
             predicted_step["args"]
@@ -373,7 +398,7 @@ def score_structured_prediction(
             }
         )
 
-    return {
+    record = {
         "sample_id": metadata["sample_id"],
         "task_name": metadata["task_name"],
         "trajectory_id": metadata["trajectory_id"],
@@ -391,6 +416,10 @@ def score_structured_prediction(
         "exact_tool_call_match": exact_tool_call_match,
         "exact_action_step_match": exact_action_match,
     }
+    if predict_agent:
+        record["predicted_agent"] = predicted_agent
+        record["exact_agent_match"] = exact_agent_match
+    return record
 
 
 def _is_communicate_record(record: dict[str, Any]) -> bool:
@@ -441,6 +470,39 @@ def metrics_from_prediction_records(
         metrics["structured_eval_action_exact_call_accuracy"] = sum(
             bool(r["exact_tool_call_match"]) for r in action_records
         ) / len(action_records)
+
+    # Agent-prediction (v2) metrics, present only when records carry the
+    # model-chosen agent. Note strict agent accuracy is a lower bound: at some
+    # steps either agent could validly act.
+    agent_records = [r for r in records if "exact_agent_match" in r]
+    if agent_records:
+        metrics["structured_eval_agent_accuracy"] = sum(
+            bool(r["exact_agent_match"]) for r in agent_records
+        ) / len(agent_records)
+        metrics["structured_eval_strict_step_accuracy"] = sum(
+            bool(r["exact_action_step_match"]) for r in agent_records
+        ) / len(agent_records)
+
+        def _predicted_tool(record: dict[str, Any]) -> str | None:
+            return (record.get("parsed_tool_call") or {}).get("name")
+
+        def _target_tool(record: dict[str, Any]) -> str | None:
+            return (record.get("target_tool_call") or {}).get("name")
+
+        terminal_records = [
+            r for r in agent_records if _target_tool(r) == "task_complete"
+        ]
+        non_terminal_records = [
+            r for r in agent_records if _target_tool(r) != "task_complete"
+        ]
+        if terminal_records:
+            metrics["structured_eval_completion_recall"] = sum(
+                _predicted_tool(r) == "task_complete" for r in terminal_records
+            ) / len(terminal_records)
+        if non_terminal_records:
+            metrics["structured_eval_premature_completion_rate"] = sum(
+                _predicted_tool(r) == "task_complete" for r in non_terminal_records
+            ) / len(non_terminal_records)
     return metrics
 
 
@@ -469,6 +531,7 @@ def evaluate_structured_generation(
     max_samples: int | None = None,
     max_trajectories: int | None = None,
     image_resolution: int | None = None,
+    predict_agent: bool = False,
 ) -> dict[str, float]:
     """Runs generation over the validation split and computes structured metrics."""
 
@@ -547,6 +610,7 @@ def evaluate_structured_generation(
                         decoded_text=decoded_text,
                         metadata=metadata,
                         sft_format=sft_format,
+                        predict_agent=predict_agent,
                     )
                     records.append(record)
                     handle.write(json.dumps(record, ensure_ascii=True) + "\n")
