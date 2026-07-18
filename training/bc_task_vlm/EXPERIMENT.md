@@ -134,6 +134,31 @@ Full numbers in `training/bc_task_vlm/eval_runs/results_table.{csv,md}`.
 - **Model ordering is sane**: Pro ≥ 3.5 Flash ≥ 3 Flash-with-thinking ≫ 3 Flash
   baseline on action accuracy (Pro tops out at 0.908 action-exact).
 
+## 5b. Fine-tuning result (Qwen3-VL-8B LoRA)
+
+Full numbers in `results_table.{csv,md}` (rows `Qwen3-VL-8B SFT`); the interface
+2×2 is figured in `eval_runs/interface_comparison.png`, the prompt-axis sweep in
+`eval_runs/qwen8b_comparison.png`.
+
+- **SFT clears the bar the frontier could not.** In its native tool-calling
+  format the fine-tuned 8B reaches **.878** judged-overall / **.984** action-exact
+  on held-out trajectories, vs best out-of-the-box **.655** and its own native
+  base **.364**. It transfers: **.675** judged-overall on never-trained tasks.
+- **It is the only thing that moves `traj_all` off 0.000.** Native SFT completes
+  **13/75** held-out-trajectory and **19/75** held-out-task trajectories
+  (.173 / .253). Every out-of-the-box config, every interface: 0/75.
+- **Interface 2×2 (native tool calls vs forced JSON), the decision for training.**
+  Native wins in *all four* cells. The base gains most *per step* (action-exact
+  +.19 / +.15) yet still completes zero trajectories either way — the interface
+  cannot substitute for fine-tuning. For the SFT model native's payoff lands at
+  the *trajectory* level: held-out-task completion roughly triples, **.080 →
+  .253**. The effect is the same sign for tuned and un-tuned models, so it cannot
+  explain the fine-tuning gap — but since native beats forced JSON everywhere and
+  matches the model's trained format, **train and evaluate on native tool calls**.
+- **A worked example hurts the SFT model.** Its best prompt is the bare task spec
+  (.878 / 16% traj on held-out trajectories); adding a few-shot example collapses
+  it (.868 → .550, traj → 0). Prompt engineering does not add to fine-tuning here.
+
 ## 6. Bugs found and fixed (high-effort code review)
 
 Verified findings, all fixed (see git history):
@@ -157,6 +182,20 @@ Verified findings, all fixed (see git history):
    are 6000×4800, above the cap.)
 6. **`rm -rf "$HF_HOME"` trap** in a staging script could delete the shared
    group cache. Now only ever deletes a job-owned `/tmp` dir.
+7. **Native tool-call parser understood only one dialect** — `parse_first_qwen_tool_call`
+   matched the `<function=…>/<parameter=…>` XML rendering, but Qwen's chat template
+   supervises (and the SFT model emits) a JSON body,
+   `<tool_call>{"name","arguments"}</tool_call>`. The `--no-forced-json` SFT evals
+   therefore scored **0.000 on every metric** — a parser artifact, not a model
+   result. Now parses both dialects and passes JSON's already-typed argument values
+   through to validation. (Fixed in `b03903d`; the zeros were re-scored to the
+   .878/.984 numbers above without re-running the GPU.)
+8. **Judge reused stale verdicts across re-scores** — `comm_judge.jsonl` was keyed
+   on `sample_id` alone, so re-scoring a run (e.g. after the parser fix) silently
+   reused verdicts computed against the *old* predictions. Surfaced as an
+   impossible `judged=0.000` on a split with `.675` action-exact. A cached verdict
+   is now honored only when its `predicted_args` still match the current
+   prediction. (Fixed in `b03903d`.)
 
 ## 7. Plan / status
 
@@ -172,14 +211,28 @@ Verified findings, all fixed (see git history):
       task-spec-detail prompt; high-effort bug review (6 fixes).
 - [x] **Qwen thinking + temperature** wired into the HF backend.
 - [x] **Local SFT scripts** (`training/scripts/local/`).
-- [ ] **Stage 3b** — finish remaining Qwen variants (thinking, spec+few-shot,
-      think+spec+few-shot, temp 0.7) + judges. *(running)*
-- [ ] **Stage 4** — SFT the model. Cluster: `training_qwen36_27B_sft.sh`
-      (smoke + full, queued). Local: Qwen3-VL-8B LoRA on a subset.
-- [ ] **Stage 4b** — evaluate the SFT model on both splits (tool_call format)
-      + judge.
-- [ ] **Stage 5** — regenerate `results_table` + comparison figure with the
-      SFT rows; write up (headline: does SFT move `traj_all_steps` off 0.000).
+- [x] **Stage 3b** — remaining Qwen variants (thinking, spec+few-shot,
+      think+spec+few-shot, temp 0.7) + judges.
+- [x] **Stage 4** — SFT the model. Local Qwen3-VL-8B LoRA on the subset landed
+      (`DorianAtSchool/qwen3vl-8b-robocasa-sft`). Cluster 27B still blocked on an
+      NCCL example-build timeout (parked; needs a pre-built example cache).
+- [x] **Stage 4b** — SFT evaluated on both splits, both interfaces (native +
+      forced-JSON control), + judge. Interface 2×2 complete (§5b).
+- [x] **Stage 5** — `results_table` regenerated (70 rows); `sft_headline.png`,
+      `interface_comparison.png`, `qwen8b_comparison.png` + interactive artifact
+      updated. **Headline: SFT is the only thing that moves `traj_all` off 0.000.**
+- [ ] **Follow-up** — cluster 27B SFT (example-cache fix).
+- [ ] **Live-sim (closed-loop) eval** — full plan in
+      [`plans/live_sim_eval_plan.md`](plans/live_sim_eval_plan.md). Motivated by
+      the divergence analysis: first divergence is nearly always the step-0/1
+      `communicate` (91–100%), i.e. a different-but-possibly-valid plan, so
+      teacher forcing likely understates competence.
+- [ ] **SFT v2 (agent prediction)** — train the model to also choose the acting
+      agent (+ `task_complete` signal, failed-step robustness); two starts
+      (scratch vs continue from the v1 adapter); plan in
+      [`plans/agent_prediction_sft_plan.md`](plans/agent_prediction_sft_plan.md).
+      Note: the v1 SFT was already trained on `Qwen3-VL-8B-Instruct`; no
+      non-instruct base exists on the hub (only `-Thinking`).
 
 ## 8. Environment notes (NCSA Delta)
 
