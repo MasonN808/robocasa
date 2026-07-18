@@ -143,7 +143,9 @@ Full numbers in `results_table.{csv,md}` (rows `Qwen3-VL-8B SFT`); the interface
 - **SFT clears the bar the frontier could not.** In its native tool-calling
   format the fine-tuned 8B reaches **.878** judged-overall / **.984** action-exact
   on held-out trajectories, vs best out-of-the-box **.655** and its own native
-  base **.364**. It transfers: **.675** judged-overall on never-trained tasks.
+  base **.367**. It transfers: **.675** judged-overall on never-trained tasks.
+  (Base-native numbers quote the committed local-box run — the cluster rerun of
+  the same config agrees within ±.004, pure bf16 generation nondeterminism.)
 - **It is the only thing that moves `traj_all` off 0.000.** Native SFT completes
   **13/75** held-out-trajectory and **19/75** held-out-task trajectories
   (.173 / .253). Every out-of-the-box config, every interface: 0/75.

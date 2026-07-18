@@ -1,0 +1,484 @@
+<title>Does fine-tuning beat frontier models out of the box? — RoboCasa two-agent tool calling</title>
+<style>
+  :root {
+    --surface:#f7f8fb; --panel:#ffffff; --ink:#191c24; --muted:#5b616f;
+    --faint:#e6e8ee; --hair:#eef0f4; --accent:#2a78d6;
+    --s1:#2a78d6; --s2:#1baf7a; --s3:#eda100; --s4:#008300; --s5:#4a3aa7; --s6:#e34948;
+    --warn:#c2410c; --good:#1baf7a;
+    --shadow:0 1px 2px rgba(20,24,40,.05), 0 6px 20px rgba(20,24,40,.06);
+    --mono:ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --surface:#101219; --panel:#191c25; --ink:#eef0f5; --muted:#949aa8;
+      --faint:#2a2e3a; --hair:#23262f; --accent:#4a90e8;
+      --s1:#3987e5; --s2:#22b98a; --s3:#d99a12; --s4:#2ea043; --s5:#9085e9; --s6:#e66767;
+      --warn:#f0834a; --good:#22b98a;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35); }
+  }
+  :root[data-theme="light"] { --surface:#f7f8fb; --panel:#ffffff; --ink:#191c24; --muted:#5b616f;
+    --faint:#e6e8ee; --hair:#eef0f4; --accent:#2a78d6;
+    --s1:#2a78d6; --s2:#1baf7a; --s3:#eda100; --s4:#008300; --s5:#4a3aa7; --s6:#e34948;
+    --warn:#c2410c; --good:#1baf7a;
+    --shadow:0 1px 2px rgba(20,24,40,.05), 0 6px 20px rgba(20,24,40,.06); }
+  :root[data-theme="dark"] { --surface:#101219; --panel:#191c25; --ink:#eef0f5; --muted:#949aa8;
+    --faint:#2a2e3a; --hair:#23262f; --accent:#4a90e8;
+    --s1:#3987e5; --s2:#22b98a; --s3:#d99a12; --s4:#2ea043; --s5:#9085e9; --s6:#e66767;
+    --warn:#f0834a; --good:#22b98a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--surface); color:var(--ink); font-family:var(--sans);
+         line-height:1.5; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1160px; margin:0 auto; padding:40px 28px 64px; }
+  .eyebrow { font-size:11.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  h1 { font-size:clamp(26px,3.4vw,38px); line-height:1.12; margin:10px 0 12px; letter-spacing:-.02em;
+       font-weight:700; text-wrap:balance; max-width:24ch; }
+  .thesis { font-size:16.5px; color:var(--muted); max-width:66ch; margin:0; }
+  .thesis b { color:var(--ink); font-weight:600; }
+
+  .tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:32px 0 8px; }
+  .tile { background:var(--panel); border:1px solid var(--faint); border-radius:12px;
+          padding:18px 18px 16px; box-shadow:var(--shadow); }
+  .tile.win { border-color:var(--good); box-shadow:0 0 0 1px var(--good), var(--shadow); }
+  .tile .lab { font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  .tile .val { font-family:var(--mono); font-size:34px; font-weight:600; letter-spacing:-.02em;
+               margin:6px 0 2px; font-variant-numeric:tabular-nums; }
+  .tile.win .val { color:var(--good); }
+  .tile .sub { font-size:13px; color:var(--muted); }
+  .tile .delta { font-family:var(--mono); font-size:12px; color:var(--muted); }
+
+  .panel { background:var(--panel); border:1px solid var(--faint); border-radius:14px;
+           box-shadow:var(--shadow); margin-top:22px; padding:20px 22px 22px; }
+  .controls { display:flex; flex-wrap:wrap; gap:18px 26px; align-items:flex-start; margin-bottom:6px; }
+  .ctl-group { display:flex; flex-direction:column; gap:7px; }
+  .ctl-group > .lab { font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  .seg { display:inline-flex; background:var(--surface); border:1px solid var(--faint); border-radius:9px; padding:3px; gap:2px; }
+  .seg button { font-family:var(--sans); font-size:13px; color:var(--muted); font-weight:500; border:0;
+                background:transparent; padding:6px 12px; border-radius:6px; cursor:pointer; white-space:nowrap;
+                transition:background .12s,color .12s; }
+  .seg button:hover { color:var(--ink); }
+  .seg button[aria-pressed="true"] { background:var(--panel); color:var(--ink);
+                                     box-shadow:0 1px 2px rgba(20,24,40,.12); font-weight:600; }
+  .seg.viewsel button[aria-pressed="true"] { background:var(--accent); color:#fff; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:500;
+          border:1px solid var(--faint); background:var(--surface); color:var(--ink);
+          padding:5px 11px 5px 9px; border-radius:20px; cursor:pointer; transition:opacity .12s; }
+  .chip .dot { width:11px; height:11px; border-radius:50%; flex:none; }
+  .chip[aria-pressed="false"] { opacity:.38; }
+  .chip:focus-visible, .seg button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .hidden { display:none !important; }
+
+  .viewnote { margin-top:14px; padding:11px 14px; border-radius:9px; background:var(--surface);
+              border:1px solid var(--faint); border-left:3px solid var(--accent);
+              font-size:12.8px; color:var(--muted); max-width:100ch; }
+  .metric-def { margin-top:12px; padding:13px 15px; border-radius:10px; background:var(--surface);
+                border:1px solid var(--faint); }
+  .metric-def .md-name { font-weight:700; font-size:13.5px; color:var(--ink); }
+  .metric-def .md-desc { font-size:13px; color:var(--muted); margin:3px 0 6px; max-width:82ch; }
+  .metric-def .md-frac { font-family:var(--mono); font-size:12px; color:var(--ink); background:var(--panel);
+                         border:1px solid var(--faint); border-radius:6px; padding:4px 9px; display:inline-block;
+                         font-variant-numeric:tabular-nums; }
+  .glossary { margin-top:22px; }
+  .glossary h2 { font-size:15px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em; }
+  .glossary .g-intro { font-size:13px; color:var(--muted); margin:0 0 16px; max-width:78ch; }
+  .gcard-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
+  .gcard { background:var(--panel); border:1px solid var(--faint); border-radius:11px; padding:14px 16px; box-shadow:var(--shadow); }
+  .gcard .g-name { font-weight:700; font-size:13.5px; display:flex; align-items:center; gap:8px; }
+  .gcard .g-tag { font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.04em;
+                  color:var(--muted); border:1px solid var(--faint); border-radius:5px; padding:1px 6px; }
+  .gcard .g-desc { font-size:12.5px; color:var(--muted); margin:6px 0 8px; line-height:1.5; }
+  .gcard .g-frac { font-family:var(--mono); font-size:11.5px; color:var(--ink); font-variant-numeric:tabular-nums; line-height:1.5; }
+  .gcard .g-frac .den { color:var(--muted); }
+
+  .chartwrap { position:relative; margin-top:16px; }
+  svg { width:100%; height:auto; display:block; overflow:visible; }
+  .axis-lab { fill:var(--muted); font-family:var(--sans); font-size:12px; }
+  .xtick { fill:var(--ink); font-family:var(--sans); font-size:12.5px; font-weight:500; }
+  .xtick tspan.sub { fill:var(--muted); font-size:11px; }
+  .grid line { stroke:var(--hair); stroke-width:1; }
+  .grid text { fill:var(--muted); font-family:var(--mono); font-size:11px; font-variant-numeric:tabular-nums; }
+  .bar { transition:opacity .12s; cursor:pointer; }
+  .bar:hover { opacity:.82; }
+  .vlabel { font-family:var(--mono); font-size:10.5px; fill:var(--ink); font-variant-numeric:tabular-nums; }
+  .dlabel { font-family:var(--mono); font-size:10.5px; font-weight:700; }
+
+  .tooltip { position:absolute; pointer-events:none; opacity:0; transform:translate(-50%,-112%);
+             background:var(--ink); color:var(--surface); border-radius:9px; padding:9px 12px; font-size:12.5px;
+             line-height:1.45; white-space:nowrap; box-shadow:0 8px 24px rgba(0,0,0,.28); transition:opacity .1s; z-index:5; }
+  .tooltip .tt-title { font-weight:700; margin-bottom:2px; }
+  .tooltip .tt-row { font-family:var(--mono); font-variant-numeric:tabular-nums; opacity:.92; }
+  .tooltip .tt-warn { color:#ffb27a; font-family:var(--sans); margin-top:3px; font-size:11.5px; }
+  .legend-note { display:flex; gap:18px; flex-wrap:wrap; margin-top:14px; font-size:12.5px; color:var(--muted); align-items:center; }
+  .legend-note .sw { width:22px; height:13px; border-radius:3px; display:inline-block; vertical-align:middle; margin-right:6px; }
+
+  details.tablewrap { margin-top:22px; }
+  details.tablewrap > summary { cursor:pointer; font-size:13.5px; font-weight:600; color:var(--ink);
+                                list-style:none; display:inline-flex; align-items:center; gap:8px; padding:4px 0; }
+  details.tablewrap > summary::-webkit-details-marker { display:none; }
+  details.tablewrap > summary::before { content:"▸"; color:var(--muted); transition:transform .15s; }
+  details.tablewrap[open] > summary::before { transform:rotate(90deg); }
+  .tscroll { overflow-x:auto; margin-top:12px; border:1px solid var(--faint); border-radius:10px; }
+  table { border-collapse:collapse; width:100%; font-size:12.5px; }
+  th, td { text-align:right; padding:7px 12px; border-bottom:1px solid var(--hair); white-space:nowrap; }
+  th { font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); font-weight:600;
+       position:sticky; top:0; background:var(--panel); }
+  td.txt, th.txt { text-align:left; }
+  tbody td:not(.txt) { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  tbody tr:hover td { background:var(--surface); }
+  td .mdot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:7px; vertical-align:middle; }
+  td.lowparse { color:var(--warn); }
+  td.hit { color:var(--good); font-weight:700; }
+
+  footer { margin-top:30px; font-size:12.5px; color:var(--muted); line-height:1.6; max-width:90ch; }
+  footer b { color:var(--ink); font-weight:600; }
+  @media (max-width:720px){ .tiles{grid-template-columns:1fr;} .wrap{padding:28px 18px 48px;} }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">RoboCasa · SFT-necessity experiment</div>
+    <h1>Fine-tuning, not scale or prompting, completes multi-agent trajectories</h1>
+    <p class="thesis">70 evaluated configurations: four frontier VLMs across seven prompt aids and two answer interfaces, plus an 8B model before and after a 3-epoch LoRA fine-tune. Teacher-forced next-step prediction on ~2,249 steps per split. <b>Every out-of-the-box configuration completes zero full trajectories. Only the fine-tuned model completes any.</b></p>
+  </header>
+
+  <section class="tiles" aria-label="Headline results">
+    <div class="tile">
+      <div class="lab">Best out-of-the-box</div>
+      <div class="val">.655</div>
+      <div class="sub">Gemini-3.5 Flash · +spec+few-shot · held-out trajectories</div>
+      <div class="delta">native function calling: .635 — no better</div>
+    </div>
+    <div class="tile win">
+      <div class="lab">Fine-tuned 8B, native tool calls</div>
+      <div class="val">.878</div>
+      <div class="sub">Qwen3-VL-8B SFT · baseline · held-out trajectories</div>
+      <div class="delta">+.223 over best out-of-the-box · +.511 over its own base (same interface)</div>
+    </div>
+    <div class="tile win">
+      <div class="lab">Full trajectories completed</div>
+      <div class="val">17%<span style="font-size:17px;color:var(--muted)"> vs 0%</span></div>
+      <div class="sub">SFT native baseline: 13/75 · every out-of-the-box config: 0/75</div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Interactive chart">
+    <div class="controls">
+      <div class="ctl-group">
+        <span class="lab">View</span>
+        <div class="seg viewsel" id="view" role="group" aria-label="View">
+          <button data-k="all" aria-pressed="true">All models</button>
+          <button data-k="qwen8b" aria-pressed="false">Qwen3-VL-8B only</button>
+          <button data-k="interface" aria-pressed="false">JSON vs native tools</button>
+        </div>
+      </div>
+      <div class="ctl-group">
+        <span class="lab">Metric</span>
+        <div class="seg" id="metric" role="group" aria-label="Metric">
+          <button data-k="judged" aria-pressed="true">Judged overall</button>
+          <button data-k="traj" aria-pressed="false">Full trajectory</button>
+          <button data-k="exact" aria-pressed="false">Exact call</button>
+          <button data-k="action" aria-pressed="false">Action exact</button>
+          <button data-k="comm_judged" aria-pressed="false">Comm judged</button>
+          <button data-k="tool" aria-pressed="false">Tool name</button>
+        </div>
+      </div>
+      <div class="ctl-group">
+        <span class="lab">Eval split</span>
+        <div class="seg" id="split" role="group" aria-label="Split">
+          <button data-k="trajectories" aria-pressed="true">Held-out trajectories</button>
+          <button data-k="tasks" aria-pressed="false">Held-out tasks</button>
+        </div>
+      </div>
+      <div class="ctl-group" id="modelGroup">
+        <span class="lab">Models</span>
+        <div class="chips" id="models"></div>
+      </div>
+    </div>
+
+    <div class="viewnote" id="viewNote"></div>
+    <div class="metric-def" id="metricDef" aria-live="polite"></div>
+
+    <div class="chartwrap">
+      <svg id="chart" viewBox="0 0 1000 440" role="img" aria-label="Accuracy chart">
+        <defs>
+          <pattern id="hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+            <rect width="6" height="6" fill="none"/>
+            <line x1="0" y1="0" x2="0" y2="6" stroke="var(--panel)" stroke-width="2.4"/>
+          </pattern>
+        </defs>
+      </svg>
+      <div class="tooltip" id="tip"></div>
+    </div>
+
+    <div class="legend-note" id="legendNote"></div>
+
+    <details class="tablewrap">
+      <summary>Data table (current view &amp; split)</summary>
+      <div class="tscroll">
+        <table id="dtable">
+          <thead><tr>
+            <th class="txt">Model</th><th class="txt">Prompt</th>
+            <th>Parse</th><th>Exact</th><th>Action</th><th>Comm&nbsp;judged</th>
+            <th>Judged&nbsp;overall</th><th>Full&nbsp;traj</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section class="glossary" aria-label="Metric definitions">
+    <h2>What each metric means</h2>
+    <p class="g-intro">Every value is a per-step teacher-forced accuracy: given the ground-truth history and the current camera view, predict the expert's next tool call. The tag shows the denominator — which steps the metric is scored over.</p>
+    <div class="gcard-grid" id="glossary"></div>
+  </section>
+
+  <footer>
+    <p><b>The headline.</b> A 3-epoch LoRA fine-tune of an 8B model reaches <b>.878</b> judged-overall in its native tool-calling format — beating the best frontier out-of-the-box configuration (.655) and its own un-tuned base on the identical native interface (.367). On physical steps it hits <b>.984</b>, and it transfers: .675 on tasks it never trained on.</p>
+    <p><b>What prompting could not buy.</b> Across every out-of-the-box configuration — four models, task specifications, worked examples, reasoning budgets, temperature, both answer interfaces — not one completed a single full trajectory. The gap was never manipulation; it was the inter-agent communication protocol (out-of-the-box comm-judged tops out ≈ .37; the fine-tuned model reaches .713). That convention is learnable only from the demonstrations.</p>
+    <p><b>Fine-tuning subsumes prompt engineering — and then a worked example hurts.</b> Holding the interface at forced JSON, prompt aids barely move the 8B base (.247 → .290 at best, never a trajectory); for the fine-tuned model the task spec adds a little (.868 → .878, trajectories 12% → 16%), and a worked example <i>collapses</i> it (.868 → .550, trajectories → 0): the example pushes the prompt off the distribution it was trained on. In its trained native format the bare baseline reaches the same .878 with <i>more</i> trajectories (17%) and no prompt aid at all — the best configuration is simply the model in its own format.</p>
+    <p><b>It is not an interface artifact.</b> We ran the full interface 2×2 on the 8B model — {base, fine-tuned} × {forced JSON, native tool calls}. Native wins <i>every</i> cell, so the headline is the model’s genuine best interface, not a favorable one: the un-tuned base gains most per step (action-exact .405 → .602 / .284 → .432) yet completes <b>zero</b> trajectories at either interface, while the fine-tuned model’s native gain lands where it matters — held-out-task trajectory completion triples, .080 → .253. The frontier control agrees: giving Gemini-3.5 Flash native function calling <i>lowered</i> it slightly (.655 → .635, trajectories still 0.000). No interface rescues an out-of-the-box model, and the practical conclusion for training is to supervise and evaluate in the native tool-calling format. All four 8B cells and the Gemini pair are in the interface view.</p>
+    <p><b>A metric caveat worth stating.</b> The verbatim variant of full-trajectory correctness reads 0.000 for <i>every</i> model including the fine-tuned one, because free-text communicate messages never match word-for-word. The judged version (physical steps exact, communicate steps judge-equivalent) is the honest measure; the verbatim one measures the metric's strictness, not the model.</p>
+  </footer>
+</div>
+
+<script>
+const DATA = [{"model":"Gemini-3 Flash","prompt":"baseline","split":"trajectories","n":1152,"parse":1.0,"exact":0.396,"action":0.655,"tool":0.526,"comm_sel":0.296,"comm_judged":0.18,"judged":0.467,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.001},{"model":"Gemini-3 Flash","prompt":"baseline","split":"tasks","n":1097,"parse":1.0,"exact":0.253,"action":0.397,"tool":0.45,"comm_sel":0.192,"comm_judged":0.154,"judged":0.309,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Gemini-3 Flash","prompt":"+task spec","split":"trajectories","n":1152,"parse":0.999,"exact":0.394,"action":0.652,"tool":0.609,"comm_sel":0.52,"comm_judged":0.263,"judged":0.498,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.051},{"model":"Gemini-3 Flash","prompt":"+task spec","split":"tasks","n":1097,"parse":1.0,"exact":0.258,"action":0.402,"tool":0.581,"comm_sel":0.528,"comm_judged":0.253,"judged":0.348,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.032},{"model":"Qwen3.6-27B base","prompt":"baseline","split":"trajectories","n":1152,"parse":1.0,"exact":0.365,"action":0.605,"tool":0.489,"comm_sel":0.169,"comm_judged":0.083,"judged":0.398,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"baseline","split":"tasks","n":1097,"parse":1.0,"exact":0.235,"action":0.368,"tool":0.449,"comm_sel":0.187,"comm_judged":0.109,"judged":0.274,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"+task spec","split":"trajectories","n":1152,"parse":1.0,"exact":0.358,"action":0.592,"tool":0.546,"comm_sel":0.34,"comm_judged":0.143,"judged":0.414,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.024},{"model":"Qwen3.6-27B base","prompt":"+task spec","split":"tasks","n":1097,"parse":1.0,"exact":0.236,"action":0.369,"tool":0.548,"comm_sel":0.404,"comm_judged":0.172,"judged":0.298,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.024},{"model":"Qwen3.6-27B base","prompt":"thinking default","split":"trajectories","n":1152,"parse":0.339,"exact":0.185,"action":0.306,"tool":0.204,"comm_sel":0.026,"comm_judged":0.015,"judged":0.191,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"thinking default","split":"tasks","n":1097,"parse":0.3,"exact":0.127,"action":0.198,"tool":0.194,"comm_sel":0.03,"comm_judged":0.02,"judged":0.134,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.498,"action":0.825,"tool":0.557,"comm_sel":0.114,"comm_judged":0.059,"judged":0.522,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.351,"action":0.549,"tool":0.546,"comm_sel":0.121,"comm_judged":0.043,"judged":0.366,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"+spec+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.501,"action":0.829,"tool":0.643,"comm_sel":0.333,"comm_judged":0.16,"judged":0.564,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.051},{"model":"Qwen3.6-27B base","prompt":"+spec+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.345,"action":0.539,"tool":0.647,"comm_sel":0.402,"comm_judged":0.154,"judged":0.4,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.051},{"model":"Qwen3.6-27B base","prompt":"think+spec+few-shot","split":"trajectories","n":1152,"parse":0.335,"exact":0.231,"action":0.382,"tool":0.249,"comm_sel":0.035,"comm_judged":0.018,"judged":0.238,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"think+spec+few-shot","split":"tasks","n":1097,"parse":0.295,"exact":0.153,"action":0.24,"tool":0.209,"comm_sel":0.03,"comm_judged":0.013,"judged":0.158,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"temp 0.7","split":"trajectories","n":1152,"parse":1.0,"exact":0.427,"action":0.707,"tool":0.508,"comm_sel":0.164,"comm_judged":0.077,"judged":0.457,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3.6-27B base","prompt":"temp 0.7","split":"tasks","n":1097,"parse":1.0,"exact":0.299,"action":0.468,"tool":0.509,"comm_sel":0.194,"comm_judged":0.109,"judged":0.338,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Gemini-3 Flash","prompt":"thinking default","split":"trajectories","n":1152,"parse":1.0,"exact":0.524,"action":0.868,"tool":0.641,"comm_sel":0.261,"comm_judged":0.169,"judged":0.591,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.002},{"model":"Gemini-3 Flash","prompt":"thinking default","split":"tasks","n":1097,"parse":1.0,"exact":0.36,"action":0.563,"tool":0.621,"comm_sel":0.237,"comm_judged":0.144,"judged":0.412,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Gemini-3 Flash","prompt":"temp 0.7","split":"trajectories","n":1152,"parse":0.999,"exact":0.505,"action":0.836,"tool":0.623,"comm_sel":0.252,"comm_judged":0.14,"judged":0.561,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.001},{"model":"Gemini-3 Flash","prompt":"temp 0.7","split":"tasks","n":1097,"parse":1.0,"exact":0.355,"action":0.555,"tool":0.602,"comm_sel":0.194,"comm_judged":0.141,"judged":0.406,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.001},{"model":"Gemini-3 Flash","prompt":"+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.529,"action":0.875,"tool":0.689,"comm_sel":0.366,"comm_judged":0.189,"judged":0.603,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.035},{"model":"Gemini-3 Flash","prompt":"+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.357,"action":0.559,"tool":0.64,"comm_sel":0.351,"comm_judged":0.205,"judged":0.431,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.046},{"model":"Gemini-3 Flash","prompt":"+spec+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.535,"action":0.885,"tool":0.747,"comm_sel":0.5,"comm_judged":0.268,"judged":0.641,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.06},{"model":"Gemini-3 Flash","prompt":"+spec+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.363,"action":0.568,"tool":0.718,"comm_sel":0.492,"comm_judged":0.283,"judged":0.465,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.051},{"model":"Gemini-3 Flash","prompt":"think+spec+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.537,"action":0.889,"tool":0.699,"comm_sel":0.384,"comm_judged":0.208,"judged":0.62,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.002},{"model":"Gemini-3 Flash","prompt":"think+spec+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.365,"action":0.571,"tool":0.671,"comm_sel":0.376,"comm_judged":0.24,"judged":0.451,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.02},{"model":"Gemini-3.5 Flash","prompt":"baseline","split":"trajectories","n":1152,"parse":1.0,"exact":0.504,"action":0.835,"tool":0.663,"comm_sel":0.36,"comm_judged":0.23,"judged":0.595,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.001},{"model":"Gemini-3.5 Flash","prompt":"baseline","split":"tasks","n":1097,"parse":1.0,"exact":0.349,"action":0.546,"tool":0.636,"comm_sel":0.326,"comm_judged":0.25,"judged":0.439,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Gemini-3.5 Flash","prompt":"+task spec","split":"trajectories","n":1152,"parse":1.0,"exact":0.503,"action":0.832,"tool":0.763,"comm_sel":0.61,"comm_judged":0.344,"judged":0.639,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.069},{"model":"Gemini-3.5 Flash","prompt":"+task spec","split":"tasks","n":1097,"parse":1.0,"exact":0.345,"action":0.541,"tool":0.746,"comm_sel":0.621,"comm_judged":0.369,"judged":0.479,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.06},{"model":"Gemini-3.5 Flash","prompt":"thinking default","split":"trajectories","n":1152,"parse":1.0,"exact":0.501,"action":0.829,"tool":0.663,"comm_sel":0.362,"comm_judged":0.232,"judged":0.593,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.001},{"model":"Gemini-3.5 Flash","prompt":"thinking default","split":"tasks","n":1097,"parse":1.0,"exact":0.351,"action":0.549,"tool":0.632,"comm_sel":0.326,"comm_judged":0.247,"judged":0.44,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Gemini-3.5 Flash","prompt":"+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.53,"action":0.876,"tool":0.72,"comm_sel":0.445,"comm_judged":0.246,"judged":0.627,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.027},{"model":"Gemini-3.5 Flash","prompt":"+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.357,"action":0.559,"tool":0.687,"comm_sel":0.447,"comm_judged":0.255,"judged":0.449,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.043},{"model":"Gemini-3.5 Flash","prompt":"+spec+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.533,"action":0.882,"tool":0.763,"comm_sel":0.546,"comm_judged":0.307,"judged":0.655,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.059},{"model":"Gemini-3.5 Flash","prompt":"+spec+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.364,"action":0.569,"tool":0.737,"comm_sel":0.566,"comm_judged":0.323,"judged":0.48,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.056},{"model":"Gemini-3.5 Flash","prompt":"+spec+few-shot (native tools control)","split":"trajectories","n":1152,"parse":0.987,"exact":0.516,"action":0.853,"tool":0.749,"comm_sel":0.509,"comm_judged":0.303,"judged":0.635,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.066},{"model":"Gemini-3.5 Flash","prompt":"+spec+few-shot (native tools control)","split":"tasks","n":1097,"parse":0.976,"exact":0.341,"action":0.534,"tool":0.745,"comm_sel":0.54,"comm_judged":0.359,"judged":0.47,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.065},{"model":"Gemini-3.5 Flash","prompt":"think+spec+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.534,"action":0.884,"tool":0.763,"comm_sel":0.548,"comm_judged":0.307,"judged":0.655,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.054},{"model":"Gemini-3.5 Flash","prompt":"think+spec+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.36,"action":0.563,"tool":0.729,"comm_sel":0.558,"comm_judged":0.318,"judged":0.475,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.054},{"model":"Gemini-3.1 Pro","prompt":"baseline","split":"trajectories","n":1152,"parse":1.0,"exact":0.536,"action":0.886,"tool":0.649,"comm_sel":0.246,"comm_judged":0.136,"judged":0.589,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.002},{"model":"Gemini-3.1 Pro","prompt":"baseline","split":"tasks","n":1097,"parse":1.0,"exact":0.373,"action":0.583,"tool":0.636,"comm_sel":0.174,"comm_judged":0.081,"judged":0.402,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Gemini-3.1 Pro","prompt":"+task spec","split":"trajectories","n":1152,"parse":1.0,"exact":0.535,"action":0.885,"tool":0.649,"comm_sel":0.243,"comm_judged":0.136,"judged":0.589,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.001},{"model":"Gemini-3.1 Pro","prompt":"+task spec","split":"tasks","n":1097,"parse":1.0,"exact":0.372,"action":0.582,"tool":0.643,"comm_sel":0.192,"comm_judged":0.098,"judged":0.407,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Gemini-3.1 Pro","prompt":"think+spec+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.549,"action":0.908,"tool":0.679,"comm_sel":0.309,"comm_judged":0.182,"judged":0.621,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Gemini-3.1 Pro","prompt":"think+spec+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.377,"action":0.591,"tool":0.686,"comm_sel":0.318,"comm_judged":0.184,"judged":0.444,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.005},{"model":"Qwen3-VL-8B base","prompt":"baseline","split":"trajectories","n":1152,"parse":1.0,"exact":0.364,"action":0.602,"tool":0.412,"comm_sel":0.026,"comm_judged":0.009,"judged":0.367,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B base","prompt":"baseline","split":"tasks","n":1097,"parse":1.0,"exact":0.276,"action":0.432,"tool":0.423,"comm_sel":0.058,"comm_judged":0.038,"judged":0.29,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B base","prompt":"baseline (forced-JSON control)","split":"trajectories","n":1152,"parse":0.999,"exact":0.245,"action":0.405,"tool":0.398,"comm_sel":0.029,"comm_judged":0.007,"judged":0.247,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B base","prompt":"baseline (forced-JSON control)","split":"tasks","n":1097,"parse":0.997,"exact":0.181,"action":0.284,"tool":0.401,"comm_sel":0.051,"comm_judged":0.033,"judged":0.193,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B base","prompt":"baseline (plain fmt control)","split":"trajectories","n":1152,"parse":1.0,"exact":0.312,"action":0.516,"tool":0.359,"comm_sel":0.035,"comm_judged":0.013,"judged":0.317,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B base","prompt":"baseline (plain fmt control)","split":"tasks","n":1097,"parse":1.0,"exact":0.249,"action":0.388,"tool":0.364,"comm_sel":0.043,"comm_judged":0.008,"judged":0.251,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B SFT","prompt":"baseline","split":"trajectories","n":1152,"parse":1.0,"exact":0.626,"action":0.984,"tool":0.995,"comm_sel":1.0,"comm_judged":0.717,"judged":0.878,"traj":0.173,"traj_exact":0.0,"traj_prefix":0.244},{"model":"Qwen3-VL-8B SFT","prompt":"baseline","split":"tasks","n":1097,"parse":1.0,"exact":0.445,"action":0.675,"tool":0.84,"comm_sel":0.992,"comm_judged":0.674,"judged":0.675,"traj":0.253,"traj_exact":0.0,"traj_prefix":0.363},{"model":"Qwen3-VL-8B SFT","prompt":"baseline (forced-JSON control)","split":"trajectories","n":1152,"parse":0.992,"exact":0.615,"action":0.97,"tool":0.987,"comm_sel":1.0,"comm_judged":0.713,"judged":0.868,"traj":0.12,"traj_exact":0.0,"traj_prefix":0.215},{"model":"Qwen3-VL-8B SFT","prompt":"baseline (forced-JSON control)","split":"tasks","n":1097,"parse":0.981,"exact":0.417,"action":0.631,"tool":0.822,"comm_sel":0.99,"comm_judged":0.682,"judged":0.649,"traj":0.08,"traj_exact":0.0,"traj_prefix":0.253},{"model":"Qwen3-VL-8B base","prompt":"+task spec","split":"trajectories","n":1152,"parse":0.997,"exact":0.218,"action":0.361,"tool":0.444,"comm_sel":0.178,"comm_judged":0.064,"judged":0.243,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.026},{"model":"Qwen3-VL-8B base","prompt":"+task spec","split":"tasks","n":1097,"parse":0.999,"exact":0.189,"action":0.295,"tool":0.456,"comm_sel":0.23,"comm_judged":0.081,"judged":0.218,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.028},{"model":"Qwen3-VL-8B SFT","prompt":"+task spec","split":"trajectories","n":1152,"parse":0.995,"exact":0.616,"action":0.974,"tool":0.989,"comm_sel":1.0,"comm_judged":0.732,"judged":0.878,"traj":0.16,"traj_exact":0.0,"traj_prefix":0.248},{"model":"Qwen3-VL-8B SFT","prompt":"+task spec","split":"tasks","n":1097,"parse":0.992,"exact":0.419,"action":0.633,"tool":0.84,"comm_sel":0.99,"comm_judged":0.679,"judged":0.65,"traj":0.08,"traj_exact":0.0,"traj_prefix":0.23},{"model":"Qwen3-VL-8B base","prompt":"+few-shot","split":"trajectories","n":1152,"parse":0.997,"exact":0.287,"action":0.476,"tool":0.403,"comm_sel":0.013,"comm_judged":0.007,"judged":0.29,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B base","prompt":"+few-shot","split":"tasks","n":1097,"parse":0.999,"exact":0.237,"action":0.371,"tool":0.413,"comm_sel":0.058,"comm_judged":0.023,"judged":0.245,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B SFT","prompt":"+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.462,"action":0.759,"tool":0.889,"comm_sel":0.993,"comm_judged":0.232,"judged":0.55,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.004},{"model":"Qwen3-VL-8B SFT","prompt":"+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.285,"action":0.447,"tool":0.72,"comm_sel":0.985,"comm_judged":0.205,"judged":0.359,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0},{"model":"Qwen3-VL-8B base","prompt":"+spec+few-shot","split":"trajectories","n":1152,"parse":0.99,"exact":0.23,"action":0.381,"tool":0.444,"comm_sel":0.171,"comm_judged":0.072,"judged":0.259,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.031},{"model":"Qwen3-VL-8B base","prompt":"+spec+few-shot","split":"tasks","n":1097,"parse":0.985,"exact":0.14,"action":0.22,"tool":0.455,"comm_sel":0.222,"comm_judged":0.096,"judged":0.175,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.039},{"model":"Qwen3-VL-8B SFT","prompt":"+spec+few-shot","split":"trajectories","n":1152,"parse":1.0,"exact":0.425,"action":0.7,"tool":0.856,"comm_sel":0.993,"comm_judged":0.178,"judged":0.493,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.008},{"model":"Qwen3-VL-8B SFT","prompt":"+spec+few-shot","split":"tasks","n":1097,"parse":1.0,"exact":0.273,"action":0.427,"tool":0.696,"comm_sel":0.982,"comm_judged":0.194,"judged":0.343,"traj":0.0,"traj_exact":0.0,"traj_prefix":0.0}];
+
+const MODELS = ["Gemini-3 Flash","Gemini-3.5 Flash","Gemini-3.1 Pro","Qwen3.6-27B base","Qwen3-VL-8B base","Qwen3-VL-8B SFT"];
+const MLABEL = {"Gemini-3 Flash":"Gemini-3 Flash","Gemini-3.5 Flash":"Gemini-3.5 Flash","Gemini-3.1 Pro":"Gemini-3.1 Pro",
+  "Qwen3.6-27B base":"Qwen3.6-27B","Qwen3-VL-8B base":"Qwen3-VL-8B base ★","Qwen3-VL-8B SFT":"Qwen3-VL-8B SFT ★"};
+const MVAR = {"Gemini-3 Flash":"--s1","Gemini-3.5 Flash":"--s2","Gemini-3.1 Pro":"--s3",
+  "Qwen3.6-27B base":"--s4","Qwen3-VL-8B base":"--s5","Qwen3-VL-8B SFT":"--s6"};
+const PROMPTS = ["baseline","thinking default","temp 0.7","+task spec","+few-shot","+spec+few-shot","think+spec+few-shot"];
+const PSHORT = {"baseline":["base",""],"thinking default":["think",""],"temp 0.7":["t=0.7",""],"+task spec":["+spec",""],
+  "+few-shot":["+few",""],"+spec+few-shot":["+spec","+few"],"think+spec+few-shot":["think","+spec+few"],
+  "baseline (forced-JSON control)":["base","(JSON)"]};
+const MET = {judged:"Judged overall",traj:"Full trajectory completed",exact:"Exact call",action:"Action exact",
+  comm_judged:"Comm judged",tool:"Tool name"};
+
+// Each view answers one question. The interface view pairs runs that differ
+// ONLY in how the answer is delivered (prompt+JSON vs native function calling).
+const VIEWS = {
+  all: { models: MODELS, prompts: PROMPTS,
+    note: "Every model and prompt aid. ★ = the 8B baseline rows ANSWER in native tool-calling — the fine-tuned model's trained format and its genuine best interface (it wins every cell of the interface 2×2). Their forced-JSON and plain-prompt controls are in the data table." },
+  qwen8b: { models: ["Qwen3-VL-8B base","Qwen3-VL-8B SFT"], prompts: ["baseline","+task spec","+few-shot","+spec+few-shot"],
+    note: "One model, one interface (forced JSON throughout, so only fine-tuning and prompt aids vary). Prompt aids barely move the base and it never completes a trajectory; for the fine-tuned model the task spec is the best prompt and a worked example collapses it. In its trained NATIVE format the bare baseline does better still (.878 judged, 17% of trajectories — see the interface view)." },
+  interface: { note: "Same model and prompt — only the answer interface differs (forced JSON vs native tool calling). The full 8B 2×2: native wins EVERY cell. The un-tuned base gains most per step (action +.20/+.15) yet completes zero trajectories either way — the interface cannot substitute for fine-tuning. The fine-tuned model’s native gain lands at the trajectory level: held-out-task completion .080 → .253. Gemini gets slightly WORSE with native calling (.655 → .635) — no interface rescues an out-of-the-box model." },
+};
+const IFACE_PAIRS = [
+  { label:"Gemini-3.5 Flash", sub:"+spec+few-shot", model:"Gemini-3.5 Flash",
+    json:"+spec+few-shot", native:"+spec+few-shot (native tools control)" },
+  { label:"Qwen3-VL-8B base", sub:"baseline", model:"Qwen3-VL-8B base",
+    json:"baseline (forced-JSON control)", native:"baseline" },
+  { label:"Qwen3-VL-8B SFT", sub:"baseline", model:"Qwen3-VL-8B SFT",
+    json:"baseline (forced-JSON control)", native:"baseline" },
+];
+const IFACE_C = { json:"#2a78d6", native:"#eda100" };
+
+const DEF = {
+  judged: ["Judged overall",
+    "The communication-fair headline. Every step counts: a physical step is correct when tool + all arguments exactly match the expert; a communicate step is correct when an LLM judge rates the message equivalent to the expert's.",
+    "exact physical matches + judged communicate matches", "all steps", "all steps"],
+  traj: ["Full trajectory completed",
+    "The experiment's headline and strictest bar: EVERY step of a trajectory correct — physical steps by exact match, communicate steps by judge equivalence. 0.000 for every out-of-the-box config; only the fine-tuned model clears it.",
+    "fully-correct trajectories", "all trajectories", "trajectories"],
+  exact: ["Exact call",
+    "Predicted tool AND all arguments exactly match, on every step — including communicate steps, where verbatim text match is nearly impossible, so this understates communication.",
+    "exact tool + args matches", "all steps", "all steps"],
+  action: ["Action exact",
+    "Exact tool + args match restricted to physical steps (navigate, pick, place, open…). Communicate steps excluded — the clean 'can it manipulate' number.",
+    "exact matches on physical steps", "physical steps only", "physical steps"],
+  comm_judged: ["Comm judged",
+    "Among steps where the EXPERT communicates: the model both chose to communicate AND the judge rated its message equivalent. Staying silent counts as a miss, so this is always ≤ 'comm selected' — the gap is 'spoke, but said the wrong thing.'",
+    "chose to communicate AND message judged equivalent", "all expert-communicate steps", "expert-comm steps"],
+  tool: ["Tool name",
+    "Predicted tool matches the expert's tool, arguments ignored — every step. The loosest correctness bar.",
+    "correct tool (any args)", "all steps", "all steps"],
+  comm_sel: ["Comm selected",
+    "Among steps where the EXPERT communicates: how often the model also chose to communicate (content ignored). The ceiling that 'comm judged' is measured against.",
+    "chose to communicate", "all expert-communicate steps", "expert-comm steps"],
+  parse: ["Parse rate",
+    "Fraction of predictions that were syntactically valid — a formatting check, not correctness. Below ~1.0 means the model failed to emit a parseable call (e.g. unconstrained thinking runs).",
+    "parseable outputs", "all steps", "all steps"],
+  traj_exact: ["Full trajectory (verbatim)",
+    "As 'full trajectory' but requiring VERBATIM match on communicate steps too. It reads 0.000 for every model INCLUDING the fine-tuned one — free text never matches word-for-word. This variant measures the metric's strictness, not the model; use the judged version.",
+    "fully-correct trajectories (verbatim)", "all trajectories", "trajectories"],
+};
+
+let state = { view:"all", metric:"judged", split:"trajectories", hidden:new Set() };
+
+const chipsEl = document.getElementById("models");
+MODELS.forEach(m => {
+  const b = document.createElement("button");
+  b.className = "chip"; b.setAttribute("aria-pressed","true"); b.dataset.m = m;
+  b.innerHTML = `<span class="dot" style="background:var(${MVAR[m]})"></span>${MLABEL[m]}`;
+  b.onclick = () => { b.getAttribute("aria-pressed")==="true"
+      ? (state.hidden.add(m), b.setAttribute("aria-pressed","false"))
+      : (state.hidden.delete(m), b.setAttribute("aria-pressed","true")); render(); };
+  chipsEl.appendChild(b);
+});
+function bindSeg(id, key){ document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => {
+  document.querySelectorAll(`#${id} button`).forEach(x=>x.setAttribute("aria-pressed","false"));
+  b.setAttribute("aria-pressed","true"); state[key]=b.dataset.k; render();
+});}
+bindSeg("metric","metric"); bindSeg("split","split"); bindSeg("view","view");
+
+const NS="http://www.w3.org/2000/svg";
+const svg=document.getElementById("chart"), tip=document.getElementById("tip");
+const W=1000,H=440,mL=46,mR=12,mT=16,mB=62;
+function el(tag,attrs,txt){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); if(txt!=null) e.textContent=txt; return e; }
+function find(model,prompt,split){ return DATA.find(d => d.model===model && d.prompt===prompt && d.split===split); }
+function fmt(v){ return (v>0 && v<0.1) ? v.toFixed(3).replace(/^0/,"") : v.toFixed(2).replace(/^0/,""); }
+
+function drawGrid(plotH){
+  const g = el("g",{class:"grid"});
+  for(let t=0;t<=1.0001;t+=0.2){
+    const y = mT+plotH*(1-t);
+    g.appendChild(el("line",{x1:mL,y1:y,x2:W-mR,y2:y}));
+    g.appendChild(el("text",{x:mL-8,y:y+3.5,"text-anchor":"end"}, t.toFixed(1)));
+  }
+  svg.appendChild(g);
+}
+
+function render(){
+  [...svg.children].forEach(n => { if(n.tagName.toLowerCase()!=="defs") n.remove(); });
+  document.getElementById("viewNote").textContent = VIEWS[state.view].note;
+  document.getElementById("modelGroup").classList.toggle("hidden", state.view==="interface");
+  if(state.view==="interface") renderInterface(); else renderGrouped();
+  updateMetricDef();
+  renderTable();
+  renderLegend();
+}
+
+function renderGrouped(){
+  const cfg = VIEWS[state.view];
+  const models = cfg.models.filter(m => !state.hidden.has(m));
+  const plotW = W-mL-mR, plotH = H-mT-mB;
+  drawGrid(plotH);
+  const cols = cfg.prompts.filter(p => DATA.some(d => d.prompt===p && d.split===state.split
+                && models.includes(d.model) && d[state.metric]!=null));
+  const groupW = plotW/Math.max(cols.length,1), innerPad = groupW*0.16, bandW = groupW-innerPad;
+
+  cols.forEach((p,pi) => {
+    const gx = mL+pi*groupW;
+    const present = models.filter(m => { const r=find(m,p,state.split); return r && r[state.metric]!=null; });
+    const bw = present.length ? bandW/present.length : bandW;
+    const barW = Math.max(4, bw*0.82);
+    const [l1,l2] = PSHORT[p] || [p,""];
+    const xt = el("text",{class:"xtick", x:gx+groupW/2, y:H-mB+20, "text-anchor":"middle"});
+    xt.appendChild(el("tspan",{x:gx+groupW/2}, l1));
+    if(l2) xt.appendChild(el("tspan",{x:gx+groupW/2, dy:"13", class:"sub"}, l2));
+    svg.appendChild(xt);
+    present.forEach((m,mi) => {
+      const rec = find(m,p,state.split), v = rec[state.metric];
+      const x = gx+innerPad/2+mi*bw+(bw-barW)/2, h = plotH*v, y = mT+plotH-h;
+      const low = rec.parse!=null && rec.parse<0.9;
+      const bar = el("rect",{class:"bar", x, y, width:barW, height:Math.max(h,0.6), rx:3, fill:`var(${MVAR[m]})`});
+      bar.addEventListener("mouseenter", e => showTip(e, rec, MLABEL[m]));
+      bar.addEventListener("mousemove", moveTip);
+      bar.addEventListener("mouseleave", () => tip.style.opacity=0);
+      svg.appendChild(bar);
+      if(low) svg.appendChild(el("rect",{x,y,width:barW,height:Math.max(h,0.6),rx:3,fill:"url(#hatch)","pointer-events":"none"}));
+      svg.appendChild(el("text",{class:"vlabel", x:x+barW/2, y:y-4, "text-anchor":"middle"}, fmt(v)));
+    });
+  });
+  svg.appendChild(el("text",{class:"axis-lab", x:-(mT+plotH/2), y:14, transform:"rotate(-90)","text-anchor":"middle"},
+    MET[state.metric]+" (0–1)"));
+}
+
+function renderInterface(){
+  const plotW = W-mL-mR, plotH = H-mT-mB;
+  drawGrid(plotH);
+  const groupW = plotW/IFACE_PAIRS.length, barW = Math.min(74, groupW*0.19);
+  IFACE_PAIRS.forEach((pair,pi) => {
+    const cx = mL+pi*groupW+groupW/2;
+    const jr = find(pair.model, pair.json, state.split);
+    const nr = find(pair.model, pair.native, state.split);
+    const xt = el("text",{class:"xtick", x:cx, y:H-mB+20, "text-anchor":"middle"});
+    xt.appendChild(el("tspan",{x:cx}, pair.label));
+    xt.appendChild(el("tspan",{x:cx, dy:"14", class:"sub"}, pair.sub));
+    svg.appendChild(xt);
+    [[jr,-barW*0.62,"json","Prompt + JSON schema"],[nr,barW*0.62,"native","Native function calling"]].forEach(([rec,off,key,lbl]) => {
+      if(!rec || rec[state.metric]==null) return;
+      const v = rec[state.metric], h = plotH*v, y = mT+plotH-h, x = cx+off-barW/2;
+      const bar = el("rect",{class:"bar", x, y, width:barW, height:Math.max(h,0.6), rx:3, fill:IFACE_C[key]});
+      bar.addEventListener("mouseenter", e => showTip(e, rec, `${pair.label} — ${lbl}`));
+      bar.addEventListener("mousemove", moveTip);
+      bar.addEventListener("mouseleave", () => tip.style.opacity=0);
+      svg.appendChild(bar);
+      svg.appendChild(el("text",{class:"vlabel", x:x+barW/2, y:y-4, "text-anchor":"middle"}, fmt(v)));
+    });
+    if(jr && nr && jr[state.metric]!=null && nr[state.metric]!=null){
+      const d = nr[state.metric]-jr[state.metric];
+      const top = mT+plotH-plotH*Math.max(jr[state.metric],nr[state.metric])-24;
+      svg.appendChild(el("text",{class:"dlabel", x:cx, y:top, "text-anchor":"middle",
+        fill: d<0 ? "var(--warn)" : "var(--good)"}, (d>=0?"+":"")+d.toFixed(3)));
+    }
+  });
+  svg.appendChild(el("text",{class:"axis-lab", x:-(mT+plotH/2), y:14, transform:"rotate(-90)","text-anchor":"middle"},
+    MET[state.metric]+" (0–1)"));
+}
+
+function renderLegend(){
+  const n = document.getElementById("legendNote");
+  if(state.view==="interface"){
+    n.innerHTML = `<span><span class="sw" style="background:${IFACE_C.json}"></span> Prompt + JSON schema</span>`+
+      `<span><span class="sw" style="background:${IFACE_C.native}"></span> Native function calling</span>`+
+      `<span>Delta above each pair = native − JSON.</span>`;
+  } else {
+    n.innerHTML = `<span><span class="sw" style="background-image:repeating-linear-gradient(45deg, var(--s4), var(--s4) 3px, var(--panel) 3px, var(--panel) 5px)"></span> hatched = unconstrained decoding (parse ≈ .34); the drop is JSON formatting, not reasoning</span>`+
+      `<span><b style="color:var(--ink)">★</b> = tools presented as function definitions in the prompt (answers are constrained JSON either way)</span>`;
+  }
+}
+
+function showTip(e, rec, title){
+  const low = rec.parse!=null && rec.parse<0.9;
+  tip.innerHTML = `<div class="tt-title">${title}</div>`+
+    `<div class="tt-row">${rec.prompt} · ${state.split}</div>`+
+    `<div class="tt-row">${MET[state.metric]}: ${rec[state.metric].toFixed(3)}</div>`+
+    `<div class="tt-row">parse ${rec.parse!=null?rec.parse.toFixed(2):"—"} · n=${rec.n}</div>`+
+    (low?`<div class="tt-warn">⚠ unconstrained decoding — see note</div>`:``);
+  tip.style.opacity=1; moveTip(e);
+}
+function moveTip(e){ const r=svg.getBoundingClientRect(); tip.style.left=(e.clientX-r.left)+"px"; tip.style.top=(e.clientY-r.top)+"px"; }
+
+function updateMetricDef(){
+  const d = DEF[state.metric];
+  document.getElementById("metricDef").innerHTML =
+    `<div class="md-name">${d[0]}</div><div class="md-desc">${d[1]}</div>`+
+    `<span class="md-frac">${d[2]} &nbsp;÷&nbsp; ${d[3]}</span>`;
+}
+function buildGlossary(){
+  const order = ["parse","tool","exact","action","comm_sel","comm_judged","judged","traj","traj_exact"];
+  document.getElementById("glossary").innerHTML = order.map(k => {
+    const d = DEF[k];
+    return `<div class="gcard"><div class="g-name">${d[0]} <span class="g-tag">${d[4]}</span></div>
+      <div class="g-desc">${d[1]}</div>
+      <div class="g-frac">${d[2]}<br><span class="den">÷ ${d[3]}</span></div></div>`;
+  }).join("");
+}
+function renderTable(){
+  let rows;
+  if(state.view==="interface"){
+    const keys = new Set();
+    IFACE_PAIRS.forEach(p => { keys.add(p.model+"||"+p.json); keys.add(p.model+"||"+p.native); });
+    rows = DATA.filter(d => d.split===state.split && keys.has(d.model+"||"+d.prompt));
+  } else {
+    const cfg = VIEWS[state.view];
+    rows = DATA.filter(d => d.split===state.split && cfg.models.includes(d.model) && !state.hidden.has(d.model));
+  }
+  rows.sort((a,b)=> MODELS.indexOf(a.model)-MODELS.indexOf(b.model) || String(a.prompt).localeCompare(String(b.prompt)));
+  const c = v => v==null ? "—" : v.toFixed(3).replace(/^0/,"");
+  document.querySelector("#dtable tbody").innerHTML = rows.map(d => `<tr>
+      <td class="txt"><span class="mdot" style="background:var(${MVAR[d.model]})"></span>${MLABEL[d.model]}</td>
+      <td class="txt">${d.prompt}</td>
+      <td class="${d.parse!=null&&d.parse<0.9?'lowparse':''}">${d.parse!=null?d.parse.toFixed(2):"—"}</td>
+      <td>${c(d.exact)}</td><td>${c(d.action)}</td><td>${c(d.comm_judged)}</td>
+      <td><b>${c(d.judged)}</b></td>
+      <td class="${d.traj>0?'hit':''}">${c(d.traj)}</td>
+    </tr>`).join("");
+}
+buildGlossary();
+render();
+</script>
