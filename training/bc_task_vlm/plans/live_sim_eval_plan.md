@@ -36,6 +36,16 @@ Create `training/bc_task_vlm/live_sim_eval.py` (`python -m training.bc_task_vlm.
 - **Loop per turn**: scheduler picks agent → render 3 views via `get_image` → build prompt from running history (`build_user_prompt`; history lines for failed attempts get a short `FAILED: <reason>` suffix — small extension to `format_history_steps`, live-sim only) → generate → parse+validate → FSM legality check (preconditions + comm gate) → if legal: resolve args, `executor.execute(...)`, mirror into `TaskRuntimeState`, append to history; if illegal/unparseable: **no-op + error feedback** in history, count rejection → check `env._check_success()` and `is_goal_state_satisfied` → stop on success, step budget (2× expert length), or 3 consecutive rejections.
 - **Turn policies** (pluggable): `round_robin` (headline; prompted agent may act/communicate/`wait` — if `wait` absent from the task's allowed tools, a rejected turn passes to the other agent) and `expert` (control: expert's agent schedule, model chooses actions) — the delta between them measures the scheduling confound. A third policy, `model_choice` (the model emits the acting agent itself), becomes viable once the agent-prediction SFT lands — see `agent_prediction_sft_plan.md`; add it to the roster then rather than blocking this plan on it.
 - **Outputs**: per-trajectory jsonl (executed steps, legality per step, both success flags, partial goal fraction, steps used vs expert length, termination reason) + aggregated `live_sim_metrics.json`; optional saved frames for debugging.
+- **Rollout recording** (`--record-firsts`, **default ON**): for each task, record the
+  **first successful** and the **first failed** trajectory as a watchable rollout —
+  per-step stills plus an MP4 assembled via the executor's existing video pipeline
+  (`TrajectoryAdapter.execute` already supports `skip_videos=False`/`fps`; action
+  steps push frames in `run_tool_plan`). At most 2 recordings per task, so disk and
+  inode cost stay bounded (≤ 2 × n_tasks per run) while every task still gets one
+  qualitative example of each outcome — enough to diagnose *why* failures happen
+  (wrong object vs deadlocked turn-taking vs premature task_complete) without
+  recording all 75 trajectories. `--no-record-firsts` disables; `--save-frames`
+  remains the separate record-everything debug knob.
 
 ## Stage 2 — Runs
 
