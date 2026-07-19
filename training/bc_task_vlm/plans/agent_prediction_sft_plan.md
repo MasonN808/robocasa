@@ -44,8 +44,11 @@ placement refusal (`pick_up_object` → `success=False` when the robot can't be
 posed near the fixture).
 
 Considered and rejected for now: predicting the step index (always provided),
-requesting observations (`get_image` is auto-rendered every turn), and emitting
-both agents' actions jointly (breaks the single-step API and the eval).
+requesting observations (`get_image` — deferred to v3, see the final section:
+measured evidence shows the expert's view choice is a deterministic function of
+the NEXT action, which only the model knows, so harness-side mirroring is
+fundamentally lossy), and emitting both agents' actions jointly (breaks the
+single-step API and the eval).
 
 ## Response format (native tool calling retained)
 
@@ -155,3 +158,30 @@ both splits. Run only if v2 queues leave the GPU idle — expected payoff is low
 2. v2-scratch and v2-continue on the 5090 (sequential; probe first).
 3. Eval A on cluster (or locally), including the v1 reference rows.
 4. Live-sim Eval B once `live_sim_eval_plan.md` Stage 1 lands.
+
+## Future work (v3): train `get_image` — active observation
+
+Currently `get_image` steps are never supervised and never appear in history;
+the harness delivers observations. Measured across 162 trajectories
+(~3,300 get_image calls), the expert's view choice follows a **deterministic
+forward rule — views match the UPCOMING action**:
+
+| next action | views requested |
+|---|---|
+| episode opening (steps 0-1, both agents) | `top_view, room_view, map` (100%) |
+| `navigate_to_fixture` | `agentview_center/left/right` scout set (100%) |
+| any manipulation / `give_space` | `wrist, agentview_center` (100%) |
+| `communicate` | whatever is current (opening overhead vs mid-work wrist, ~50/50) |
+
+But the rule is only ~50-88% predictable from *history* (after a navigate or
+communicate it is a coin flip), because it anticipates a decision the model has
+not yet emitted. Consequence: **no harness-side rendering rule can fully mirror
+the training distribution in live-sim** — but the model itself can, if v3
+trains `get_image` as a first-class action (supervision is essentially free:
+the view set is determined by the model's own intended next action). That
+makes live-sim trajectories in-distribution end-to-end: model requests views →
+harness renders them → model acts on them, exactly as the expert data
+interleaves. Until v3, live-sim uses the best history-conditioned
+approximation (opening → overhead set; after a manipulation → wrist set,
+99-100% correct; after navigate/communicate → accept the ~50% mismatch or use
+a bounded two-pass re-render keyed on the predicted action).
