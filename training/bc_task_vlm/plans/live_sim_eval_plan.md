@@ -31,10 +31,24 @@ Create `training/bc_task_vlm/divergence_analysis.py`: from `structured_eval_pred
 
 Create `training/bc_task_vlm/live_sim_eval.py` (`python -m training.bc_task_vlm.live_sim_eval`):
 
-- **Args**: `--backend {hf,gemini}`, model/adapter/prompt flags mirroring eval_standalone (`--sft-format`, `--no-forced-json`, `--task-spec-detail`, `--few-shot`), `--manifest` (reuse exp52 manifests' `trajectory_ids_by_task`), `--dataset-root` (for original_trajectory.json + scene combo from each traj dir's metadata), `--turn-policy {round_robin,expert}`, `--step-budget-factor 2.0`, `--max-consecutive-rejections 3`, `--output-dir`, `--resume`, `--save-frames`, `--max-trajectories`.
+- **Args**: `--backend {hf,gemini}`, model/adapter/prompt flags mirroring eval_standalone (`--sft-format`, `--no-forced-json`, `--task-spec-detail`, `--few-shot`), `--manifest` (reuse exp52 manifests' `trajectory_ids_by_task`), `--dataset-root` (for original_trajectory.json + scene combo from each traj dir's metadata), `--step-budget-factor 2.0`, `--max-consecutive-rejections 3`, `--output-dir`, `--resume`, `--save-frames`, `--max-trajectories`.
 - **Env setup per task**: build `SimToolExecutor` with the same (layout, style, seed) combo the trajectory data was rendered with (read from the staged traj dir's metadata); reuse the executor-cache pattern from `scripts/sweep_trajectories.py:241` (extract `_get_or_create_cached_executor` into an importable helper or import from the script). Per trajectory: `restore_baseline_state()`, build `TrajectoryAdapter` (alias cache from `grounding_map`), init `TaskRuntimeState` from the spec as `FiniteStateTaskValidator.validate` does.
 - **Loop per turn**: scheduler picks agent → render 3 views via `get_image` → build prompt from running history (`build_user_prompt`; history lines for failed attempts get a short `FAILED: <reason>` suffix — small extension to `format_history_steps`, live-sim only) → generate → parse+validate → FSM legality check (preconditions + comm gate) → if legal: resolve args, `executor.execute(...)`, mirror into `TaskRuntimeState`, append to history; if illegal/unparseable: **no-op + error feedback** in history, count rejection → check `env._check_success()` and `is_goal_state_satisfied` → stop on success, step budget (2× expert length), or 3 consecutive rejections.
-- **Turn policies** (pluggable): `round_robin` (headline; prompted agent may act/communicate/`wait` — if `wait` absent from the task's allowed tools, a rejected turn passes to the other agent) and `expert` (control: expert's agent schedule, model chooses actions) — the delta between them measures the scheduling confound. A third policy, `model_choice` (the model emits the acting agent itself), becomes viable once the agent-prediction SFT lands — see `agent_prediction_sft_plan.md`; add it to the roster then rather than blocking this plan on it.
+- **Turn taking: the model schedules itself — no imposed policy.** Every turn uses
+  the v2 agent-prediction contract (`predict_agent=True` prompt + the `agent`
+  argument in every tool schema, `task_complete` available): the model decides
+  which agent acts, so there is no external scheduler, no `wait` workaround, and
+  no scheduling confound to control for. The formerly planned `round_robin` /
+  `expert` policies are DROPPED — with the model choosing the agent they answer
+  no question. This contract is not v2-only: the un-tuned base emits the agent
+  argument 99.9% of the time zero-shot (teacher-forced v2 base eval), and Gemini
+  gets the same `agent` parameter via its function declarations. Consequence:
+  the v1 SFT adapter (trained with the agent given in the prompt) is out of
+  distribution under this contract and is excluded from the live-sim roster;
+  its closed-loop story is carried by v2-continue, which starts from its
+  weights. Degenerate self-scheduling (one agent hogging every turn, starving
+  the communicate gate) is a legitimate observable failure, visible in the
+  per-trajectory records and rollout recordings, not something to engineer away.
 - **Outputs**: per-trajectory jsonl (executed steps, legality per step, both success flags, partial goal fraction, steps used vs expert length, termination reason) + aggregated `live_sim_metrics.json`; optional saved frames for debugging.
 - **Rollout recording** (`--record-firsts`, **default ON**): for each task, record the
   **first successful** and the **first failed** trajectory as a watchable rollout —
@@ -50,13 +64,15 @@ Create `training/bc_task_vlm/live_sim_eval.py` (`python -m training.bc_task_vlm.
 ## Stage 2 — Runs
 
 - **Oracle replay check first** (verification, not a model): feed the expert trajectory's own steps through the live loop as a scripted policy → must yield ~100% `_check_success` and FSM-goal agreement. Validates executor/FSM/success wiring before spending model compute.
-- **Pilot**: ~10 trajectories (mix of both splits), SFT native, round_robin. Inspect histories + frames.
-- **Headline**: SFT 8B (native tool calls) + Gemini-3.5 Flash (+spec+few-shot, forced JSON) × both 75-trajectory splits × round_robin; `expert` turn-policy control on one split for the SFT model.
+- **Pilot**: ~10 trajectories (mix of both splits), best available v2 adapter. Inspect histories + rollout recordings.
+- **Headline**: v2-scratch + v2-continue (native tool calls, self-scheduled) and the
+  out-of-the-box controls (base 8B; Gemini-3.5 Flash via native function calling with
+  the agent parameter) × both 75-trajectory splits — all under the same v2 contract.
 - **Compute**: HF runs on 1×H200 (EGL rendering + 8B inference share the GPU); Gemini runs can use CPU partition with osmesa (no local model). heldout_tasks is cheap (5 tasks → 5 env builds); heldout_trajectories spans 46 tasks → env creation dominates; group trajectories by task, short `--time` for backfill.
 
 ## Stage 3 — Metrics + reporting
 
-Primary: **live success rate** (`_check_success`) per model/split. Secondary: FSM goal rate (+ agreement between judges), partial-goal fraction, steps-to-success ratio vs expert, rejection/illegal-call rate, turn-policy delta. The money comparison: live success vs teacher-forced `judged_traj_all` (.173/.253 SFT native; 0.000 all out-of-the-box) — does closed-loop confirm the gap or reveal teacher-forcing understated the models? Add a live-sim section to EXPERIMENT.md, results table columns, and an artifact view.
+Primary: **live success rate** (`_check_success`) per model/split. Secondary: FSM goal rate (+ agreement between judges), partial-goal fraction, steps-to-success ratio vs expert, rejection/illegal-call rate, agent-turn distribution (same-agent run lengths vs the expert's 34-37%). The money comparison: live success vs teacher-forced `judged_traj_all` (.173/.253 SFT native; 0.000 all out-of-the-box) — does closed-loop confirm the gap or reveal teacher-forcing understated the models? Add a live-sim section to EXPERIMENT.md, results table columns, and an artifact view.
 
 ## Files
 
@@ -74,6 +90,6 @@ Reuse (no changes): sim_tool_executor + execution mixin, trajectory_adapter reso
 ## Risks / notes
 
 - MuJoCo executor enforces no physical preconditions (teleports liberally): legality lives in the FSM mirror; `_check_success` still judges final physical state.
-- Round-robin is a distribution shift vs the 34–37% same-agent expert data — that's why `expert` turn policy runs as a control.
+- Self-scheduling removes the imposed-schedule distribution shift entirely; the agent-turn-distribution metric checks whether models schedule plausibly vs the expert's 34-37% same-agent pattern.
 - Error-feedback history lines are unseen in training (clean-history OOD) — kept short; rejection-rate metric will show if the SFT model trips on them.
 - 27B cluster SFT remains parked (NCCL example-cache); unrelated to this work.
