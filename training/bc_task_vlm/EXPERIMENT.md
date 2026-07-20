@@ -224,7 +224,8 @@ Verified findings, all fixed (see git history):
       `interface_comparison.png`, `qwen8b_comparison.png` + interactive artifact
       updated. **Headline: SFT is the only thing that moves `traj_all` off 0.000.**
 - [ ] **Follow-up** — cluster 27B SFT (example-cache fix).
-- [ ] **Live-sim (closed-loop) eval** — full plan in
+- [ ] **Live-sim (closed-loop) eval** — harness implemented; cluster runs and
+      reporting remain. Full plan and implementation status in
       [`plans/live_sim_eval_plan.md`](plans/live_sim_eval_plan.md). Motivated by
       the divergence analysis: first divergence is nearly always the step-0/1
       `communicate` (91–100%), i.e. a different-but-possibly-valid plan, so

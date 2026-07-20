@@ -1,5 +1,23 @@
 # Live-sim (closed-loop) evaluation of tool-calling VLMs
 
+## Implementation status (2026-07-20)
+
+Stages 0 and 1 are implemented in `divergence_analysis.py` and
+`live_sim_eval.py`. The runner supports oracle, degenerate, local HF, and
+Gemini native-function backends; transactional FSM/simulator execution;
+self-scheduled agents; native and symbolic judges; partial goals; rejection,
+efficiency, and turn-pattern metrics; resume; all-trajectory debug frames; and
+bounded first-success/first-failure MP4 recordings. `training/scripts/live_sim_eval.sh`
+is the EGL/H200 launcher. Focused renderer-independent regression tests live in
+`tests/test_bc_task_vlm_live_sim_eval.py`.
+
+Stage 2 and the results portion of Stage 3 remain execution work: run the
+oracle gate on an EGL-capable node, run the pilot/headline matrix, inspect the
+recordings, confirm determinism, and publish measured results below. The staged
+exp52 subset contains no per-trajectory scene-combo field; its known generation
+combo (`layout=11`, `style=34`, `seed=42`) is therefore explicit in the runner
+defaults and emitted into every trajectory record.
+
 ## Context
 
 The teacher-forced eval assumes expert trajectories are the unique ground truth: the moment a model deviates, the step is marked wrong and the model is re-anchored to the expert history. But the divergence analysis (computed from existing predictions) shows **first divergence is almost always at step 0–1, and 91–100% of first divergences are `communicate` steps** — models pick a *different but potentially valid plan* at the opening task-allocation message (SFT position-0 accuracy .44; after surviving the opening, per-position accuracy is ~.90 and flat). Teacher forcing therefore likely **understates** true task competence. The fix: let models control the agents live in sim and judge success by task outcome, not expert matching.
