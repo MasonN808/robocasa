@@ -1,5 +1,8 @@
 # Live-sim (closed-loop) evaluation of tool-calling VLMs
 
+Operational commands, prerequisites, resume behavior, timing guidance, and
+troubleshooting are documented in [`../LIVE_SIM_EVAL.md`](../LIVE_SIM_EVAL.md).
+
 ## Implementation status (2026-07-20)
 
 Stages 0 and 1 are implemented in `divergence_analysis.py` and

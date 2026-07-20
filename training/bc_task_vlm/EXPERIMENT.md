@@ -226,7 +226,9 @@ Verified findings, all fixed (see git history):
 - [ ] **Follow-up** — cluster 27B SFT (example-cache fix).
 - [ ] **Live-sim (closed-loop) eval** — harness implemented; cluster runs and
       reporting remain. Full plan and implementation status in
-      [`plans/live_sim_eval_plan.md`](plans/live_sim_eval_plan.md). Motivated by
+      [`plans/live_sim_eval_plan.md`](plans/live_sim_eval_plan.md); operational
+      commands and troubleshooting in [`LIVE_SIM_EVAL.md`](LIVE_SIM_EVAL.md).
+      Motivated by
       the divergence analysis: first divergence is nearly always the step-0/1
       `communicate` (91–100%), i.e. a different-but-possibly-valid plan, so
       teacher forcing likely understates competence.
