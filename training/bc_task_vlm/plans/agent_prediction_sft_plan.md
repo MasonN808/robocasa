@@ -159,7 +159,16 @@ both splits. Run only if v2 queues leave the GPU idle — expected payoff is low
 3. Eval A on cluster (or locally), including the v1 reference rows.
 4. Live-sim Eval B once `live_sim_eval_plan.md` Stage 1 lands.
 
-## Future work (v3): train `get_image` — active observation
+## Future work — split into separate tracks
+
+- **v3 (active observation, train `get_image`)** — full plan in
+  `v3_active_observation_plan.md`. v1/v2-scale (30 traj/task), fresh LoRA
+  from Instruct (NOT continue-from-v2: scratch beat continue on novel-task
+  trajectory completion, .227 vs .107).
+- **v1.5 (per-step reasoning)** — orthogonal track, `reasoning_sft_v1_5_plan.md`.
+- **Data scale (100 traj/task)** — noted, deferred; revisit after v3.
+
+### Original v3 measurement note: train `get_image` — active observation
 
 Currently `get_image` steps are never supervised and never appear in history;
 the harness delivers observations. Measured across 162 trajectories
