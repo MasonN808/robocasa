@@ -1,0 +1,20 @@
+{
+  "trajectory_ids_by_task": {
+    "beverage_organization": [
+      "traj_000002",
+      "traj_000039"
+    ],
+    "cluster_items_for_clearing": [
+      "traj_000013",
+      "traj_000045"
+    ],
+    "garnish_cake": [
+      "traj_000007",
+      "traj_000018"
+    ],
+    "hot_dog_setup": [
+      "traj_000015",
+      "traj_000579"
+    ]
+  }
+}

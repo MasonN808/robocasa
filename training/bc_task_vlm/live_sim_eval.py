@@ -61,6 +61,14 @@ from training.bc_task_vlm.tool_calling import (
 OVERHEAD_VIEWS = ("top_view", "room_view", "map")
 SCOUT_VIEWS = ("agentview_center", "agentview_left", "agentview_right")
 WRIST_VIEWS = ("wrist", "agentview_center")
+# After the two required opening communications, the routing pass must not use
+# a view family that was paired exclusively with one action family during SFT.
+# Every overhead-only exp52 example targets ``communicate``. A fixed mixed
+# bundle gives the router global and agent-centric evidence without conditioning
+# its prediction on the eventual tool choice. Canonical refinement remains
+# in-distribution for the selected tool.
+ROUTER_VIEWS = ("top_view", "wrist", "agentview_center")
+OPENING_COMMUNICATION_STEP_INDICES = frozenset({2, 3})
 NAVIGATE_TOOLS = {"navigate_to_fixture"}
 _NUMBERED_OBJECT_RE = re.compile(r"^obj_(\d+)$")
 
@@ -73,9 +81,143 @@ def canonical_views_for_tool(tool_name: str) -> tuple[str, ...]:
     return WRIST_VIEWS
 
 
+def _global_step_index_for_turn(turn_index: int) -> int:
+    """Map a live action turn to the global indices used during SFT.
+
+    Demonstrations begin with one observation for each agent (global steps 0
+    and 1), followed by the two opening communication actions (steps 2 and 3).
+    Thereafter the live loop acquires a fresh observation before every action,
+    so each additional decision advances the global index by two.
+    """
+
+    if turn_index < 0:
+        raise ValueError("turn_index must be non-negative")
+    if turn_index < 2:
+        return turn_index + 2
+    return 2 * turn_index + 1
+
+
+def _step_index_for_turn(
+    turn_index: int, *, active_observation: bool
+) -> int:
+    """Return the SFT-compatible index for the selected observation mode."""
+
+    if active_observation:
+        if turn_index < 0:
+            raise ValueError("turn_index must be non-negative")
+        return turn_index
+    return _global_step_index_for_turn(turn_index)
+
+
+def _routing_views_for_step(step_index: int) -> tuple[str, ...]:
+    """Use trained opening views, then a target-independent routing bundle."""
+
+    if step_index in OPENING_COMMUNICATION_STEP_INDICES:
+        return OVERHEAD_VIEWS
+    return ROUTER_VIEWS
+
+
 # ---------------------------------------------------------------------------
 # FSM mirror: incremental legality + goal checking over symbolic state
 # ---------------------------------------------------------------------------
+
+
+def _canonical_symbolic_initial_state(*, task_spec, trajectory: dict[str, Any]):
+    """Normalize legacy trajectory symbols without introducing simulator IDs."""
+
+    initial_state = deepcopy(trajectory.get("initial_state") or task_spec.initial_state)
+    source_grounding = (
+        (trajectory.get("grounding_map") or {}).get("symbols") or {}
+    )
+    target_grounding = (task_spec.grounding or {}).get("symbols") or {}
+    legacy_aliases = (task_spec.grounding or {}).get("legacy_symbol_aliases") or {}
+    symbol_map: dict[str, str] = {}
+
+    def type_values(
+        *,
+        state_entry: dict[str, Any],
+        grounding_entry: dict[str, Any],
+        entity_type: str,
+    ) -> set[str]:
+        type_key = "object_type" if entity_type == "object" else "fixture_type"
+        values = {
+            str(value)
+            for value in (state_entry.get(type_key), grounding_entry.get(type_key))
+            if value
+        }
+        if entity_type == "fixture":
+            values.update(
+                str(value)
+                for value in grounding_entry.get("preferred_fixture_types", ())
+                if value
+            )
+        return values
+
+    for state_key, entity_type in (("objects", "object"), ("fixtures", "fixture")):
+        source_entities = initial_state.get(state_key) or {}
+        target_entities = task_spec.initial_state.get(state_key) or {}
+        used_targets: set[str] = set()
+
+        for source_symbol in source_entities:
+            target_symbol = source_symbol
+            if target_symbol not in target_entities:
+                target_symbol = legacy_aliases.get(source_symbol)
+            if target_symbol in target_entities:
+                symbol_map[source_symbol] = target_symbol
+                used_targets.add(target_symbol)
+
+        for source_symbol, source_entry in source_entities.items():
+            if source_symbol in symbol_map:
+                continue
+            source_descriptor = source_grounding.get(source_symbol) or {}
+            source_types = type_values(
+                state_entry=source_entry,
+                grounding_entry=source_descriptor,
+                entity_type=entity_type,
+            )
+            candidates = []
+            for target_symbol, target_entry in target_entities.items():
+                if target_symbol in used_targets:
+                    continue
+                target_descriptor = target_grounding.get(target_symbol) or {}
+                target_types = type_values(
+                    state_entry=target_entry,
+                    grounding_entry=target_descriptor,
+                    entity_type=entity_type,
+                )
+                if source_types & target_types:
+                    candidates.append(target_symbol)
+
+            source_index = source_descriptor.get("index")
+            if len(candidates) > 1 and source_index is not None:
+                indexed = [
+                    candidate
+                    for candidate in candidates
+                    if (target_grounding.get(candidate) or {}).get("index")
+                    == source_index
+                ]
+                if len(indexed) == 1:
+                    candidates = indexed
+            if len(candidates) == 1:
+                symbol_map[source_symbol] = candidates[0]
+                used_targets.add(candidates[0])
+
+    def rewrite(value):
+        if isinstance(value, dict):
+            rewritten = {
+                symbol_map.get(key, key): rewrite(item)
+                for key, item in value.items()
+            }
+            if len(rewritten) != len(value):
+                raise ValueError("symbol normalization produced duplicate IDs")
+            return rewritten
+        if isinstance(value, list):
+            return [rewrite(item) for item in value]
+        if isinstance(value, str):
+            return symbol_map.get(value, value)
+        return value
+
+    return rewrite(initial_state)
 
 
 class FsmMirror:
@@ -95,9 +237,12 @@ class FsmMirror:
 
         spec = load_task_spec(composite_task)
         self.validator = SpecDrivenTaskValidator(spec)
-        initial_state = trajectory.get("initial_state")
+        initial_state = _canonical_symbolic_initial_state(
+            task_spec=spec,
+            trajectory=trajectory,
+        )
         if initial_state:
-            self.validator.initial_state = deepcopy(initial_state)
+            self.validator.initial_state = initial_state
         agents = self.validator._normalize_agents(trajectory.get("agents"))
         self.runtime_state = self.validator._build_runtime_state(agents)
         self.goal_satisfied = self.validator.is_goal_state_satisfied(
@@ -486,6 +631,9 @@ def run_trajectory(
         include_agent_param=True,
     )
     adapter, adapted = session.start_trajectory(trajectory)
+    # Simulator-adapted IDs are concrete scene names. The FSM keeps the
+    # trajectory's symbolic state and normalizes legacy symbols to the current
+    # verified task spec inside FsmMirror.
     mirror = FsmMirror(composite_task=composite_task, trajectory=trajectory)
     if frames_dir is not None:
         session.executor.save_scene_frames(str(frames_dir), prefix="step_-001")
@@ -505,11 +653,14 @@ def run_trajectory(
     declared_complete = False
     termination = "budget_exhausted"
     last_executed_tool: str | None = None
-    step_index = 0
+    turn_index = 0
     requested_views: tuple[str, ...] | None = None
     requested_agent: str | None = None
 
-    while step_index < step_budget:
+    while turn_index < step_budget:
+        step_index = _step_index_for_turn(
+            turn_index, active_observation=train_get_image
+        )
         views_used: tuple[str, ...] | None = None
         proposal_started = time.perf_counter()
         if is_model_policy:
@@ -559,7 +710,7 @@ def run_trajectory(
             if consecutive_rejections >= args.max_consecutive_rejections:
                 termination = "max_consecutive_rejections"
                 break
-            step_index += 1
+            turn_index += 1
             continue
 
         if proposal["tool"] == TASK_COMPLETE_TOOL_NAME:
@@ -593,7 +744,7 @@ def run_trajectory(
                 requested_agent = proposal["agent"]
                 consecutive_rejections = 0
             records.append(record)
-            step_index += 1
+            turn_index += 1
             continue
 
         symbolic_step = {
@@ -618,7 +769,7 @@ def run_trajectory(
             if consecutive_rejections >= args.max_consecutive_rejections:
                 termination = "max_consecutive_rejections"
                 break
-            step_index += 1
+            turn_index += 1
             continue
 
         try:
@@ -652,7 +803,7 @@ def run_trajectory(
                 if consecutive_rejections >= args.max_consecutive_rejections:
                     termination = "max_consecutive_rejections"
                     break
-                step_index += 1
+                turn_index += 1
                 continue
         except Exception as exc:
             mirror.runtime_state = symbolic_state_before
@@ -670,7 +821,7 @@ def run_trajectory(
             if consecutive_rejections >= args.max_consecutive_rejections:
                 termination = "max_consecutive_rejections"
                 break
-            step_index += 1
+            turn_index += 1
             continue
 
         consecutive_rejections = 0
@@ -693,9 +844,9 @@ def run_trajectory(
 
         if mirror.goal_satisfied and native_now:
             termination = "goal_satisfied"
-            step_index += 1
+            turn_index += 1
             break
-        step_index += 1
+        turn_index += 1
 
     native, native_error = session.native_success()
     fsm_goal = mirror.goal_satisfied
@@ -744,8 +895,7 @@ def _model_propose_step(
     requested_views: tuple[str, ...] | None = None,
     requested_agent: str | None = None,
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
-    """Two-phase turn: overhead render -> predict; re-render canonical views
-    for the predicted tool and re-predict once if they differ."""
+    """Two-phase turn: neutral routing views, then canonical refinement."""
 
     render_dir = (frames_dir or Path(args.output_dir) / "_tmp_views")
     if getattr(args, "train_get_image", False):
@@ -765,7 +915,7 @@ def _model_propose_step(
             agent_hint=requested_agent,
         )
         return proposal, views
-    views = OVERHEAD_VIEWS
+    views = _routing_views_for_step(step_index)
     proposal = _generate_once(
         session=session,
         policy=policy,
@@ -840,11 +990,21 @@ def _generate_once(
     )
     feature = {
         "sample_id": f"live/{trajectory.get('trajectory_id')}/turn_{step_index}",
+        "task_name": task_metadata.dataset_name,
+        "trajectory_id": str(trajectory.get("trajectory_id") or ""),
+        "step_index": step_index,
+        "agent_id": agent_hint or "",
+        "target_payload": None,
+        "target_tool_call": None,
+        "target_text": "",
         "messages": build_messages(
             user_prompt=user_prompt,
             num_images=len(image_paths),
             predict_agent=True,
             train_get_image=bool(getattr(args, "train_get_image", False)),
+            # The generation collator strips the labeled assistant turn before
+            # tokenization, so retain its expected training-example shape.
+            target_text="",
         ),
         "image_paths": image_paths,
         "tool_schemas": tool_schemas,
@@ -882,6 +1042,62 @@ def _generate_once(
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
+
+
+def _latest_trajectory_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the latest append-only record for each trajectory key."""
+
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    for record in records:
+        key = (record.get("task_name"), record.get("trajectory_id"))
+        latest[key] = record
+    return list(latest.values())
+
+
+def _completed_trajectory_keys(
+    records: list[dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Return resumable completions, leaving latest harness errors pending."""
+
+    return {
+        (record["task_name"], record["trajectory_id"])
+        for record in _latest_trajectory_records(records)
+        if record.get("termination") != "harness_error"
+    }
+
+
+def _finalize_first_recording(
+    *,
+    frames_dir: Path | None,
+    output_dir: Path,
+    task_name: str,
+    success: bool,
+    firsts: dict[tuple[str, bool], bool],
+    record_firsts: bool,
+    save_frames: bool,
+    record_fps: int,
+) -> None:
+    """Classify a recorded first outcome when frames were actually created."""
+
+    if frames_dir is None or not frames_dir.exists():
+        return
+    if not firsts.get((task_name, success)):
+        firsts[(task_name, success)] = True
+        if record_firsts and not save_frames:
+            classified = (
+                output_dir
+                / "recordings"
+                / task_name
+                / ("success" if success else "failure")
+            )
+            if classified.exists():
+                shutil.rmtree(classified)
+            frames_dir.rename(classified)
+            _assemble_recording_videos(classified, fps=record_fps)
+    elif record_firsts and not save_frames:
+        shutil.rmtree(frames_dir)
 
 
 def parse_args() -> argparse.Namespace:
@@ -986,10 +1202,11 @@ def main() -> None:
     results_path = args.output_dir / "live_sim_trajectories.jsonl"
     done: set[tuple[str, str]] = set()
     if args.resume and results_path.exists():
+        existing_records = []
         for line in results_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
-                r = json.loads(line)
-                done.add((r["task_name"], r["trajectory_id"]))
+                existing_records.append(json.loads(line))
+        done = _completed_trajectory_keys(existing_records)
 
     policy = None
     policy_started = time.perf_counter()
@@ -1122,24 +1339,16 @@ def main() -> None:
                 out.flush()
                 total_done += 1
                 success = bool(result.get("native_success"))
-                if frames_dir is not None and not firsts.get((task_name, success)):
-                    firsts[(task_name, success)] = True
-                    if args.record_firsts and not args.save_frames:
-                        classified = (
-                            args.output_dir / "recordings" / task_name /
-                            ("success" if success else "failure")
-                        )
-                        if classified.exists():
-                            shutil.rmtree(classified)
-                        frames_dir.rename(classified)
-                        _assemble_recording_videos(classified, fps=args.record_fps)
-                elif (
-                    frames_dir is not None
-                    and args.record_firsts
-                    and not args.save_frames
-                    and frames_dir.exists()
-                ):
-                    shutil.rmtree(frames_dir)
+                _finalize_first_recording(
+                    frames_dir=frames_dir,
+                    output_dir=args.output_dir,
+                    task_name=task_name,
+                    success=success,
+                    firsts=firsts,
+                    record_firsts=args.record_firsts,
+                    save_frames=args.save_frames,
+                    record_fps=args.record_fps,
+                )
                 native_error_text = (
                     f" native_error={result['native_error']}"
                     if result.get("native_error")
@@ -1172,11 +1381,12 @@ def _write_metrics(
     policy_load_s: float | None = None,
     total_elapsed_s: float | None = None,
 ) -> None:
-    records = [
+    raw_records = [
         json.loads(line)
         for line in results_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    records = _latest_trajectory_records(raw_records)
     n = len(records)
     if not n:
         return
@@ -1196,6 +1406,8 @@ def _write_metrics(
     )
     metrics = {
         "num_trajectories": n,
+        "num_jsonl_records": len(raw_records),
+        "num_superseded_records": len(raw_records) - n,
         "policy_load_s": policy_load_s,
         "total_elapsed_s": total_elapsed_s,
         "native_success_rate": native / n,

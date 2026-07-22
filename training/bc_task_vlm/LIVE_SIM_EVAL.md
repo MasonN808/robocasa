@@ -198,6 +198,38 @@ rejections. Early estimates for one H200 were roughly 4–6.5 hours for both
 splits; an RTX 5090 should be budgeted approximately 8–12 hours until its pilot
 provides measured proposal latency.
 
+## Component timing benchmark
+
+Use the fixed eight-trajectory manifest to separate model generation, image
+rendering, simulator tool execution, FSM work, trajectory loading, and native
+checks. Keep outputs under `eval_runs`; timing events and summaries are
+evaluation outputs and must not be committed.
+
+```bash
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl \
+python -m training.bc_task_vlm.live_sim_timing_benchmark -- \
+  --backend hf \
+  --model-name-or-path Qwen/Qwen3-VL-8B-Instruct \
+  --adapter-path DorianAtSchool/qwen3vl-8b-robocasa-agentsft-scratch \
+  --manifest training/bc_task_vlm/eval_manifests/exp52/live_sim_timing_benchmark_8.json \
+  --dataset-root training/bc_task_vlm/eval_data_subset \
+  --output-dir training/bc_task_vlm/eval_runs/live_sim_timing_benchmark_8 \
+  --gl-backend egl \
+  --no-record-firsts
+
+python -m training.bc_task_vlm.live_sim_timing_summary \
+  training/bc_task_vlm/eval_runs/live_sim_timing_benchmark_8 \
+  --output training/bc_task_vlm/eval_runs/live_sim_timing_benchmark_8/timing_summary.json
+```
+
+The July 2026 RTX 5090 baseline completed eight trajectories in 1,669.4
+seconds. Across 248 policy decisions and 470 inference passes, the full HF
+generation pipeline averaged 1.306 seconds per pass and high-level simulator
+tool execution averaged 29 milliseconds. Rendering consumed 62.3% of episode
+time: map bundles averaged 9.112 seconds because the placement map was emitted
+at 6000 by 4800 pixels, while non-map bundles averaged 7.7 milliseconds. These
+measurements establish a baseline; they do not change evaluation behavior.
+
 ## Troubleshooting
 
 - **CUDA OOM:** close other GPU processes; ensure only one evaluator is using
