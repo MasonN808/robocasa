@@ -21,6 +21,7 @@ import torch
 from accelerate.state import PartialState
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoProcessor, Trainer, TrainingArguments, set_seed
+from transformers.trainer_pt_utils import LengthGroupedSampler
 from transformers.utils import is_torch_bf16_gpu_available
 
 try:
@@ -38,6 +39,7 @@ from training.bc_task_vlm.dataset import (
     build_example_cache_path,
     build_centralized_examples,
     build_split_manifest,
+    estimate_centralized_example_length,
     list_available_task_names,
     list_task_trajectory_ids,
     load_examples_from_cache,
@@ -64,6 +66,7 @@ class RunConfiguration:
     validation_split_seed: int
     sft_format: str
     predict_acting_agent: bool
+    train_get_image: bool
     init_adapter_path: str | None
     use_example_cache: bool
     trust_example_cache: bool
@@ -72,6 +75,7 @@ class RunConfiguration:
     per_device_batch_size: int
     per_device_eval_batch_size: int | None
     grad_accum: int
+    train_sampling_strategy: str
     num_epochs: float
     learning_rate: float
     max_length: int | None
@@ -206,6 +210,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--train-get-image",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Active-observation (v3) SFT: supervise get_image tool calls and "
+            "retain them in history. Requires --predict-acting-agent."
+        ),
+    )
+    parser.add_argument(
         "--init-adapter-path",
         type=str,
         default=None,
@@ -307,6 +320,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--train-sampling-strategy",
+        choices=("random", "group_by_length"),
+        default="random",
+        help=(
+            "Training sampler. group_by_length batches examples with similar "
+            "estimated text-plus-image lengths and puts the longest batch first."
+        ),
+    )
     parser.add_argument(
         "--example-build-workers",
         type=int,
@@ -623,6 +645,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         ),
         sft_format=args.sft_format,
         predict_acting_agent=args.predict_acting_agent,
+        train_get_image=args.train_get_image,
         init_adapter_path=args.init_adapter_path,
         use_example_cache=args.use_example_cache,
         trust_example_cache=args.trust_example_cache,
@@ -639,6 +662,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
             else None
         ),
         grad_accum=args.grad_accum,
+        train_sampling_strategy=args.train_sampling_strategy,
         num_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         max_length=max_tokens,
@@ -917,6 +941,7 @@ def _build_examples_for_tasks(
     split_name: str,
     sft_format: str,
     predict_agent: bool = False,
+    train_get_image: bool = False,
     use_example_cache: bool,
     trust_example_cache: bool,
     training_samples_cache_dir: Path,
@@ -972,6 +997,7 @@ def _build_examples_for_tasks(
                     trajectory_ids=task_trajectory_ids,
                     sft_format=sft_format,
                     predict_agent=predict_agent,
+                    train_get_image=train_get_image,
                 )
                 trajectory_count = len(fingerprint.get("trajectories", ()))
                 task_examples = load_examples_from_cache(
@@ -1010,6 +1036,7 @@ def _build_examples_for_tasks(
                     progress_description=progress_description,
                     sft_format=sft_format,
                     predict_agent=predict_agent,
+                    train_get_image=train_get_image,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1041,6 +1068,7 @@ def _build_examples_for_tasks(
                     progress_description=progress_description,
                     sft_format=sft_format,
                     predict_agent=predict_agent,
+                    train_get_image=train_get_image,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1367,12 +1395,31 @@ class StructuredEvalTrainer(Trainer):
         *,
         structured_eval_config: RunConfiguration | None = None,
         structured_eval_output_dir: Path | None = None,
+        train_example_lengths: list[int] | None = None,
         **kwargs: Any,
     ) -> None:
         self.structured_eval_config = structured_eval_config
         self.structured_eval_output_dir = structured_eval_output_dir
         self.latest_structured_metrics: dict[str, float] = {}
+        self.train_example_lengths = train_example_lengths
         super().__init__(**kwargs)
+
+    def _get_train_sampler(self, train_dataset: Any | None = None):
+        if self.train_example_lengths is None:
+            return super()._get_train_sampler(train_dataset)
+        resolved_dataset = self.train_dataset if train_dataset is None else train_dataset
+        if resolved_dataset is None:
+            return None
+        if len(resolved_dataset) != len(self.train_example_lengths):
+            raise ValueError(
+                "Length-grouped sampler metadata does not match the training dataset: "
+                f"{len(self.train_example_lengths)} lengths for "
+                f"{len(resolved_dataset)} examples."
+            )
+        return LengthGroupedSampler(
+            self.args.train_batch_size * self.args.gradient_accumulation_steps,
+            lengths=self.train_example_lengths,
+        )
 
     def evaluate(
         self,
@@ -1405,6 +1452,8 @@ class StructuredEvalTrainer(Trainer):
         config = self.structured_eval_config
         output_dir = self.structured_eval_output_dir
         if config is None or output_dir is None:
+            return {}
+        if config.eval_generation_max_samples == 0:
             return {}
 
         resolved_eval_dataset = (
@@ -1469,6 +1518,8 @@ class StructuredEvalTrainer(Trainer):
 def main() -> None:
     load_dotenv_file()
     args = parse_args()
+    if args.train_get_image and not args.predict_acting_agent:
+        raise SystemExit("--train-get-image requires --predict-acting-agent.")
     config = _build_run_configuration(args)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1561,6 +1612,7 @@ def main() -> None:
         split_name="train",
         sft_format=config.sft_format,
         predict_agent=config.predict_acting_agent,
+        train_get_image=config.train_get_image,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
@@ -1577,6 +1629,7 @@ def main() -> None:
         split_name="validation",
         sft_format=config.sft_format,
         predict_agent=config.predict_acting_agent,
+        train_get_image=config.train_get_image,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
@@ -1600,6 +1653,26 @@ def main() -> None:
         raise ValueError("Training split is empty after validation holdout filtering.")
     train_dataset = CentralizedDataset(train_examples)
     val_dataset = CentralizedDataset(val_examples)
+    train_example_lengths: list[int] | None = None
+    if config.train_sampling_strategy == "group_by_length":
+        train_example_lengths = [
+            estimate_centralized_example_length(
+                example,
+                max_images_per_sample=config.max_images_per_sample,
+            )
+            for example in train_examples
+        ]
+        sorted_lengths = sorted(train_example_lengths)
+        percentile = lambda fraction: sorted_lengths[  # noqa: E731
+            min(len(sorted_lengths) - 1, int(fraction * (len(sorted_lengths) - 1)))
+        ]
+        _log_startup(
+            "Length-grouped training enabled with estimated lengths: "
+            f"min={sorted_lengths[0]}, median={percentile(0.5)}, "
+            f"p95={percentile(0.95)}, max={sorted_lengths[-1]}. "
+            "The longest grouped batch is scheduled first.",
+            state=distributed_state,
+        )
 
     _log_startup("Building split manifest", state=distributed_state)
     split_manifest = build_split_manifest(
@@ -1670,6 +1743,7 @@ def main() -> None:
     trainer = StructuredEvalTrainer(
         structured_eval_config=config if len(val_dataset) > 0 else None,
         structured_eval_output_dir=output_dir,
+        train_example_lengths=train_example_lengths,
         model=model,
         args=training_args,
         data_collator=data_collator,

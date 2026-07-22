@@ -476,8 +476,9 @@ def run_trajectory(
     frames_dir: Path | None,
 ) -> dict[str, Any]:
     task_metadata = get_task_metadata(task_name)
+    train_get_image = bool(getattr(args, "train_get_image", False))
     tool_specs = augment_tool_specs_for_agent_prediction(
-        task_metadata.allowed_tool_specs
+        task_metadata.allowed_tool_specs, include_get_image=train_get_image
     )
     tool_schemas = build_tool_schemas(
         agent_ids=AGENT_IDS,
@@ -492,7 +493,10 @@ def run_trajectory(
     expert_action_steps = [
         s for s in trajectory["steps"] if s.get("tool") != "get_image"
     ]
-    step_budget = max(4, int(len(expert_action_steps) * args.step_budget_factor))
+    budget_multiplier = 2 if train_get_image else 1
+    step_budget = max(
+        4, int(len(expert_action_steps) * args.step_budget_factor * budget_multiplier)
+    )
     is_model_policy = isinstance(policy, (HfPolicy, GeminiPolicy))
 
     history: list[dict[str, Any]] = []
@@ -502,6 +506,8 @@ def run_trajectory(
     termination = "budget_exhausted"
     last_executed_tool: str | None = None
     step_index = 0
+    requested_views: tuple[str, ...] | None = None
+    requested_agent: str | None = None
 
     while step_index < step_budget:
         views_used: tuple[str, ...] | None = None
@@ -519,7 +525,11 @@ def run_trajectory(
                 step_index=step_index,
                 last_executed_tool=last_executed_tool,
                 frames_dir=frames_dir,
+                requested_views=requested_views,
+                requested_agent=requested_agent,
             )
+            requested_views = None
+            requested_agent = None
         else:
             proposal = policy.next_step()
         if proposal is None:
@@ -558,6 +568,33 @@ def run_trajectory(
             records.append(record)
             termination = "task_complete_declared"
             break
+
+        if proposal["tool"] == "get_image":
+            views = tuple(proposal.get("args", {}).get("views", ()))
+            known_views = set(OVERHEAD_VIEWS + SCOUT_VIEWS + WRIST_VIEWS)
+            if not views or any(view not in known_views for view in views):
+                record.update(
+                    legal=False,
+                    executed=False,
+                    reason="invalid observation views",
+                )
+                consecutive_rejections += 1
+            else:
+                record.update(legal=True, executed=True, reason=None)
+                history.append(
+                    {
+                        "step": step_index,
+                        "agent": proposal["agent"],
+                        "tool": "get_image",
+                        "args": {"views": list(views)},
+                    }
+                )
+                requested_views = views
+                requested_agent = proposal["agent"]
+                consecutive_rejections = 0
+            records.append(record)
+            step_index += 1
+            continue
 
         symbolic_step = {
             "step": step_index,
@@ -704,11 +741,30 @@ def _model_propose_step(
     step_index: int,
     last_executed_tool: str | None,
     frames_dir: Path | None,
+    requested_views: tuple[str, ...] | None = None,
+    requested_agent: str | None = None,
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     """Two-phase turn: overhead render -> predict; re-render canonical views
     for the predicted tool and re-predict once if they differ."""
 
     render_dir = (frames_dir or Path(args.output_dir) / "_tmp_views")
+    if getattr(args, "train_get_image", False):
+        views = requested_views or ()
+        proposal = _generate_once(
+            session=session,
+            policy=policy,
+            args=args,
+            task_metadata=task_metadata,
+            tool_specs=tool_specs,
+            tool_schemas=tool_schemas,
+            trajectory=trajectory,
+            history=history,
+            step_index=step_index,
+            views=views,
+            render_dir=render_dir,
+            agent_hint=requested_agent,
+        )
+        return proposal, views
     views = OVERHEAD_VIEWS
     proposal = _generate_once(
         session=session,
@@ -762,12 +818,15 @@ def _generate_once(
     render_dir: Path,
     agent_hint: str | None = None,
 ) -> dict[str, Any]:
-    image_paths, view_names = session.render_views(
-        views,
-        agent_id=agent_hint or "agent_0",
-        out_dir=render_dir,
-        tag=f"turn_{step_index:03d}_{len(views)}v",
-    )
+    if views:
+        image_paths, view_names = session.render_views(
+            views,
+            agent_id=agent_hint or "agent_0",
+            out_dir=render_dir,
+            tag=f"turn_{step_index:03d}_{len(views)}v",
+        )
+    else:
+        image_paths, view_names = [], []
     user_prompt = build_user_prompt(
         composite_task=task_metadata.composite_task,
         task_instruction=trajectory.get("task", ""),
@@ -785,6 +844,7 @@ def _generate_once(
             user_prompt=user_prompt,
             num_images=len(image_paths),
             predict_agent=True,
+            train_get_image=bool(getattr(args, "train_get_image", False)),
         ),
         "image_paths": image_paths,
         "tool_schemas": tool_schemas,
@@ -867,6 +927,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--sft-format", choices=("tool_call",), default="tool_call")
     parser.add_argument("--no-forced-json", action="store_true")
+    parser.add_argument(
+        "--train-get-image",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Let the model request observations with get_image.",
+    )
     parser.add_argument("--task-spec-detail", action="store_true")
     parser.add_argument("--few-shot", type=int, choices=(0, 1), default=0)
     parser.add_argument("--model", default="gemini-3.5-flash-preview")

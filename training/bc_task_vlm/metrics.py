@@ -141,6 +141,12 @@ def build_trajectory_aggregate_metrics(
 
     trajectories: dict[tuple[str, str], list[dict[str, object]]] = {}
     for record in records:
+        target_tool_call = record.get("target_tool_call")
+        if (
+            isinstance(target_tool_call, dict)
+            and target_tool_call.get("name") == "get_image"
+        ):
+            continue
         key = (str(record["task_name"]), str(record["trajectory_id"]))
         trajectories.setdefault(key, []).append(record)
 

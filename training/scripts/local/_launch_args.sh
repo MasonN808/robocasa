@@ -43,6 +43,7 @@ launch_args=(
   --output-dir "${output_dir}"
   --per-device-batch-size "${per_device_batch}"
   --grad-accum "${grad_accum}"
+  --train-sampling-strategy "${TRAIN_SAMPLING_STRATEGY:-random}"
   --learning-rate "${LEARNING_RATE:-2e-4}"
   --max-length "${MAX_LENGTH:-8192}"
   --max-images-per-sample "${MAX_IMAGES_PER_SAMPLE:-4}"
@@ -51,7 +52,7 @@ launch_args=(
   --lora-alpha "${LORA_ALPHA:-32}"
   --bf16
   --gradient-checkpointing
-  --attn-implementation sdpa
+  --attn-implementation "${ATTN_IMPLEMENTATION:-sdpa}"
   --supervise-last-assistant-turn-only
   --logging-steps "${LOGGING_STEPS:-10}"
   --warmup-ratio "${WARMUP_RATIO:-0.03}"

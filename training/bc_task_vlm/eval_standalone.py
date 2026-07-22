@@ -113,6 +113,12 @@ def parse_args() -> argparse.Namespace:
         "(gemini) — the plain forced-JSON schema has no agent slot.",
     )
     parser.add_argument(
+        "--train-get-image",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Evaluate active-observation (v3) get_image targets.",
+    )
+    parser.add_argument(
         "--few-shot",
         type=int,
         default=0,
@@ -306,6 +312,7 @@ def load_eval_samples(
     max_samples: int | None,
     example_build_workers: int,
     predict_agent: bool = False,
+    train_get_image: bool = False,
 ) -> list[EvalSample]:
     manifest_samples = manifest["samples"]
     if max_samples is not None:
@@ -327,6 +334,7 @@ def load_eval_samples(
         show_progress=True,
         progress_description="Building eval examples",
         predict_agent=predict_agent,
+        train_get_image=train_get_image,
     )
     examples_by_id = {example.sample_id: example for example in examples}
 
@@ -460,6 +468,12 @@ def build_vertex_function_declarations(
                 AGENT_IDS,
                 _resolve_tool_arg_schema_type(field_name, tool_spec),
             )
+            allowed_values_key = f"allowed_{field_name}"
+            if allowed_values_key in tool_spec:
+                target = properties[field_name]
+                if target.get("type") == "ARRAY":
+                    target = target["items"]
+                target["enum"] = list(tool_spec[allowed_values_key])
         declarations.append(
             {
                 "name": tool_name,
@@ -996,6 +1010,7 @@ _PROMPT_DEFINING_CONFIG_KEYS = (
     "forced_json",
     "native_tools",
     "predict_acting_agent",
+    "train_get_image",
     "temperature",
     "thinking_budget",
     "enable_thinking",
@@ -1073,6 +1088,8 @@ def finalize_metrics(
 
 def main() -> None:
     args = parse_args()
+    if args.train_get_image and not args.predict_acting_agent:
+        raise SystemExit("--train-get-image requires --predict-acting-agent.")
     if args.predict_acting_agent and args.forced_json and not args.native_tools:
         raise SystemExit(
             "--predict-acting-agent needs the agent inside the emitted "
@@ -1100,6 +1117,7 @@ def main() -> None:
         max_samples=args.max_samples,
         example_build_workers=args.example_build_workers,
         predict_agent=args.predict_acting_agent,
+        train_get_image=args.train_get_image,
     )
     manifest_sample_ids = [sample.sample_id for sample in eval_samples]
     dump_prompts(eval_samples, count=args.dump_prompts, output_dir=args.output_dir)

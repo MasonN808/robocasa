@@ -11,6 +11,7 @@ import pickle
 import random
 import warnings
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -167,6 +168,37 @@ class CentralizedExample:
             "target_text": self.target_text,
             "messages": self.messages,
         }
+
+
+def estimate_centralized_example_length(
+    example: CentralizedExample,
+    *,
+    max_images_per_sample: int | None = None,
+    estimated_visual_tokens_per_image: int = 256,
+) -> int:
+    """Cheap multimodal length proxy for padding-aware batch sampling.
+
+    Exact processor tokenization would require rendering and tokenizing every
+    example at startup.  JSON character count is a stable proxy for the text
+    and tool-schema portion; the image term accounts for Qwen's merged visual
+    tokens at the training resolution.  Only relative ordering is required by
+    the length-grouped sampler.
+    """
+
+    text_characters = len(
+        json.dumps(example.messages, ensure_ascii=False, separators=(",", ":"))
+    ) + len(
+        json.dumps(
+            example.tool_schemas,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+    image_count = len(example.image_paths)
+    if max_images_per_sample is not None and max_images_per_sample > 0:
+        image_count = min(image_count, max_images_per_sample)
+    estimated_text_tokens = max(1, math.ceil(text_characters / 4))
+    return estimated_text_tokens + image_count * estimated_visual_tokens_per_image
 
 
 ManifestExample = CentralizedExample
@@ -764,12 +796,13 @@ def _build_centralized_examples_for_trajectory(
     response_schema: dict[str, Any],
     tool_schemas: list[dict[str, Any]],
     predict_agent: bool = False,
+    train_get_image: bool = False,
 ) -> list[CentralizedExample]:
     task_metadata = get_task_metadata(task_name)
     allowed_tool_specs = task_metadata.allowed_tool_specs
     if predict_agent:
         allowed_tool_specs = augment_tool_specs_for_agent_prediction(
-            allowed_tool_specs
+            allowed_tool_specs, include_get_image=train_get_image
         )
     original_trajectory = _load_json(trajectory_dir / "original_trajectory.json")
     plan_steps = _load_json(trajectory_dir / "plan.json")
@@ -803,20 +836,30 @@ def _build_centralized_examples_for_trajectory(
             trajectory_id=trajectory_id,
             trajectory_dir=trajectory_dir,
         )
-        if raw_step["tool"] == "get_image":
+        if raw_step["tool"] == "get_image" and not train_get_image:
             continue
+
+        effective_raw_step = raw_step
+        if raw_step["tool"] == "get_image" and set(raw_step["args"]["views"]).issubset(
+            {"top_view", "room_view", "map"}
+        ):
+            effective_raw_step = deepcopy(raw_step)
+            effective_raw_step["agent"] = AGENT_IDS[0]
 
         if not executed_step.get("success", False):
             continue
 
-        image_paths, observation_views = _require_latest_observation(
-            latest_observations_by_agent=latest_observations_by_agent,
-            before_index=raw_step["step"],
-            agent_id=raw_step["agent"],
-        )
+        if raw_step["tool"] == "get_image":
+            image_paths, observation_views = [], []
+        else:
+            image_paths, observation_views = _require_latest_observation(
+                latest_observations_by_agent=latest_observations_by_agent,
+                before_index=raw_step["step"],
+                agent_id=raw_step["agent"],
+            )
 
         target_payload, target_tool_call, target_text = _build_target_metadata(
-            raw_step=raw_step,
+            raw_step=effective_raw_step,
             allowed_tool_specs=allowed_tool_specs,
             sft_format=sft_format,
             predict_agent=predict_agent,
@@ -824,7 +867,7 @@ def _build_centralized_examples_for_trajectory(
         user_prompt = build_user_prompt(
             composite_task=task_metadata.composite_task,
             task_instruction=metadata["task"],
-            agent_id=raw_step["agent"],
+            agent_id=effective_raw_step["agent"],
             next_step_index=raw_step["step"],
             observation_views=observation_views,
             history_steps=history_steps,
@@ -855,7 +898,7 @@ def _build_centralized_examples_for_trajectory(
                 composite_task=task_metadata.composite_task,
                 trajectory_id=trajectory_id,
                 step_index=raw_step["step"],
-                agent_id=raw_step["agent"],
+                agent_id=effective_raw_step["agent"],
                 task_instruction=metadata["task"],
                 observation_views=observation_views,
                 image_paths=list(image_paths),
@@ -870,11 +913,12 @@ def _build_centralized_examples_for_trajectory(
                     user_prompt=user_prompt,
                     num_images=len(image_paths),
                     predict_agent=predict_agent,
+                    train_get_image=train_get_image,
                     **message_kwargs,
                 ),
             )
         )
-        history_steps.append(_normalize_history_step(raw_step))
+        history_steps.append(_normalize_history_step(effective_raw_step))
 
     if predict_agent and examples:
         examples.append(
@@ -994,6 +1038,7 @@ def build_centralized_examples(
     trajectory_ids_by_task: dict[str, set[str]] | None = None,
     example_build_workers: int = 1,
     predict_agent: bool = False,
+    train_get_image: bool = False,
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step.
 
@@ -1012,7 +1057,7 @@ def build_centralized_examples(
         effective_tool_specs = task_metadata.allowed_tool_specs
         if predict_agent:
             effective_tool_specs = augment_tool_specs_for_agent_prediction(
-                effective_tool_specs
+                effective_tool_specs, include_get_image=train_get_image
             )
         trajectory_dirs = _trajectory_dirs_for_task(
             dataset_root=dataset_root,
@@ -1050,6 +1095,7 @@ def build_centralized_examples(
                 response_schema=response_schema,
                 tool_schemas=tool_schemas,
                 predict_agent=predict_agent,
+                train_get_image=train_get_image,
             )
 
         if example_build_workers > 1 and len(selected_trajectory_dirs) > 1:
@@ -1093,6 +1139,7 @@ def build_example_cache_fingerprint(
     trajectory_ids: list[str] | set[str] | None = None,
     sft_format: str = SFT_FORMAT_TOOL_CALL,
     predict_agent: bool = False,
+    train_get_image: bool = False,
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
 
@@ -1138,6 +1185,8 @@ def build_example_cache_fingerprint(
     # valid; a v2 build can never silently reuse a v1 cache (and vice versa).
     if predict_agent:
         fingerprint["predict_acting_agent"] = True
+    if train_get_image:
+        fingerprint["train_get_image"] = True
     return fingerprint
 
 

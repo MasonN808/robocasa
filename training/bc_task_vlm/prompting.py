@@ -22,6 +22,15 @@ SYSTEM_PROMPT_PREDICT_AGENT = (
     "get_image, and do not describe the images."
 )
 
+SYSTEM_PROMPT_ACTIVE_OBSERVATION = (
+    "You are a robot task planner. Decide which agent should act next and "
+    'predict exactly one next tool call for it, passing the agent as the "agent" '
+    "argument. Request the camera views needed for the next action by calling "
+    "get_image. When the task goal is already satisfied, call task_complete. "
+    "Use images only as scene context. Do not output image paths or describe "
+    "the images."
+)
+
 
 def _format_allowed_values(tool_spec: dict[str, Any]) -> str:
     chunks: list[str] = []
@@ -153,10 +162,15 @@ def build_user_prompt(
     )
 
 
-def build_system_message(*, predict_agent: bool = False) -> dict[str, Any]:
+def build_system_message(
+    *, predict_agent: bool = False, train_get_image: bool = False
+) -> dict[str, Any]:
     """Builds the fixed system instruction for one chat conversation."""
 
-    system_text = SYSTEM_PROMPT_PREDICT_AGENT if predict_agent else SYSTEM_PROMPT
+    if train_get_image:
+        system_text = SYSTEM_PROMPT_ACTIVE_OBSERVATION
+    else:
+        system_text = SYSTEM_PROMPT_PREDICT_AGENT if predict_agent else SYSTEM_PROMPT
     return {
         "role": "system",
         "content": [{"type": "text", "text": system_text}],
@@ -248,6 +262,7 @@ def build_messages(
     target_tool_call: dict[str, Any] | None = None,
     target_text: str | None = None,
     predict_agent: bool = False,
+    train_get_image: bool = False,
 ) -> list[dict[str, Any]]:
     """Builds one chat conversation for training or generation."""
 
@@ -255,7 +270,9 @@ def build_messages(
         raise ValueError("Provide either target_tool_call or target_text, not both.")
 
     messages: list[dict[str, Any]] = [
-        build_system_message(predict_agent=predict_agent),
+        build_system_message(
+            predict_agent=predict_agent, train_get_image=train_get_image
+        ),
         build_user_message(user_prompt=user_prompt, num_images=num_images),
     ]
     if target_text is not None:

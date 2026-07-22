@@ -160,10 +160,14 @@ class VisionGenerationCollator:
 
         tokenizer_kwargs = {
             "text": prompt_texts,
-            "images": images,
             "padding": True,
             "return_tensors": "pt",
         }
+        # Qwen's image processor cannot accept a batch made entirely of empty
+        # image lists. Active-observation targets intentionally have no images:
+        # the model must decide what to request from symbolic history alone.
+        if any(images):
+            tokenizer_kwargs["images"] = images
         if self.max_length is not None:
             tokenizer_kwargs["max_length"] = self.max_length
             tokenizer_kwargs["truncation"] = True
@@ -426,6 +430,14 @@ def _is_communicate_record(record: dict[str, Any]) -> bool:
     return (record.get("target_tool_call") or {}).get("name") == "communicate"
 
 
+def _target_tool_name(record: dict[str, Any]) -> str | None:
+    return (record.get("target_tool_call") or {}).get("name")
+
+
+def _predicted_tool_name(record: dict[str, Any]) -> str | None:
+    return (record.get("parsed_tool_call") or {}).get("name")
+
+
 def metrics_from_prediction_records(
     records: list[dict[str, Any]],
 ) -> dict[str, float]:
@@ -452,7 +464,33 @@ def metrics_from_prediction_records(
     # near-impossible bar for un-finetuned models; report the two step
     # families separately so physical-action competence is visible on its own.
     comm_records = [r for r in records if _is_communicate_record(r)]
-    action_records = [r for r in records if not _is_communicate_record(r)]
+    observation_records = [r for r in records if _target_tool_name(r) == "get_image"]
+    action_records = [
+        r
+        for r in records
+        if not _is_communicate_record(r) and _target_tool_name(r) != "get_image"
+    ]
+    if observation_records:
+        metrics["structured_eval_observation_recall"] = sum(
+            _predicted_tool_name(r) == "get_image" for r in observation_records
+        ) / len(observation_records)
+        metrics["structured_eval_observation_view_set_exact_match"] = sum(
+            _predicted_tool_name(r) == "get_image"
+            and set(
+                (r.get("parsed_tool_call") or {})
+                .get("arguments", {})
+                .get("views", ())
+            )
+            == set(
+                (r.get("target_tool_call") or {})
+                .get("arguments", {})
+                .get("views", ())
+            )
+            for r in observation_records
+        ) / len(observation_records)
+        metrics["structured_eval_observation_step_count"] = float(
+            len(observation_records)
+        )
     if comm_records:
         metrics["structured_eval_comm_step_fraction"] = len(comm_records) / max(
             total_samples, 1

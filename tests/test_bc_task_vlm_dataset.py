@@ -5,12 +5,14 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 from training.bc_task_vlm import dataset as dataset_module
 from training.bc_task_vlm.dataset import (
     build_example_cache_fingerprint,
     build_example_cache_path,
     build_centralized_examples,
+    estimate_centralized_example_length,
     list_available_task_names,
     list_task_trajectory_ids,
     load_examples_from_cache,
@@ -68,6 +70,27 @@ class CentralizedExampleTests(unittest.TestCase):
                 if isinstance(item, dict) and item.get("type") == "image"
             )
             self.assertEqual(num_image_placeholders, len(example.image_paths))
+
+    def test_length_estimate_accounts_for_images_and_respects_image_cap(self):
+        example = SimpleNamespace(
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "move"}]}
+            ],
+            tool_schemas=[{"type": "function", "function": {"name": "move"}}],
+            image_paths=["one.png", "two.png", "three.png"],
+        )
+
+        uncapped = estimate_centralized_example_length(example)
+        capped = estimate_centralized_example_length(
+            example,
+            max_images_per_sample=1,
+        )
+
+        self.assertGreater(uncapped, capped)
+        self.assertEqual(
+            uncapped - capped,
+            256 * (len(example.image_paths) - 1),
+        )
 
     def test_plain_sft_centralized_examples_use_text_targets(self):
         dataset_root = self._build_single_trajectory_dataset_root()

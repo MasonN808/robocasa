@@ -25,8 +25,14 @@ fi
 if [[ "${PREDICT_ACTING_AGENT:-0}" == "1" ]]; then
   launch_args+=(--predict-acting-agent)
 fi
+if [[ "${TRAIN_GET_IMAGE:-0}" == "1" ]]; then
+  launch_args+=(--train-get-image)
+fi
 if [[ -n "${INIT_ADAPTER_PATH:-}" ]]; then
   launch_args+=(--init-adapter-path "${INIT_ADAPTER_PATH}")
+fi
+if [[ -n "${EVAL_MAX_SAMPLES:-}" ]]; then
+  launch_args+=(--eval-max-samples "${EVAL_MAX_SAMPLES}")
 fi
 
 echo "Training ${model_path} (LoRA) on ${data_root}"

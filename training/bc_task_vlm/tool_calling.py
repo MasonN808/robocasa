@@ -48,6 +48,10 @@ def _build_string_schema(
         schema["enum"] = list(agent_ids)
         return schema
 
+    allowed_values_key = f"allowed_{arg_name}"
+    if allowed_values_key in tool_spec:
+        schema["enum"] = list(tool_spec[allowed_values_key])
+        return schema
     allowed_ids_key = _allowed_ids_key_for_arg_name(arg_name)
     if allowed_ids_key is not None and allowed_ids_key in tool_spec:
         schema["enum"] = list(tool_spec[allowed_ids_key])

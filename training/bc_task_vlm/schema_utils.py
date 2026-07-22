@@ -20,14 +20,35 @@ TASK_COMPLETE_TOOL_SPEC: dict[str, Any] = {
     ),
 }
 
+GET_IMAGE_TOOL_NAME = "get_image"
+KNOWN_OBSERVATION_VIEWS = (
+    "top_view",
+    "room_view",
+    "map",
+    "wrist",
+    "agentview_center",
+    "agentview_left",
+    "agentview_right",
+)
+GET_IMAGE_TOOL_SPEC: dict[str, Any] = {
+    "tool_args": ["views"],
+    "tool_arg_types": {"views": "STRING_ARRAY"},
+    "allowed_views": list(KNOWN_OBSERVATION_VIEWS),
+    "description": "Request one or more camera views before choosing the next action.",
+}
+
 
 def augment_tool_specs_for_agent_prediction(
     allowed_tool_specs: dict[str, dict[str, Any]],
+    *,
+    include_get_image: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Returns the task's tool specs plus the synthetic task_complete tool."""
 
     augmented = dict(allowed_tool_specs)
     augmented[TASK_COMPLETE_TOOL_NAME] = deepcopy(TASK_COMPLETE_TOOL_SPEC)
+    if include_get_image:
+        augmented[GET_IMAGE_TOOL_NAME] = deepcopy(GET_IMAGE_TOOL_SPEC)
     return augmented
 
 
@@ -257,9 +278,17 @@ def validate_single_step_payload(
                     f"steps[0].args.{arg_name} must be one of {allowed_text}."
                 )
 
+        allowed_values_key = f"allowed_{arg_name}"
         allowed_ids_key = _allowed_ids_key_for_arg_name(arg_name)
-        if allowed_ids_key and allowed_ids_key in tool_spec:
-            allowed_values = set(tool_spec[allowed_ids_key])
+        constraint_key = (
+            allowed_values_key
+            if allowed_values_key in tool_spec
+            else allowed_ids_key
+            if allowed_ids_key and allowed_ids_key in tool_spec
+            else None
+        )
+        if constraint_key is not None:
+            allowed_values = set(tool_spec[constraint_key])
             if isinstance(normalized_value, str):
                 if normalized_value not in allowed_values:
                     allowed_text = ", ".join(sorted(allowed_values))

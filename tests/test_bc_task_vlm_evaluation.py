@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from training.bc_task_vlm.evaluation import (
+    VisionGenerationCollator,
     metrics_from_prediction_records,
     score_structured_prediction,
 )
@@ -23,6 +24,43 @@ COMM_SPEC = {
         "tool_arg_types": {"to": "STRING", "message": "STRING"},
     }
 }
+
+
+class _RecordingProcessor:
+    chat_template = "unused"
+
+    def __init__(self):
+        self.kwargs = None
+
+    def apply_chat_template(self, messages, **kwargs):
+        return "prompt"
+
+    def __call__(self, **kwargs):
+        self.kwargs = kwargs
+        return {"input_ids": [[1]], "attention_mask": [[1]]}
+
+
+class VisionGenerationCollatorTests(unittest.TestCase):
+    def test_text_only_batch_omits_images_processor_argument(self):
+        collator = object.__new__(VisionGenerationCollator)
+        collator.processor = _RecordingProcessor()
+        collator.max_length = None
+        collator.sft_format = "tool_call"
+        collator.enable_thinking = False
+        feature = {
+            "messages": [
+                {"role": "system", "content": [{"type": "text", "text": "s"}]},
+                {"role": "user", "content": [{"type": "text", "text": "u"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "a"}]},
+            ],
+            "image_paths": [],
+            "tool_schemas": [],
+            **_metadata(),
+        }
+
+        collator([feature])
+
+        self.assertNotIn("images", collator.processor.kwargs)
 
 
 def _metadata(
