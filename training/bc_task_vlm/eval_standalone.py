@@ -119,6 +119,12 @@ def parse_args() -> argparse.Namespace:
         help="Evaluate active-observation (v3) get_image targets.",
     )
     parser.add_argument(
+        "--causal-single-cache",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Rebuild v3 examples with the causal single-cache contract.",
+    )
+    parser.add_argument(
         "--few-shot",
         type=int,
         default=0,
@@ -313,6 +319,7 @@ def load_eval_samples(
     example_build_workers: int,
     predict_agent: bool = False,
     train_get_image: bool = False,
+    causal_single_cache: bool = False,
 ) -> list[EvalSample]:
     manifest_samples = manifest["samples"]
     if max_samples is not None:
@@ -335,6 +342,7 @@ def load_eval_samples(
         progress_description="Building eval examples",
         predict_agent=predict_agent,
         train_get_image=train_get_image,
+        causal_single_cache=causal_single_cache,
     )
     examples_by_id = {example.sample_id: example for example in examples}
 
@@ -1090,6 +1098,13 @@ def main() -> None:
     args = parse_args()
     if args.train_get_image and not args.predict_acting_agent:
         raise SystemExit("--train-get-image requires --predict-acting-agent.")
+    if args.causal_single_cache and not (
+        args.predict_acting_agent and args.train_get_image
+    ):
+        raise SystemExit(
+            "--causal-single-cache requires --predict-acting-agent "
+            "and --train-get-image."
+        )
     if args.predict_acting_agent and args.forced_json and not args.native_tools:
         raise SystemExit(
             "--predict-acting-agent needs the agent inside the emitted "
@@ -1118,6 +1133,7 @@ def main() -> None:
         example_build_workers=args.example_build_workers,
         predict_agent=args.predict_acting_agent,
         train_get_image=args.train_get_image,
+        causal_single_cache=args.causal_single_cache,
     )
     manifest_sample_ids = [sample.sample_id for sample in eval_samples]
     dump_prompts(eval_samples, count=args.dump_prompts, output_dir=args.output_dir)

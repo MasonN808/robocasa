@@ -28,6 +28,13 @@ trajectory, including whichever agent acts next. For `--sft-format tool_call`,
 structured generation evaluation logs exact tool-call accuracy, including both
 the predicted tool name and every argument, plus stricter action-step accuracy.
 
+The proposed replacement for centralized target-selected observations is
+documented in
+[`plans/partial_observability_vs_centralized_task_vlm.md`](plans/partial_observability_vs_centralized_task_vlm.md).
+It uses shared model weights with separate agent-private histories and image
+caches, concurrent logical agents served by one model server, and causal
+observation inputs that never depend on the current target.
+
 ## Training Sample Build Progress And Cache
 
 When training samples are built from raw trajectories, the main process now shows a

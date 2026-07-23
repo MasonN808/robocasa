@@ -797,6 +797,7 @@ def _build_centralized_examples_for_trajectory(
     tool_schemas: list[dict[str, Any]],
     predict_agent: bool = False,
     train_get_image: bool = False,
+    causal_single_cache: bool = False,
 ) -> list[CentralizedExample]:
     task_metadata = get_task_metadata(task_name)
     allowed_tool_specs = task_metadata.allowed_tool_specs
@@ -823,25 +824,27 @@ def _build_centralized_examples_for_trajectory(
     examples: list[CentralizedExample] = []
     history_steps: list[dict[str, Any]] = []
     latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
+    active_observation_agent: str | None = None
     for raw_step, plan_step, executed_step in zip(
         raw_steps,
         plan_steps,
         executed_steps,
         strict=True,
     ):
-        _record_latest_observation(
-            latest_observations_by_agent=latest_observations_by_agent,
-            plan_step=plan_step,
-            task_name=task_name,
-            trajectory_id=trajectory_id,
-            trajectory_dir=trajectory_dir,
-        )
         if raw_step["tool"] == "get_image" and not train_get_image:
+            _record_latest_observation(
+                latest_observations_by_agent=latest_observations_by_agent,
+                plan_step=plan_step, task_name=task_name,
+                trajectory_id=trajectory_id, trajectory_dir=trajectory_dir)
             continue
 
         effective_raw_step = raw_step
-        if raw_step["tool"] == "get_image" and set(raw_step["args"]["views"]).issubset(
-            {"top_view", "room_view", "map"}
+        if (
+            not causal_single_cache
+            and raw_step["tool"] == "get_image"
+            and set(raw_step["args"]["views"]).issubset(
+                {"top_view", "room_view", "map"}
+            )
         ):
             effective_raw_step = deepcopy(raw_step)
             effective_raw_step["agent"] = AGENT_IDS[0]
@@ -849,7 +852,16 @@ def _build_centralized_examples_for_trajectory(
         if not executed_step.get("success", False):
             continue
 
-        if raw_step["tool"] == "get_image":
+        if causal_single_cache:
+            if active_observation_agent is not None:
+                image_paths, observation_views = _require_latest_observation(
+                    latest_observations_by_agent=latest_observations_by_agent,
+                    before_index=raw_step["step"],
+                    agent_id=active_observation_agent,
+                )
+            else:
+                image_paths, observation_views = [], []
+        elif raw_step["tool"] == "get_image":
             image_paths, observation_views = [], []
         else:
             image_paths, observation_views = _require_latest_observation(
@@ -873,6 +885,8 @@ def _build_centralized_examples_for_trajectory(
             history_steps=history_steps,
             allowed_tool_specs=allowed_tool_specs,
             sft_format=sft_format,
+            observation_owner=active_observation_agent,
+            include_observation_owner=causal_single_cache,
             predict_agent=predict_agent,
         )
         message_kwargs: dict[str, Any]
@@ -919,6 +933,15 @@ def _build_centralized_examples_for_trajectory(
             )
         )
         history_steps.append(_normalize_history_step(effective_raw_step))
+        _record_latest_observation(
+            latest_observations_by_agent=latest_observations_by_agent,
+            plan_step=plan_step, task_name=task_name,
+            trajectory_id=trajectory_id, trajectory_dir=trajectory_dir)
+        if causal_single_cache:
+            if raw_step["tool"] == "get_image":
+                active_observation_agent = effective_raw_step["agent"]
+            elif raw_step["tool"] not in {"communicate", TASK_COMPLETE_TOOL_NAME}:
+                active_observation_agent = None
 
     if predict_agent and examples:
         examples.append(
@@ -929,6 +952,8 @@ def _build_centralized_examples_for_trajectory(
                 raw_steps=raw_steps,
                 history_steps=history_steps,
                 latest_observations_by_agent=latest_observations_by_agent,
+                active_observation_agent=active_observation_agent,
+                causal_single_cache=causal_single_cache,
                 allowed_tool_specs=allowed_tool_specs,
                 sft_format=sft_format,
                 response_schema=response_schema,
@@ -947,7 +972,9 @@ def _build_task_complete_example(
     raw_steps: list[dict[str, Any]],
     history_steps: list[dict[str, Any]],
     latest_observations_by_agent: dict[str, tuple[list[str], list[str]]],
+    active_observation_agent: str | None = None,
     allowed_tool_specs: dict[str, dict[str, Any]],
+    causal_single_cache: bool = False,
     sft_format: str,
     response_schema: dict[str, Any],
     tool_schemas: list[dict[str, Any]],
@@ -962,11 +989,21 @@ def _build_task_complete_example(
 
     last_agent = history_steps[-1]["agent"]
     terminal_step_index = int(raw_steps[-1]["step"]) + 1
-    image_paths, observation_views = _require_latest_observation(
-        latest_observations_by_agent=latest_observations_by_agent,
-        before_index=terminal_step_index,
-        agent_id=last_agent,
-    )
+    if causal_single_cache:
+        if active_observation_agent is None:
+            image_paths, observation_views = [], []
+        else:
+            image_paths, observation_views = _require_latest_observation(
+                latest_observations_by_agent=latest_observations_by_agent,
+                before_index=terminal_step_index,
+                agent_id=active_observation_agent,
+            )
+    else:
+        image_paths, observation_views = _require_latest_observation(
+            latest_observations_by_agent=latest_observations_by_agent,
+            before_index=terminal_step_index,
+            agent_id=last_agent,
+        )
     raw_step = {
         "step": terminal_step_index,
         "agent": last_agent,
@@ -987,6 +1024,8 @@ def _build_task_complete_example(
         observation_views=observation_views,
         history_steps=history_steps,
         allowed_tool_specs=allowed_tool_specs,
+        observation_owner=active_observation_agent,
+        include_observation_owner=causal_single_cache,
         sft_format=sft_format,
         predict_agent=True,
     )
@@ -1039,6 +1078,7 @@ def build_centralized_examples(
     example_build_workers: int = 1,
     predict_agent: bool = False,
     train_get_image: bool = False,
+    causal_single_cache: bool = False,
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step.
 
@@ -1050,6 +1090,10 @@ def build_centralized_examples(
 
     sft_format = _validate_sft_format(sft_format)
     example_build_workers = max(example_build_workers, 1)
+    if causal_single_cache and not (predict_agent and train_get_image):
+        raise ValueError(
+            "causal_single_cache requires predict_agent=True and train_get_image=True"
+        )
     examples: list[CentralizedExample] = []
 
     for task_name in task_names:
@@ -1096,6 +1140,7 @@ def build_centralized_examples(
                 tool_schemas=tool_schemas,
                 predict_agent=predict_agent,
                 train_get_image=train_get_image,
+                causal_single_cache=causal_single_cache,
             )
 
         if example_build_workers > 1 and len(selected_trajectory_dirs) > 1:
@@ -1140,6 +1185,7 @@ def build_example_cache_fingerprint(
     sft_format: str = SFT_FORMAT_TOOL_CALL,
     predict_agent: bool = False,
     train_get_image: bool = False,
+    causal_single_cache: bool = False,
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
 
@@ -1187,6 +1233,8 @@ def build_example_cache_fingerprint(
         fingerprint["predict_acting_agent"] = True
     if train_get_image:
         fingerprint["train_get_image"] = True
+    if causal_single_cache:
+        fingerprint["causal_single_cache"] = True
     return fingerprint
 
 

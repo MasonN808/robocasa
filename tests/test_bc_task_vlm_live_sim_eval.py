@@ -114,6 +114,325 @@ def test_active_observation_uses_requested_views_once(monkeypatch, tmp_path):
     assert calls[0]["agent_hint"] == "agent_1"
 
 
+def test_causal_cache_without_active_agent_is_image_free(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_generate_once(**kwargs):
+        calls.append(kwargs)
+        return {
+            "agent": "agent_0",
+            "tool": "get_image",
+            "args": {"views": list(OVERHEAD_VIEWS)},
+        }
+
+    monkeypatch.setattr(live_sim_eval, "_generate_once", fake_generate_once)
+    proposal, views = live_sim_eval._model_propose_step(
+        session=object(),
+        policy=object(),
+        args=SimpleNamespace(
+            output_dir=tmp_path,
+            train_get_image=True,
+            get_image_observation_mode="causal_cache",
+        ),
+        task_metadata=object(),
+        tool_specs={},
+        tool_schemas=[],
+        trajectory={},
+        history=[],
+        step_index=1,
+        last_executed_tool=None,
+        frames_dir=None,
+        cached_observations_by_agent={
+            "agent_0": (["agent0.jpg"], ["top_view"]),
+            "agent_1": (["agent1.jpg"], ["wrist"]),
+        },
+        active_observation_agent=None,
+    )
+
+    assert proposal["tool"] == "get_image"
+    assert views == ()
+    assert len(calls) == 1
+    assert calls[0]["views"] == ()
+    assert calls[0]["agent_hint"] is None
+    assert calls[0]["pre_rendered_image_paths"] is None
+
+
+def test_causal_cache_uses_only_active_agent_cache_independent_of_step_index(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    def fake_generate_once(**kwargs):
+        calls.append(kwargs)
+        return {"agent": "agent_1", "tool": "communicate", "args": {}}
+
+    agent_0_paths = ["agent0_top.jpg", "agent0_room.jpg", "agent0_map.jpg"]
+    agent_1_paths = ["agent1_wrist.jpg", "agent1_center.jpg"]
+    monkeypatch.setattr(live_sim_eval, "_generate_once", fake_generate_once)
+    for step_index in (2, 3, 4, 5):
+        proposal, views = live_sim_eval._model_propose_step(
+            session=object(),
+            policy=object(),
+            args=SimpleNamespace(
+                output_dir=tmp_path,
+                train_get_image=True,
+                get_image_observation_mode="causal_cache",
+            ),
+            task_metadata=object(),
+            tool_specs={},
+            tool_schemas=[],
+            trajectory={},
+            history=[],
+            step_index=step_index,
+            last_executed_tool=None,
+            frames_dir=None,
+            cached_observations_by_agent={
+                "agent_0": (agent_0_paths, list(OVERHEAD_VIEWS)),
+                "agent_1": (agent_1_paths, list(WRIST_VIEWS)),
+            },
+            active_observation_agent="agent_1",
+        )
+
+        assert proposal["tool"] == "communicate"
+        assert views == WRIST_VIEWS
+
+    assert len(calls) == 4
+    assert all(call["views"] == WRIST_VIEWS for call in calls)
+    assert all(call["agent_hint"] == "agent_1" for call in calls)
+    assert all(
+        call["pre_rendered_image_paths"] == agent_1_paths for call in calls
+    )
+    assert all(
+        call["pre_rendered_image_paths"] != agent_0_paths for call in calls
+    )
+
+
+def test_causal_cache_records_only_requesting_agent():
+    cached = {
+        "agent_0": (["agent0_top.jpg"], ["top_view"]),
+    }
+
+    live_sim_eval._record_agent_observation(
+        cached,
+        agent_id="agent_1",
+        image_paths=["agent1_top.jpg"],
+        view_names=["top_view"],
+    )
+
+    assert cached == {
+        "agent_0": (["agent0_top.jpg"], ["top_view"]),
+        "agent_1": (["agent1_top.jpg"], ["top_view"]),
+    }
+
+
+def test_causal_cache_owner_gate_and_physical_invalidation():
+    missing = live_sim_eval._causal_cache_rejection_reason(
+        tool_name="navigate_to_fixture",
+        proposed_agent="agent_0",
+        active_observation_agent=None,
+    )
+    foreign = live_sim_eval._causal_cache_rejection_reason(
+        tool_name="communicate",
+        proposed_agent="agent_1",
+        active_observation_agent="agent_0",
+    )
+
+    assert "requires a preceding" in missing
+    assert "belongs to agent_0" in foreign
+    assert (
+        live_sim_eval._causal_cache_rejection_reason(
+            tool_name="communicate",
+            proposed_agent="agent_0",
+            active_observation_agent="agent_0",
+        )
+        is None
+    )
+    assert (
+        live_sim_eval._causal_cache_rejection_reason(
+            tool_name="get_image",
+            proposed_agent="agent_1",
+            active_observation_agent="agent_0",
+        )
+        is None
+    )
+    assert live_sim_eval._tool_invalidates_active_observation(
+        "navigate_to_fixture"
+    )
+    assert live_sim_eval._tool_invalidates_active_observation("pick_up_object")
+    assert not live_sim_eval._tool_invalidates_active_observation("communicate")
+
+
+def test_causal_cache_run_state_transitions(monkeypatch, tmp_path):
+    proposals = iter(
+        [
+            {
+                "agent": "agent_0",
+                "tool": "get_image",
+                "args": {"views": ["top_view"]},
+            },
+            {"agent": "agent_0", "tool": "communicate", "args": {}},
+            {"agent": "agent_0", "tool": "navigate_to_fixture", "args": {}},
+            {"agent": "agent_0", "tool": "task_complete", "args": {}},
+        ]
+    )
+    proposal_states = []
+    render_calls = []
+
+    class FakePolicy:
+        def generate(self, _feature):
+            raise AssertionError("the proposal helper is monkeypatched")
+
+    class FakeMirror:
+        def __init__(self, **_kwargs):
+            self.runtime_state = {}
+            self.goal_satisfied = False
+
+        def step(self, _step):
+            return True, None
+
+        def partial_goal_fraction(self):
+            return 0.0
+
+    class FakeAdapter:
+        def _adapt_step(self, symbolic_step, **_kwargs):
+            return {
+                "tool": symbolic_step["tool"],
+                "robot_idx": 0,
+                "args": {},
+            }
+
+    class FakeExecutor:
+        def execute(self, _tool, **_kwargs):
+            return SimpleNamespace(success=True, details={})
+
+    class FakeSession:
+        executor = FakeExecutor()
+
+        def start_trajectory(self, _trajectory):
+            return FakeAdapter(), {"initial_state": {}}
+
+        def render_views(self, views, *, agent_id, **_kwargs):
+            render_calls.append((tuple(views), agent_id))
+            return ["agent0_top.jpg"], list(views)
+
+        def native_success(self):
+            return False, None
+
+    def fake_model_propose_step(**kwargs):
+        proposal_states.append(
+            {
+                "active": kwargs["active_observation_agent"],
+                "cache_agents": sorted(kwargs["cached_observations_by_agent"]),
+            }
+        )
+        active = kwargs["active_observation_agent"]
+        cached_paths, views = live_sim_eval._cached_observation_for_agent(
+            kwargs["cached_observations_by_agent"], active
+        )
+        assert (cached_paths is None) == (active is None)
+        return next(proposals), views
+
+    monkeypatch.setattr(
+        live_sim_eval,
+        "get_task_metadata",
+        lambda _task: SimpleNamespace(allowed_tool_specs={}),
+    )
+    monkeypatch.setattr(
+        live_sim_eval,
+        "augment_tool_specs_for_agent_prediction",
+        lambda specs, **_kwargs: specs,
+    )
+    monkeypatch.setattr(live_sim_eval, "build_tool_schemas", lambda **_kwargs: [])
+    monkeypatch.setattr(live_sim_eval, "FsmMirror", FakeMirror)
+    monkeypatch.setattr(live_sim_eval, "_model_propose_step", fake_model_propose_step)
+
+    result = live_sim_eval.run_trajectory(
+        session=FakeSession(),
+        policy=FakePolicy(),
+        args=SimpleNamespace(
+            train_get_image=True,
+            get_image_observation_mode="causal_cache",
+            step_budget_factor=2.0,
+            max_consecutive_rejections=3,
+            output_dir=tmp_path,
+            layout=0,
+            style=0,
+            seed=0,
+        ),
+        task_name="beverage_organization",
+        composite_task="BeverageOrganization",
+        trajectory={
+            "trajectory_id": "traj_smoke",
+            "task": "organize beverages",
+            "steps": [
+                {"tool": "get_image"},
+                {"tool": "communicate"},
+                {"tool": "navigate_to_fixture"},
+            ],
+        },
+        frames_dir=None,
+    )
+
+    assert [state["active"] for state in proposal_states] == [
+        None,
+        "agent_0",
+        "agent_0",
+        None,
+    ]
+    assert [state["cache_agents"] for state in proposal_states] == [
+        [],
+        ["agent_0"],
+        ["agent_0"],
+        ["agent_0"],
+    ]
+    assert render_calls == [(('top_view',), "agent_0")]
+    assert result["termination"] == "task_complete_declared"
+
+def test_generate_once_reuses_cached_files_without_rendering(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeSession:
+        def render_views(self, *_args, **_kwargs):
+            raise AssertionError("cached observations must not be re-rendered")
+
+    class FakePolicy:
+        def generate(self, feature):
+            captured.update(feature)
+            raise RuntimeError("stop after feature capture")
+
+    monkeypatch.setattr(live_sim_eval, "build_user_prompt", lambda **_kwargs: "prompt")
+    monkeypatch.setattr(live_sim_eval, "build_messages", lambda **_kwargs: [])
+
+    cached_paths = ["cached_top.jpg", "cached_room.jpg", "cached_map.jpg"]
+    proposal = live_sim_eval._generate_once(
+        session=FakeSession(),
+        policy=FakePolicy(),
+        args=SimpleNamespace(
+            output_dir=tmp_path,
+            task_spec_detail=False,
+            few_shot=False,
+            train_get_image=True,
+        ),
+        task_metadata=SimpleNamespace(
+            composite_task="BeverageOrganization",
+            dataset_name="beverage_organization",
+        ),
+        tool_specs={},
+        tool_schemas=[],
+        trajectory={"trajectory_id": "traj_000002", "task": "organize"},
+        history=[],
+        step_index=2,
+        views=OVERHEAD_VIEWS,
+        render_dir=tmp_path,
+        agent_hint="agent_0",
+        pre_rendered_image_paths=cached_paths,
+    )
+
+    assert proposal == {"error": "RuntimeError: stop after feature capture"}
+    assert captured["image_paths"] == cached_paths
+    assert captured["agent_id"] == "agent_0"
+
+
 def test_run_lengths():
     assert _run_lengths([]) == []
     assert _run_lengths(["agent_0", "agent_0", "agent_1", "agent_0"]) == [2, 1, 1]

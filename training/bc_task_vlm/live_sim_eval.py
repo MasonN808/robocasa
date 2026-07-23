@@ -4,7 +4,8 @@ Implements training/bc_task_vlm/plans/live_sim_eval_plan.md: the model controls
 both agents live in the MuJoCo sim under the v2 self-scheduled contract (the
 model emits the acting agent and may call task_complete), success is judged by
 the task env's own ``_check_success`` plus the symbolic FSM goal checker, and
-visuals are re-rendered from current sim state every turn.
+visuals are rendered from current sim state according to the selected
+observation contract.
 
 Backends:
   oracle      replay the expert trajectory's own steps (verification gate:
@@ -74,6 +75,12 @@ WRIST_VIEWS = ("wrist", "agentview_center")
 ROUTER_VIEWS = ("top_view", "wrist", "agentview_center")
 OPENING_COMMUNICATION_STEP_INDICES = frozenset({2, 3})
 NAVIGATE_TOOLS = {"navigate_to_fixture"}
+GET_IMAGE_OBSERVATION_MODE_NEXT_TURN = "next_turn"
+GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE = "causal_cache"
+GET_IMAGE_OBSERVATION_MODES = (
+    GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
+    GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE,
+)
 _NUMBERED_OBJECT_RE = re.compile(r"^obj_(\d+)$")
 
 
@@ -111,6 +118,68 @@ def _step_index_for_turn(
             raise ValueError("turn_index must be non-negative")
         return turn_index
     return _global_step_index_for_turn(turn_index)
+
+
+def _cached_observation_for_agent(
+    cached_observations_by_agent: dict[str, tuple[list[str], list[str]]],
+    agent_id: str | None,
+) -> tuple[list[str] | None, tuple[str, ...]]:
+    """Return only the selected agent's prefix-derived visual cache."""
+
+    if agent_id is None:
+        return None, ()
+    cached = cached_observations_by_agent.get(agent_id)
+    if cached is None:
+        return None, ()
+    image_paths, view_names = cached
+    return list(image_paths), tuple(view_names)
+
+
+def _record_agent_observation(
+    cached_observations_by_agent: dict[str, tuple[list[str], list[str]]],
+    *,
+    agent_id: str,
+    image_paths: list[str],
+    view_names: list[str],
+) -> None:
+    """Update one logical agent cache without granting access to the other."""
+
+    cached_observations_by_agent[agent_id] = (
+        list(image_paths),
+        list(view_names),
+    )
+
+
+def _causal_cache_rejection_reason(
+    *,
+    tool_name: str,
+    proposed_agent: str,
+    active_observation_agent: str | None,
+) -> str | None:
+    """Enforce single-agent visual ownership for the causal compatibility mode."""
+
+    if tool_name in {"get_image", TASK_COMPLETE_TOOL_NAME}:
+        return None
+    if active_observation_agent is None:
+        if tool_name == "communicate":
+            return None
+        return "physical action requires a preceding agent-owned get_image"
+    if proposed_agent != active_observation_agent:
+        return (
+            f"active observation belongs to {active_observation_agent}, "
+            f"not {proposed_agent}"
+        )
+    return None
+
+
+def _tool_invalidates_active_observation(tool_name: str) -> bool:
+    """Physical tools mutate the scene or robot pose; communication does not."""
+
+    return tool_name not in {
+        "communicate",
+        "get_image",
+        TASK_COMPLETE_TOOL_NAME,
+    }
 
 
 def _routing_views_for_step(step_index: int) -> tuple[str, ...]:
@@ -768,6 +837,15 @@ def run_trajectory(
 ) -> dict[str, Any]:
     task_metadata = get_task_metadata(task_name)
     train_get_image = bool(getattr(args, "train_get_image", False))
+    get_image_observation_mode = getattr(
+        args,
+        "get_image_observation_mode",
+        GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
+    )
+    causal_cached_observations = (
+        train_get_image
+        and get_image_observation_mode == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE
+    )
     tool_specs = augment_tool_specs_for_agent_prediction(
         task_metadata.allowed_tool_specs, include_get_image=train_get_image
     )
@@ -802,10 +880,19 @@ def run_trajectory(
     turn_index = 0
     requested_views: tuple[str, ...] | None = None
     requested_agent: str | None = None
+    cached_observations_by_agent: dict[
+        str, tuple[list[str], list[str]]
+    ] = {}
+    active_observation_agent: str | None = None
 
     while turn_index < step_budget:
         step_index = _step_index_for_turn(
             turn_index, active_observation=train_get_image
+        )
+        proposal_observation_agent = (
+            active_observation_agent
+            if causal_cached_observations
+            else requested_agent
         )
         views_used: tuple[str, ...] | None = None
         proposal_started = time.perf_counter()
@@ -824,6 +911,8 @@ def run_trajectory(
                 frames_dir=frames_dir,
                 requested_views=requested_views,
                 requested_agent=requested_agent,
+                cached_observations_by_agent=cached_observations_by_agent,
+                active_observation_agent=active_observation_agent,
             )
             requested_views = None
             requested_agent = None
@@ -838,6 +927,9 @@ def run_trajectory(
             "proposal": deepcopy(proposal),
             "views": list(views_used) if views_used else None,
             "proposal_elapsed_s": round(time.perf_counter() - proposal_started, 3),
+            "observation_agent": (
+                proposal_observation_agent if train_get_image else None
+            ),
         }
         if "error" in proposal:
             # Unparseable model output: no-op with feedback.
@@ -886,12 +978,53 @@ def run_trajectory(
                         "args": {"views": list(views)},
                     }
                 )
-                requested_views = views
-                requested_agent = proposal["agent"]
+                if causal_cached_observations:
+                    render_dir = frames_dir or Path(args.output_dir) / "_tmp_views"
+                    image_paths, view_names = session.render_views(
+                        views,
+                        agent_id=proposal["agent"],
+                        out_dir=render_dir,
+                        tag=f"turn_{step_index:03d}_request_{len(views)}v",
+                    )
+                    _record_agent_observation(
+                        cached_observations_by_agent,
+                        agent_id=proposal["agent"],
+                        image_paths=image_paths,
+                        view_names=view_names,
+                    )
+                    active_observation_agent = proposal["agent"]
+                else:
+                    requested_views = views
+                    requested_agent = proposal["agent"]
                 consecutive_rejections = 0
             records.append(record)
             turn_index += 1
             continue
+
+        if causal_cached_observations:
+            cache_reason = _causal_cache_rejection_reason(
+                tool_name=proposal["tool"],
+                proposed_agent=proposal["agent"],
+                active_observation_agent=active_observation_agent,
+            )
+            if cache_reason is not None:
+                record.update(legal=False, executed=False, reason=cache_reason)
+                history.append(
+                    {
+                        "step": step_index,
+                        "agent": proposal["agent"],
+                        "tool": proposal["tool"],
+                        "args": deepcopy(proposal["args"]),
+                        "error": cache_reason[:120],
+                    }
+                )
+                consecutive_rejections += 1
+                records.append(record)
+                if consecutive_rejections >= args.max_consecutive_rejections:
+                    termination = "max_consecutive_rejections"
+                    break
+                turn_index += 1
+                continue
 
         symbolic_step = {
             "step": step_index,
@@ -973,6 +1106,10 @@ def run_trajectory(
         consecutive_rejections = 0
         last_executed_tool = symbolic_step["tool"]
         history.append(symbolic_step)
+        if causal_cached_observations and _tool_invalidates_active_observation(
+            symbolic_step["tool"]
+        ):
+            active_observation_agent = None
         if frames_dir is not None:
             try:
                 session.executor.save_scene_frames(
@@ -1000,6 +1137,9 @@ def run_trajectory(
         "task_name": task_name,
         "composite_task": composite_task,
         "trajectory_id": trajectory.get("trajectory_id"),
+        "get_image_observation_mode": (
+            get_image_observation_mode if train_get_image else None
+        ),
         "scene": {"layout": args.layout, "style": args.style, "seed": args.seed},
         "expert_steps": len(expert_action_steps),
         "steps_used": len(records),
@@ -1040,11 +1180,41 @@ def _model_propose_step(
     frames_dir: Path | None,
     requested_views: tuple[str, ...] | None = None,
     requested_agent: str | None = None,
+    cached_observations_by_agent: dict[
+        str, tuple[list[str], list[str]]
+    ] | None = None,
+    active_observation_agent: str | None = None,
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
-    """Two-phase turn: neutral routing views, then canonical refinement."""
+    """Propose under the selected active-observation or legacy view contract."""
 
     render_dir = (frames_dir or Path(args.output_dir) / "_tmp_views")
     if getattr(args, "train_get_image", False):
+        observation_mode = getattr(
+            args,
+            "get_image_observation_mode",
+            GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
+        )
+        if observation_mode == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE:
+            cached_image_paths, views = _cached_observation_for_agent(
+                cached_observations_by_agent or {},
+                active_observation_agent,
+            )
+            proposal = _generate_once(
+                session=session,
+                policy=policy,
+                args=args,
+                task_metadata=task_metadata,
+                tool_specs=tool_specs,
+                tool_schemas=tool_schemas,
+                trajectory=trajectory,
+                history=history,
+                step_index=step_index,
+                views=views,
+                render_dir=render_dir,
+                agent_hint=active_observation_agent,
+                pre_rendered_image_paths=cached_image_paths,
+            )
+            return proposal, views
         views = requested_views or ()
         proposal = _generate_once(
             session=session,
@@ -1113,8 +1283,12 @@ def _generate_once(
     views: tuple[str, ...],
     render_dir: Path,
     agent_hint: str | None = None,
+    pre_rendered_image_paths: list[str] | None = None,
 ) -> dict[str, Any]:
-    if views:
+    if pre_rendered_image_paths is not None:
+        image_paths = list(pre_rendered_image_paths)
+        view_names = list(views)
+    elif views:
         image_paths, view_names = session.render_views(
             views,
             agent_id=agent_hint or "agent_0",
@@ -1132,6 +1306,11 @@ def _generate_once(
         history_steps=history,
         allowed_tool_specs=tool_specs,
         sft_format="tool_call",
+        observation_owner=agent_hint,
+        include_observation_owner=(
+            getattr(args, "get_image_observation_mode", None)
+            == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE
+        ),
         predict_agent=True,
     )
     feature = {
@@ -1331,6 +1510,19 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Let the model request observations with get_image.",
     )
+    parser.add_argument(
+        "--get-image-observation-mode",
+        choices=GET_IMAGE_OBSERVATION_MODES,
+        default=GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
+        help=(
+            "How model-emitted get_image observations condition later calls. "
+            "next_turn sends them to the immediately following proposal. "
+            "causal_cache renders each successful request immediately, keeps "
+            "agent caches separate, and exposes only the previously active "
+            "agent's cache. A physical action clears the active visual context; "
+            "no step parity or current-target information is used."
+        ),
+    )
     parser.add_argument("--task-spec-detail", action="store_true")
     parser.add_argument("--few-shot", type=int, choices=(0, 1), default=0)
     parser.add_argument("--model", default="gemini-3.5-flash-preview")
@@ -1355,6 +1547,14 @@ def main() -> None:
     args = parse_args()
     if args.map_dpi < 1:
         raise SystemExit("--map-dpi must be at least 1")
+    if (
+        args.get_image_observation_mode != GET_IMAGE_OBSERVATION_MODE_NEXT_TURN
+        and not args.train_get_image
+    ):
+        raise SystemExit(
+            "non-default --get-image-observation-mode requires "
+            "--train-get-image"
+        )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     trajectory_ids_by_task: dict[str, list[str]] = {

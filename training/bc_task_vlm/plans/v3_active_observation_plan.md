@@ -1,5 +1,12 @@
 # Plan: SFT v3 — active observation (train `get_image`)
 
+> Follow-up design note: this original v3 plan treats the Task-VLM as a
+> centralized policy and does not fully specify causal, agent-private
+> observation state. See
+> [`partial_observability_vs_centralized_task_vlm.md`](partial_observability_vs_centralized_task_vlm.md)
+> for the proposed shared-weight distributed contract, concurrent-agent
+> evaluation with one model server, and the required training-data changes.
+
 ## Context
 
 v1 predicts tool+args; v2 adds the acting-agent choice + `task_complete` (result:

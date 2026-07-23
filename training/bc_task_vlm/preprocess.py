@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - optional in lightweight test envs
 
 from data_generation.task_level.runtime.client import load_dotenv_file
 from training.bc_task_vlm.dataset import (
+    SUPPORTED_SFT_FORMATS,
     build_batched_pretokenized_tensors,
     build_centralized_examples,
     build_example_cache_fingerprint,
@@ -110,6 +111,30 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated task names for the validation split. Defaults to "
             "`same_as_train` in same-task mode."
         ),
+    )
+    parser.add_argument(
+        "--sft-format",
+        choices=SUPPORTED_SFT_FORMATS,
+        default="plain",
+        help="Assistant supervision format used to build examples.",
+    )
+    parser.add_argument(
+        "--predict-acting-agent",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Supervise the acting agent as part of each tool call.",
+    )
+    parser.add_argument(
+        "--train-get-image",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Include get_image calls as active-observation targets.",
+    )
+    parser.add_argument(
+        "--causal-single-cache",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Build v3 examples from one prefix-derived, agent-owned visual cache.",
     )
     parser.add_argument(
         "--validation-split-mode",
@@ -552,6 +577,10 @@ def _build_examples_for_tasks(
     use_example_cache: bool,
     training_samples_cache_dir: Path,
     example_build_workers: int,
+    sft_format: str = "plain",
+    predict_agent: bool = False,
+    train_get_image: bool = False,
+    causal_single_cache: bool = False,
     example_filter: Callable[[str], bool] | None = None,
 ) -> list[Any]:
     examples: list[Any] = []
@@ -575,6 +604,10 @@ def _build_examples_for_tasks(
                 dataset_root=dataset_root,
                 task_name=task_name,
                 trajectory_ids=trajectory_ids,
+                sft_format=sft_format,
+                predict_agent=predict_agent,
+                train_get_image=train_get_image,
+                causal_single_cache=causal_single_cache,
             )
             cache_path = build_example_cache_path(
                 cache_dir=training_samples_cache_dir,
@@ -640,6 +673,10 @@ def _build_examples_for_tasks(
                         else {task_name: set(trajectory_ids)},
                         show_progress=True,
                         progress_description=progress_description,
+                        sft_format=sft_format,
+                        predict_agent=predict_agent,
+                        train_get_image=train_get_image,
+                        causal_single_cache=causal_single_cache,
                     )
                     if (
                         cache_allowed
@@ -675,9 +712,20 @@ def _build_examples_for_tasks(
 def main() -> None:
     load_dotenv_file()
     args = parse_args()
+    sft_format = getattr(args, "sft_format", "plain")
+    predict_acting_agent = getattr(args, "predict_acting_agent", False)
+    train_get_image = getattr(args, "train_get_image", False)
+    causal_single_cache = getattr(args, "causal_single_cache", False)
     if args.skip_existing_artifact_image_validation:
         args.resume_existing_artifact_images = "unchecked"
 
+    if train_get_image and not predict_acting_agent:
+        raise ValueError("--train-get-image requires --predict-acting-agent.")
+    if causal_single_cache and not (predict_acting_agent and train_get_image):
+        raise ValueError(
+            "--causal-single-cache requires --predict-acting-agent "
+            "and --train-get-image."
+        )
     shard_args = (
         args.pretokenize_shard_index,
         args.pretokenize_num_shards,
@@ -847,10 +895,18 @@ def main() -> None:
         use_example_cache=args.use_example_cache,
         training_samples_cache_dir=training_samples_cache_dir,
         example_build_workers=args.example_build_workers,
+        sft_format=sft_format,
+        predict_agent=predict_acting_agent,
+        train_get_image=train_get_image,
+        causal_single_cache=causal_single_cache,
         example_filter=pretokenization_shard_sample_id_filter,
     )
     validation_examples = _build_examples_for_tasks(
         dataset_root=dataset_root,
+        sft_format=sft_format,
+        predict_agent=predict_acting_agent,
+        train_get_image=train_get_image,
+        causal_single_cache=causal_single_cache,
         task_names=val_tasks,
         split_name="validation",
         trajectory_ids_by_task=val_trajectory_ids_by_task,
@@ -1051,6 +1107,10 @@ def main() -> None:
         "preprocessed_format_version": _PREPROCESSED_FORMAT_VERSION,
         "artifact_image_size": args.artifact_image_size,
         "pretokenized": args.pretokenize,
+        "sft_format": sft_format,
+        "predict_acting_agent": predict_acting_agent,
+        "train_get_image": train_get_image,
+        "causal_single_cache": causal_single_cache,
         "pretokenization": pretokenization_config,
         "pretokenize_batch_size": args.pretokenize_batch_size,
         "push_to_hub": args.push_to_hub,

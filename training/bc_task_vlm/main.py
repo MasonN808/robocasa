@@ -67,6 +67,7 @@ class RunConfiguration:
     sft_format: str
     predict_acting_agent: bool
     train_get_image: bool
+    causal_single_cache: bool
     init_adapter_path: str | None
     use_example_cache: bool
     trust_example_cache: bool
@@ -217,6 +218,12 @@ def parse_args() -> argparse.Namespace:
             "Active-observation (v3) SFT: supervise get_image tool calls and "
             "retain them in history. Requires --predict-acting-agent."
         ),
+    )
+    parser.add_argument(
+        "--causal-single-cache",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use causal single-agent visual cache semantics for active-observation SFT.",
     )
     parser.add_argument(
         "--init-adapter-path",
@@ -646,6 +653,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         sft_format=args.sft_format,
         predict_acting_agent=args.predict_acting_agent,
         train_get_image=args.train_get_image,
+        causal_single_cache=args.causal_single_cache,
         init_adapter_path=args.init_adapter_path,
         use_example_cache=args.use_example_cache,
         trust_example_cache=args.trust_example_cache,
@@ -942,6 +950,7 @@ def _build_examples_for_tasks(
     sft_format: str,
     predict_agent: bool = False,
     train_get_image: bool = False,
+    causal_single_cache: bool = False,
     use_example_cache: bool,
     trust_example_cache: bool,
     training_samples_cache_dir: Path,
@@ -998,6 +1007,7 @@ def _build_examples_for_tasks(
                     sft_format=sft_format,
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
+                    causal_single_cache=causal_single_cache,
                 )
                 trajectory_count = len(fingerprint.get("trajectories", ()))
                 task_examples = load_examples_from_cache(
@@ -1037,6 +1047,7 @@ def _build_examples_for_tasks(
                     sft_format=sft_format,
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
+                    causal_single_cache=causal_single_cache,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1069,6 +1080,7 @@ def _build_examples_for_tasks(
                     sft_format=sft_format,
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
+                    causal_single_cache=causal_single_cache,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1523,6 +1535,13 @@ def main() -> None:
     config = _build_run_configuration(args)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if args.causal_single_cache and not (
+        args.predict_acting_agent and args.train_get_image
+    ):
+        raise SystemExit(
+            "--causal-single-cache requires --predict-acting-agent "
+            "and --train-get-image."
+        )
 
     _configure_wandb(args, config.report_to, output_dir)
     set_seed(config.seed)
@@ -1613,6 +1632,7 @@ def main() -> None:
         sft_format=config.sft_format,
         predict_agent=config.predict_acting_agent,
         train_get_image=config.train_get_image,
+        causal_single_cache=config.causal_single_cache,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
@@ -1630,6 +1650,7 @@ def main() -> None:
         sft_format=config.sft_format,
         predict_agent=config.predict_acting_agent,
         train_get_image=config.train_get_image,
+        causal_single_cache=config.causal_single_cache,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),

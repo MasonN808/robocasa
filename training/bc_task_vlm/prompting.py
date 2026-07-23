@@ -96,6 +96,8 @@ def build_user_prompt(
     allowed_tool_specs: dict[str, dict[str, Any]],
     sft_format: str = "tool_call",
     predict_agent: bool = False,
+    observation_owner: str | None = None,
+    include_observation_owner: bool = False,
 ) -> str:
     """Builds the text block that accompanies the current image observation.
 
@@ -148,10 +150,16 @@ def build_user_prompt(
         raise ValueError(f"Unsupported SFT format: {sft_format!r}")
 
     acting_agent_line = "" if predict_agent else f"Current acting agent: {agent_id}\n"
+    observation_owner_line = ""
+    if include_observation_owner:
+        observation_owner_line = (
+            f"Active observation owner: {observation_owner or 'none'}\n"
+        )
     return (
         f"Task family: {composite_task}\n"
         f"Task instruction: {task_instruction}\n"
         f"{acting_agent_line}"
+        f"{observation_owner_line}"
         f"Next global step index: {next_step_index}\n"
         f"Observation views attached in order: {observations_text}\n\n"
         "Previous executed symbolic action history:\n"

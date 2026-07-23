@@ -269,6 +269,60 @@ For throughput experiments, use `--map-renderer raster --map-dpi 60`. Keep the
 legacy default for compatibility comparisons, and do not mix map settings
 within a reported evaluation split.
 
+## V3 active-observation causal compatibility
+
+For the existing v3 adapter, use the causal single-cache mode:
+
+```text
+--train-get-image --get-image-observation-mode causal_cache
+```
+
+For a newly trained matching adapter, build training and standalone-evaluation
+examples with:
+
+```text
+--predict-acting-agent --train-get-image --causal-single-cache
+```
+
+The causal mode deliberately does not reproduce the legacy target-conditioned
+image selection. Each proposal's visual input is determined entirely by
+already-executed events:
+
+1. The episode starts with no active visual context, so the first proposal is
+   image-free.
+2. A successful `get_image(agent, views)` renders immediately, updates only
+   that agent's logical cache, and makes that cache the sole visual context for
+   the next proposal.
+3. Even when both logical caches exist, a proposal receives at most the active
+   agent's cache. It never receives both agents' images. The prompt explicitly
+   names that prefix-derived cache owner.
+4. A proposal for a non-image tool must name the active cache owner. A physical
+   action without an active agent-owned observation is rejected. Image-free
+   communication is allowed when no cache is active.
+5. Communication can use only the caller's own active cache. Successful
+   communication does not invalidate that cache. A successful physical tool
+   clears the active visual context because the scene or robot
+   pose changed. The separate logical caches remain recorded but are not
+   attached again until refreshed by a later request.
+6. Global views remain logically agent-specific. Identical pixels may be
+   render-memoized later, but requesting global views for one agent does not
+   populate the other agent's cache.
+
+This is a near-term **fake-partial-observation compatibility baseline**, not a
+fully distributed policy. The model still receives the centralized joint
+symbolic history and predicts the acting agent with every tool call. The
+single-cache visual input keeps it closer to the current v1/v2 off-sim input
+shape while removing current-target lookahead from live inference.
+
+The current v3 checkpoint was trained with a non-causal image-selection
+contract, so no live harness can be perfectly in-distribution for it.
+`causal_cache` is the interpretable protocol for new diagnostic runs; it should
+not be reported as a faithful partial-observability evaluation.
+
+The legacy default `next_turn` mode still attaches a requested observation only
+to the immediately following proposal. Use separate output directories for the
+two modes and always report the selected mode.
+
 ## vLLM throughput mode
 
 Run simulator clients in the documented RoboCasa environment and keep the
