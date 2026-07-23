@@ -12,6 +12,7 @@ Backends:
   degenerate  emit garbage every turn (verification gate: expect 0% success,
               termination by rejections/budget, no crashes)
   hf          a local HF VLM (base weights or base+LoRA adapter)
+  vllm        a localhost vLLM OpenAI-compatible server
   gemini      Vertex Gemini with native function calling
 
 Example (oracle smoke):
@@ -25,7 +26,9 @@ Example (oracle smoke):
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 import shutil
 import time
 import traceback
@@ -34,6 +37,7 @@ from dataclasses import replace
 from pathlib import Path
 import re
 from typing import Any
+from urllib import error as urllib_error, request as urllib_request
 
 from training.bc_task_vlm.prompting import (
     build_messages,
@@ -315,6 +319,8 @@ class SimSession:
         seed: int,
         gl_backend: str,
         render_size: int,
+        map_dpi: int = 300,
+        map_renderer: str = "legacy",
     ) -> None:
         from robocasa.utils.sim_tool_executor import SimToolExecutor
         from robocasa.utils.trajectory_pruning import (
@@ -345,6 +351,8 @@ class SimSession:
             gl_backend=gl_backend,
             render_width=render_size,
             render_height=render_size,
+            map_dpi=map_dpi,
+            map_renderer=map_renderer,
             robot_spawn="trajectory",
             **kwargs,
         )
@@ -520,6 +528,138 @@ class HfPolicy:
         )
 
 
+class VllmPolicy:
+    """OpenAI-compatible client for a localhost vLLM multimodal server."""
+
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.endpoint = (
+            args.vllm_base_url.rstrip("/") + "/chat/completions"
+        )
+        self.model = args.vllm_model
+        self.api_key = args.vllm_api_key
+        self.request_timeout = args.vllm_request_timeout
+        self.max_new_tokens = args.max_new_tokens
+        self.seed = args.seed
+        self.last_usage: dict[str, Any] = {}
+
+    @staticmethod
+    def _image_data_url(image_path: str) -> str:
+        path = Path(image_path)
+        mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    @classmethod
+    def _request_messages(cls, feature: dict[str, Any]) -> list[dict[str, Any]]:
+        image_paths = iter(feature["image_paths"])
+        used_images = 0
+        messages: list[dict[str, Any]] = []
+        # Match VisionGenerationCollator: the final labeled assistant turn is
+        # a training-shape placeholder and is removed for generation.
+        for message in feature["messages"][:-1]:
+            content = message.get("content", "")
+            if not isinstance(content, list):
+                messages.append(dict(message))
+                continue
+            converted: list[dict[str, Any]] = []
+            for item in content:
+                if item.get("type") != "image":
+                    converted.append(dict(item))
+                    continue
+                try:
+                    image_path = next(image_paths)
+                except StopIteration as exc:
+                    raise ValueError(
+                        "Message contains more image slots than image_paths."
+                    ) from exc
+                converted.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": cls._image_data_url(image_path)},
+                    }
+                )
+                used_images += 1
+            messages.append({**message, "content": converted})
+        if used_images != len(feature["image_paths"]):
+            raise ValueError(
+                "image_paths contains images without matching message slots."
+            )
+        return messages
+
+    def generate(self, feature: dict[str, Any]) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._request_messages(feature),
+            "tools": feature["tool_schemas"],
+            "tool_choice": "auto",
+            "temperature": 0,
+            "max_tokens": self.max_new_tokens,
+            "seed": self.seed,
+            "stream": False,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = urllib_request.Request(
+            self.endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(
+                request, timeout=self.request_timeout
+            ) as response:
+                response_payload = json.loads(response.read())
+        except urllib_error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"vLLM HTTP {exc.code}: {body[:1000]}"
+            ) from exc
+        except urllib_error.URLError as exc:
+            raise RuntimeError(f"vLLM request failed: {exc.reason}") from exc
+
+        self.last_usage = dict(response_payload.get("usage") or {})
+        try:
+            message = response_payload["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(
+                f"Malformed vLLM response: {response_payload!r}"
+            ) from exc
+        tool_calls = message.get("tool_calls") or []
+        if tool_calls:
+            function = tool_calls[0].get("function") or {}
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            if not isinstance(arguments, dict):
+                raise RuntimeError("vLLM tool-call arguments are not an object.")
+            return (
+                "<tool_call>\n"
+                + json.dumps(
+                    {
+                        "name": function.get("name"),
+                        "arguments": arguments,
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n</tool_call>"
+            )
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                str(item.get("text", ""))
+                for item in content
+                if isinstance(item, dict)
+            )
+        raise RuntimeError(
+            f"vLLM response contained no text or tool call: {message!r}"
+        )
+
+
 class GeminiPolicy:
     """Vertex Gemini native-function-calling policy shared across turns."""
 
@@ -605,6 +745,12 @@ class GeminiPolicy:
         raise last_error
 
 
+def _uses_model_generation(policy: Any) -> bool:
+    """Return whether a policy implements the shared model generate contract."""
+
+    return callable(getattr(policy, "generate", None))
+
+
 # ---------------------------------------------------------------------------
 # The live loop for one trajectory
 # ---------------------------------------------------------------------------
@@ -645,7 +791,7 @@ def run_trajectory(
     step_budget = max(
         4, int(len(expert_action_steps) * args.step_budget_factor * budget_multiplier)
     )
-    is_model_policy = isinstance(policy, (HfPolicy, GeminiPolicy))
+    is_model_policy = _uses_model_generation(policy)
 
     history: list[dict[str, Any]] = []
     records: list[dict[str, Any]] = []
@@ -882,7 +1028,7 @@ def run_trajectory(
 def _model_propose_step(
     *,
     session: SimSession,
-    policy: "HfPolicy | GeminiPolicy",
+    policy: "HfPolicy | VllmPolicy | GeminiPolicy",
     args: argparse.Namespace,
     task_metadata,
     tool_specs: dict[str, Any],
@@ -956,7 +1102,7 @@ def _model_propose_step(
 def _generate_once(
     *,
     session: SimSession,
-    policy: "HfPolicy | GeminiPolicy",
+    policy: "HfPolicy | VllmPolicy | GeminiPolicy",
     args: argparse.Namespace,
     task_metadata,
     tool_specs: dict[str, Any],
@@ -1103,7 +1249,7 @@ def _finalize_first_recording(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--backend", choices=("oracle", "degenerate", "hf", "gemini"), required=True
+        "--backend", choices=("oracle", "degenerate", "hf", "vllm", "gemini"), required=True
     )
     parser.add_argument(
         "--save-frames",
@@ -1119,6 +1265,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gl-backend", default="osmesa")
     parser.add_argument("--render-size", type=int, default=512)
+    parser.add_argument(
+        "--map-dpi",
+        type=int,
+        default=300,
+        help=(
+            "Placement-map export DPI. The compatibility default is 300 "
+            "(6000x4800); lower values trade source-map fidelity for speed."
+        ),
+    )
+    parser.add_argument(
+        "--map-renderer",
+        choices=("legacy", "raster"),
+        default="legacy",
+        help="Placement-grid renderer. Legacy is compatible; raster is faster.",
+    )
     parser.add_argument("--step-budget-factor", type=float, default=2.0)
     parser.add_argument("--max-consecutive-rejections", type=int, default=3)
     parser.add_argument("--max-trajectories", type=int, default=None)
@@ -1137,6 +1298,27 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Local LoRA directory or Hugging Face adapter repository ID.",
+    )
+    parser.add_argument(
+        "--vllm-base-url",
+        default="http://127.0.0.1:8000/v1",
+        help="OpenAI-compatible vLLM API base URL.",
+    )
+    parser.add_argument(
+        "--vllm-model",
+        default=None,
+        help="Served vLLM model or LoRA name used in requests.",
+    )
+    parser.add_argument(
+        "--vllm-api-key",
+        default=None,
+        help="Optional API key for the vLLM server.",
+    )
+    parser.add_argument(
+        "--vllm-request-timeout",
+        type=float,
+        default=180.0,
+        help="Per-request timeout for the vLLM server.",
     )
     parser.add_argument("--image-resolution", type=int, default=512)
     parser.add_argument("--max-length", type=int, default=16384)
@@ -1171,6 +1353,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     run_started = time.perf_counter()
     args = parse_args()
+    if args.map_dpi < 1:
+        raise SystemExit("--map-dpi must be at least 1")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     trajectory_ids_by_task: dict[str, list[str]] = {
@@ -1214,6 +1398,12 @@ def main() -> None:
         if not args.model_name_or_path:
             raise SystemExit("--backend hf requires --model-name-or-path")
         policy = HfPolicy(args)
+    elif args.backend == "vllm":
+        if not args.vllm_model:
+            raise SystemExit("--backend vllm requires --vllm-model")
+        if args.vllm_request_timeout <= 0:
+            raise SystemExit("--vllm-request-timeout must be positive")
+        policy = VllmPolicy(args)
     elif args.backend == "gemini":
         policy = GeminiPolicy(args)
     elif args.backend == "degenerate":
@@ -1261,6 +1451,8 @@ def main() -> None:
                             seed=args.seed,
                             gl_backend=args.gl_backend,
                             render_size=args.render_size,
+                            map_dpi=args.map_dpi,
+                            map_renderer=args.map_renderer,
                         )
                         session_build_s = round(
                             time.perf_counter() - session_started, 3

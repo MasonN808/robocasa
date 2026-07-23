@@ -68,12 +68,16 @@ class SimToolExecutorInspectionMixin:
         path = Path(image_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         image_format = path.suffix.lower().lstrip(".") or "png"
-        cache_key = (bool(clean_labels), image_format)
+        map_dpi = int(getattr(self, "_map_dpi", 300))
+        map_renderer = str(getattr(self, "_map_renderer", "legacy"))
+        cache_key = (bool(clean_labels), image_format, map_dpi, map_renderer)
         image_bytes = self._placement_map_cache.get(cache_key)
         if image_bytes is None:
             image_bytes = self._render_map_image_bytes(
                 clean_labels=clean_labels,
                 image_format=image_format,
+                map_dpi=map_dpi,
+                map_renderer=map_renderer,
             )
             self._placement_map_cache[cache_key] = image_bytes
         path.write_bytes(image_bytes)
@@ -84,6 +88,8 @@ class SimToolExecutorInspectionMixin:
         *,
         clean_labels: bool = True,
         image_format: str = "png",
+        map_dpi: int = 300,
+        map_renderer: str = "legacy",
     ) -> bytes:
         """Render the placement map once and return encoded image bytes."""
         import matplotlib
@@ -93,11 +99,16 @@ class SimToolExecutorInspectionMixin:
         from robocasa.utils.placement_map import draw_grid_map
 
         fig, ax = plt.subplots(1, 1, figsize=(20, 16))
-        draw_grid_map(ax, self.runner, clean_labels=clean_labels)
+        draw_grid_map(
+            ax,
+            self.runner,
+            clean_labels=clean_labels,
+            grid_renderer=map_renderer,
+        )
         fig.tight_layout()
 
         buffer = io.BytesIO()
-        fig.savefig(buffer, format=image_format, dpi=300)
+        fig.savefig(buffer, format=image_format, dpi=map_dpi)
         plt.close(fig)
         return buffer.getvalue()
 

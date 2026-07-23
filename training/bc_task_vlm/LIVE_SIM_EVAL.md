@@ -230,6 +230,140 @@ time: map bundles averaged 9.112 seconds because the placement map was emitted
 at 6000 by 4800 pixels, while non-map bundles averaged 7.7 milliseconds. These
 measurements establish a baseline; they do not change evaluation behavior.
 
+Placement maps have two independent, opt-in throughput controls:
+
+```text
+--map-renderer legacy|raster
+--map-dpi N
+```
+
+`legacy` at 300 DPI remains the compatibility default. The raster renderer
+draws the occupancy classes as one image artist rather than approximately
+30,000 individual Matplotlib rectangles; fixtures, robots, objects, labels,
+axes, colors, and world geometry are unchanged, but the fine 5 cm cell-edge
+grid is omitted. Lowering DPI alone does not materially reduce map creation
+time because the per-cell Matplotlib artists dominate the legacy path.
+
+The fixed July 2026 HF A/B used the same eight trajectories, EGL, two-pass
+views, one evaluator, and no recordings. Cache invalidation was retained for
+physical tools but skipped for non-mutating `communicate`, `wait`, and
+`get_image` calls.
+
+| Configuration | Total time | Map-render total | Native/FSM success |
+|---|---:|---:|---:|
+| Original legacy baseline | 1,669.4 s | 1,020.5 s | 2/8, 2/8 |
+| Cache fix, legacy 300 DPI | 959.7 s | 305.9 s | 2/8, 2/8 |
+| Cache fix, raster 60 DPI | 642.5 s | 15.4 s | 2/8, 2/8 |
+
+The raster run reduced total wall time by 33.1% relative to the cache-fixed
+legacy run and 61.5% relative to the original baseline. All three runs had the
+same terminations and partial-goal results, with no harness/native errors.
+Exact proposal streams are not a sufficient pixel-regression test here: a
+legacy-versus-legacy repeat diverged on 3/8 trajectories despite identical map
+pixels, while legacy-versus-raster diverged on 4/8; once a greedy generation
+changes at one token, later closed-loop states can differ. Use task outcomes,
+error rates, visual inspection, and repeated samples when validating a new map
+setting.
+
+For throughput experiments, use `--map-renderer raster --map-dpi 60`. Keep the
+legacy default for compatibility comparisons, and do not mix map settings
+within a reported evaluation split.
+
+## vLLM throughput mode
+
+Run simulator clients in the documented RoboCasa environment and keep the
+vLLM server in a separate environment. On the local RTX 5090, the tested server
+command is:
+
+```bash
+VLLM_USE_FLASHINFER_SAMPLER=0 \
+conda run -n robocasa-vllm vllm serve Qwen/Qwen3-VL-8B-Instruct \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --dtype bfloat16 \
+  --max-model-len 16384 \
+  --gpu-memory-utilization 0.70 \
+  --enable-prefix-caching \
+  --limit-mm-per-prompt '{"image":3}' \
+  --mm-processor-kwargs '{"min_pixels":262144,"max_pixels":262144}' \
+  --mm-processor-cache-gb 2 \
+  --enable-lora \
+  --max-lora-rank 16 \
+  --lora-modules \
+    robocasa-v2=DorianAtSchool/qwen3vl-8b-robocasa-agentsft-scratch \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes
+```
+
+`VLLM_USE_FLASHINFER_SAMPLER=0` is a local compatibility workaround for the
+installed CUDA-header/toolkit mismatch. It disables only the optional
+FlashInfer sampler path; these evaluations use greedy decoding
+(`temperature=0`). Remove it when FlashInfer compiles cleanly. A server
+allocation of 0.88 caused an OOM when EGL rendering shared the GPU; 0.80 passed
+one- and two-client runs, and 0.70 passed four clients with headroom.
+
+Point one live-sim client at the served LoRA name:
+
+```bash
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl \
+python -m training.bc_task_vlm.live_sim_eval \
+  --backend vllm \
+  --vllm-model robocasa-v2 \
+  --manifest MANIFEST.json \
+  --dataset-root training/bc_task_vlm/eval_data_subset \
+  --output-dir OUTPUT_DIR \
+  --gl-backend egl \
+  --map-renderer raster \
+  --map-dpi 60 \
+  --resume
+```
+
+For several clients, use `live_sim_parallel_eval` rather than launching them
+against one output directory manually:
+
+```bash
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl \
+python -m training.bc_task_vlm.live_sim_parallel_eval \
+  --workers 4 -- \
+  --backend vllm \
+  --vllm-model robocasa-v2 \
+  --manifest MANIFEST.json \
+  --dataset-root training/bc_task_vlm/eval_data_subset \
+  --output-dir PARALLEL_OUTPUT_ROOT \
+  --gl-backend egl \
+  --map-renderer raster \
+  --map-dpi 60 \
+  --resume
+```
+
+The coordinator assigns a complete task to exactly one worker, preserving
+environment reuse. Shard manifests stay under
+`PARALLEL_OUTPUT_ROOT/manifests`; worker JSONLs, metrics, and logs stay under
+`PARALLEL_OUTPUT_ROOT/workers`, and combined results are derived under
+`PARALLEL_OUTPUT_ROOT/aggregate`. Never point independent evaluator processes
+at the same JSONL or metrics file. On resume, use the identical command. The
+coordinator rejects a changed manifest, worker count, or evaluator arguments,
+and it never edits worker JSONLs while aggregating them.
+
+The July 2026 fixed-eight benchmark used the v2 adapter, raster maps at 60 DPI,
+EGL, two-pass views, and no recordings. The one-worker evaluator time is used
+as its wall-clock baseline; parallel rows use the slowest worker's measured
+wall clock.
+
+| Clients | Wall time | Speedup | Mean server round trip | Generation throughput |
+|---:|---:|---:|---:|---:|
+| 1 | 323.65 s | 1.00x | 0.602 s | 1.46 passes/s |
+| 2 | 202.81 s | 1.60x | 0.718 s | 2.32 passes/s |
+| 4 | 149.36 s | 2.17x | 0.880 s | 3.15 passes/s |
+
+All configurations produced 2/8 native successes, 2/8 FSM successes, six
+`budget_exhausted` and two `goal_satisfied` terminations, full native/FSM
+agreement, and no harness, native, simulator, generation, or CUDA errors.
+Closed-loop proposal streams can still diverge between HF and vLLM, or between
+repeated greedy runs, so do not silently combine backends within one reported
+split. Four clients are the current local throughput choice; repeat the useful
+configurations when the v3 `get_image` adapter is available.
+
 ## Troubleshooting
 
 - **CUDA OOM:** close other GPU processes; ensure only one evaluator is using

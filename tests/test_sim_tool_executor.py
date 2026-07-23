@@ -45,6 +45,75 @@ def _objects_intersect(executor: SimToolExecutor, object_a: str, object_b: str) 
 
 
 class TestSimToolExecutor(unittest.TestCase):
+    def test_non_mutating_dispatch_preserves_visual_caches(self):
+        executor = SimToolExecutor.__new__(SimToolExecutor)
+        executor._camera_frame_cache = {"top_view": np.ones((1, 1, 3))}
+        executor._placement_map_cache = {(True, "jpg", 300): b"map"}
+        executor.communicate = MagicMock(
+            return_value=SimpleNamespace(tool_name="communicate", success=True)
+        )
+        executor.wait = MagicMock(
+            return_value=SimpleNamespace(tool_name="wait", success=True)
+        )
+
+        executor.execute("communicate", to="agent_1", message="hello")
+        executor.execute("wait", robot_idx=0)
+
+        self.assertIn("top_view", executor._camera_frame_cache)
+        self.assertIn((True, "jpg", 300), executor._placement_map_cache)
+
+    def test_mutating_dispatch_invalidates_visual_caches(self):
+        executor = SimToolExecutor.__new__(SimToolExecutor)
+        executor._camera_frame_cache = {"top_view": np.ones((1, 1, 3))}
+        executor._placement_map_cache = {(True, "jpg", 300): b"map"}
+        executor.navigate_to_fixture = MagicMock(
+            return_value=SimpleNamespace(
+                tool_name="navigate_to_fixture", success=True
+            )
+        )
+
+        executor.execute(
+            "navigate_to_fixture", robot_idx=0, fixture_id="counter"
+        )
+
+        self.assertEqual(executor._camera_frame_cache, {})
+        self.assertEqual(executor._placement_map_cache, {})
+
+    def test_map_cache_key_includes_configured_dpi_and_renderer(self):
+        executor = SimToolExecutor.__new__(SimToolExecutor)
+        executor._camera_frame_cache = {}
+        executor._placement_map_cache = {}
+        executor._map_dpi = 300
+        executor._map_renderer = "legacy"
+        executor._render_map_image_bytes = MagicMock(
+            side_effect=[b"dpi-300", b"dpi-60", b"raster-60"]
+        )
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            first = executor._save_map_image(Path(output_dir) / "first.jpg")
+            second = executor._save_map_image(Path(output_dir) / "second.jpg")
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            self.assertEqual(executor._render_map_image_bytes.call_count, 1)
+
+            executor._map_dpi = 60
+            low_dpi = executor._save_map_image(Path(output_dir) / "low.jpg")
+            self.assertEqual(low_dpi.read_bytes(), b"dpi-60")
+
+            executor._map_renderer = "raster"
+            raster = executor._save_map_image(Path(output_dir) / "raster.jpg")
+            self.assertEqual(raster.read_bytes(), b"raster-60")
+
+        self.assertEqual(executor._render_map_image_bytes.call_count, 3)
+        self.assertEqual(
+            executor._render_map_image_bytes.call_args.kwargs,
+            {
+                "clean_labels": True,
+                "image_format": "jpg",
+                "map_dpi": 60,
+                "map_renderer": "raster",
+            },
+        )
+
     def test_configure_mujoco_gl_backend_updates_cached_binding_choice(self):
         original_gl = os.environ.get("MUJOCO_GL")
         original_egl_device = os.environ.get("MUJOCO_EGL_DEVICE_ID")

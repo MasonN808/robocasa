@@ -347,6 +347,7 @@ class SimToolExecutor(
     """Dispatch simulator tool calls against a live RoboCasa environment."""
 
     _HELD_Z_OFFSET = 0.0
+    _NON_MUTATING_TOOL_NAMES = frozenset({"get_image", "communicate", "wait"})
     _DEMO_TASK_BY_NAME = {
         "cooperative_hotdog_setup": "HotDogSetup",
         "sandwich_station": "PrepareSandwichStation",
@@ -392,6 +393,8 @@ class SimToolExecutor(
         camera_names: list[str] | None = None,
         render_width: int = 512,
         render_height: int = 512,
+        map_dpi: int = 300,
+        map_renderer: str = "legacy",
         gl_backend: str = "osmesa",
         placement: str = "grid",
         cell_size: float = 0.05,
@@ -407,6 +410,10 @@ class SimToolExecutor(
         trajectory_object_types: list[str] | tuple[str, ...] | None = None,
         trajectory_object_specs: dict | list | None = None,
     ):
+        if map_dpi < 1:
+            raise ValueError("map_dpi must be at least 1.")
+        if map_renderer not in {"legacy", "raster"}:
+            raise ValueError("map_renderer must be either 'legacy' or 'raster'.")
         os.environ["MUJOCO_GL"] = gl_backend
         self.runner = TrajectoryRunner(
             task_name=task_name,
@@ -442,6 +449,8 @@ class SimToolExecutor(
         # Used to avoid immediate re-navigation on the follow-up pickup.
         self._recent_opened_sliding_fixture: dict[int, str] = {}
         self._clean_map_labels: bool = True
+        self._map_dpi: int = int(map_dpi)
+        self._map_renderer: str = map_renderer
         self._robot_spawn: str = robot_spawn
 
         # Place all robots at the task's init_robot_base_ref (ground truth
@@ -6410,7 +6419,10 @@ class SimToolExecutor(
         method = getattr(self, tool_name, None)
         if method is None:
             raise NotImplementedError(f"No executor method defined for {tool_name!r}")
-        if tool_name != "get_image":
+        # Observation and coordination tools do not mutate any visual state.
+        # Preserving their caches avoids regenerating byte-identical placement
+        # maps after every communication turn.
+        if tool_name not in self._NON_MUTATING_TOOL_NAMES:
             invalidate_visual_cache = getattr(self, "_invalidate_visual_cache", None)
             if callable(invalidate_visual_cache):
                 invalidate_visual_cache()
@@ -6452,6 +6464,18 @@ def _main():
     )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
+    parser.add_argument(
+        "--map-dpi",
+        type=int,
+        default=300,
+        help="Placement-map export DPI. Default: 300 (6000x4800 pixels).",
+    )
+    parser.add_argument(
+        "--map-renderer",
+        choices=("legacy", "raster"),
+        default="legacy",
+        help="Placement-grid renderer. Legacy is pixel-compatible; raster is faster.",
+    )
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument(
         "--plan",
@@ -6539,6 +6563,9 @@ def _main():
     )
     args = parser.parse_args()
 
+    if args.map_dpi < 1:
+        parser.error("--map-dpi must be at least 1.")
+
     provided_inputs = [
         args.plan is not None,
         args.demo_plan is not None,
@@ -6597,6 +6624,8 @@ def _main():
         seed=seed,
         render_width=args.width,
         render_height=args.height,
+        map_dpi=args.map_dpi,
+        map_renderer=args.map_renderer,
         gl_backend=args.gl_backend,
         placement=args.placement,
         cell_size=args.cell_size,

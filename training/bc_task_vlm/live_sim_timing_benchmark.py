@@ -1,4 +1,4 @@
-"""Instrument an HF live-sim evaluation with component-level timing events.
+"""Instrument a live-sim evaluation with component-level timing events.
 
 Pass live_sim_eval arguments after ``--``. Evaluation outputs remain governed by
 the normal evaluator and should stay under the git-ignored eval_runs directory.
@@ -65,6 +65,7 @@ def instrumented_generate(self, feature: dict[str, Any]) -> str:
 
     torch = self._torch
     row: dict[str, Any] = {
+        "backend": "hf",
         "sample_id": feature.get("sample_id"),
         "trajectory_id": feature.get("trajectory_id"),
         "step_index": feature.get("step_index"),
@@ -124,6 +125,49 @@ def instrumented_generate(self, feature: dict[str, Any]) -> str:
 
 
 live.HfPolicy.generate = instrumented_generate
+
+
+original_vllm_generate = live.VllmPolicy.generate
+
+
+def instrumented_vllm_generate(self, feature: dict[str, Any]) -> str:
+    """Time one complete vLLM client/server generation round trip."""
+
+    row: dict[str, Any] = {
+        "backend": "vllm",
+        "sample_id": feature.get("sample_id"),
+        "trajectory_id": feature.get("trajectory_id"),
+        "step_index": feature.get("step_index"),
+        "num_images": len(feature.get("image_paths") or []),
+        "collate_s": 0.0,
+        "host_to_device_s": 0.0,
+        "decode_s": 0.0,
+        "prompt_tokens": 0,
+        "output_tokens": 0,
+        "peak_allocated_bytes": 0,
+        "peak_reserved_bytes": 0,
+        **(active_pass or {}),
+    }
+    started = time.perf_counter()
+    try:
+        decoded = original_vllm_generate(self, feature)
+        usage = self.last_usage
+        row["prompt_tokens"] = int(usage.get("prompt_tokens") or 0)
+        row["output_tokens"] = int(usage.get("completion_tokens") or 0)
+        row["decoded_chars"] = len(decoded)
+        return decoded
+    except Exception as exc:
+        row["error"] = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        elapsed = time.perf_counter() - started
+        row["remote_roundtrip_s"] = elapsed
+        row["model_generate_s"] = elapsed
+        row["total_s"] = elapsed
+        events["generation"].append(row)
+
+
+live.VllmPolicy.generate = instrumented_vllm_generate
 
 
 original_generate_once = live._generate_once

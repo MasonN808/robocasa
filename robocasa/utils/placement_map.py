@@ -12,6 +12,7 @@ same overlap-avoidance logic as fixture labels.
 from __future__ import annotations
 
 import matplotlib.patches as patches
+from matplotlib.colors import ListedColormap
 import numpy as np
 import textwrap
 
@@ -360,40 +361,95 @@ def _draw_objects(ax, runner, placed_label_boxes=None):
         placed_label_boxes.append(label_box)
 
 
-def draw_grid_map(ax, runner, clean_labels=True):
-    """Draw the occupancy grid on axes.
+_GRID_CELL_COLORS = ("#f0f0f0", "#d9923b", "#444444")
 
-    *clean_labels*: when True (default), fixture labels are shortened
-    (strip ``_group``, ``_main``, dedupe).  Set False for raw fixture ids.
-    """
-    grid = runner._occupancy_grid
+
+def _draw_grid_cells_legacy(ax, grid):
+    """Draw one rectangle per cell, preserving the historical map pixels."""
+
     occupied_count = 0
     enclosed_count = 0
     free_count = 0
-
     for r in range(grid._rows):
         for c in range(grid._cols):
             xy = grid._grid_to_world(r, c)
             half = grid.cell_size / 2
             if grid._grid[r, c]:
-                color = "#444444"  # hard occupied
+                color = _GRID_CELL_COLORS[2]
                 occupied_count += 1
+            elif not grid.is_standable(xy):
+                color = _GRID_CELL_COLORS[1]
+                enclosed_count += 1
             else:
-                # Free in occupancy, but still not standable (tight corner pocket).
-                if not grid.is_standable(xy):
-                    color = "#d9923b"  # enclosed / corner-unplaceable
-                    enclosed_count += 1
-                else:
-                    color = "#f0f0f0"  # standable free
-                    free_count += 1
+                color = _GRID_CELL_COLORS[0]
+                free_count += 1
             rect = patches.Rectangle(
                 (xy[0] - half, xy[1] - half),
-                grid.cell_size, grid.cell_size,
-                linewidth=0.3, edgecolor="#cccccc", facecolor=color,
+                grid.cell_size,
+                grid.cell_size,
+                linewidth=0.3,
+                edgecolor="#cccccc",
+                facecolor=color,
             )
             ax.add_patch(rect)
+    return occupied_count, enclosed_count, free_count
 
-    placed_label_boxes = _draw_fixtures(ax, runner._fixtures, clean_labels=clean_labels)
+
+def _draw_grid_cells_raster(ax, grid):
+    """Draw all cell classes as one raster artist for live-sim throughput."""
+
+    cell_classes = np.zeros((grid._rows, grid._cols), dtype=np.uint8)
+    occupied = np.asarray(grid._grid, dtype=bool)
+    cell_classes[occupied] = 2
+    occupied_count = int(np.count_nonzero(occupied))
+    enclosed_count = 0
+    for r, c in np.argwhere(~occupied):
+        if not grid.is_standable(grid._grid_to_world(int(r), int(c))):
+            cell_classes[r, c] = 1
+            enclosed_count += 1
+    free_count = int(grid._rows * grid._cols - occupied_count - enclosed_count)
+
+    x_min = grid._origin[0]
+    x_max = grid._origin[0] + grid._cols * grid.cell_size
+    y_min = grid._origin[1]
+    y_max = grid._origin[1] + grid._rows * grid.cell_size
+    ax.imshow(
+        cell_classes,
+        origin="lower",
+        extent=(x_min, x_max, y_min, y_max),
+        cmap=ListedColormap(_GRID_CELL_COLORS),
+        interpolation="nearest",
+        vmin=-0.5,
+        vmax=2.5,
+        zorder=0,
+    )
+    return occupied_count, enclosed_count, free_count
+
+
+def draw_grid_map(ax, runner, clean_labels=True, grid_renderer="legacy"):
+    """Draw the occupancy grid on axes.
+
+    *clean_labels*: when True (default), fixture labels are shortened
+    (strip ``_group``, ``_main``, dedupe). Set False for raw fixture ids.
+    *grid_renderer*: ``legacy`` preserves per-cell patches; ``raster``
+    draws the same cell classes as one image layer.
+    """
+
+    grid = runner._occupancy_grid
+    if grid_renderer == "legacy":
+        counts = _draw_grid_cells_legacy(ax, grid)
+    elif grid_renderer == "raster":
+        counts = _draw_grid_cells_raster(ax, grid)
+    else:
+        raise ValueError(
+            "grid_renderer must be either 'legacy' or 'raster', "
+            f"got {grid_renderer!r}."
+        )
+    occupied_count, enclosed_count, free_count = counts
+
+    placed_label_boxes = _draw_fixtures(
+        ax, runner._fixtures, clean_labels=clean_labels
+    )
     _draw_robots(ax, runner, placed_label_boxes=placed_label_boxes)
     _draw_objects(ax, runner, placed_label_boxes=placed_label_boxes)
 

@@ -357,3 +357,163 @@ def test_divergence_analysis_ranks_noncontiguous_step_indices(tmp_path):
     assert first["key"] == 0
     positions = [row["key"] for row in output if row["row_type"] == "position_accuracy"]
     assert positions == [0, 1]
+
+
+def test_vllm_policy_preserves_prompt_and_image_order(tmp_path):
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    feature = {
+        "messages": [
+            {"role": "system", "content": [{"type": "text", "text": "system"}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "image"},
+                    {"type": "text", "text": "prompt"},
+                ],
+            },
+            {"role": "assistant", "content": ""},
+        ],
+        "image_paths": [str(first), str(second)],
+    }
+
+    messages = live_sim_eval.VllmPolicy._request_messages(feature)
+
+    assert [message["role"] for message in messages] == ["system", "user"]
+    user_content = messages[1]["content"]
+    assert [item["type"] for item in user_content] == [
+        "image_url",
+        "image_url",
+        "text",
+    ]
+    assert user_content[0]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
+    assert user_content[1]["image_url"]["url"].startswith(
+        "data:image/jpeg;base64,"
+    )
+    assert user_content[2]["text"] == "prompt"
+
+
+def test_vllm_policy_posts_generation_contract_and_rebuilds_tool_call(
+    monkeypatch, tmp_path
+):
+    image = tmp_path / "view.png"
+    image.write_bytes(b"view")
+    captured = {}
+    response_payload = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "communicate",
+                                "arguments": json.dumps(
+                                    {
+                                        "agent": "agent_0",
+                                        "to": "agent_1",
+                                        "message": "ready",
+                                    }
+                                ),
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(response_payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(live_sim_eval.urllib_request, "urlopen", fake_urlopen)
+    policy = live_sim_eval.VllmPolicy(
+        SimpleNamespace(
+            vllm_base_url="http://127.0.0.1:8000/v1",
+            vllm_model="robocasa-v2",
+            vllm_api_key=None,
+            vllm_request_timeout=12.0,
+            max_new_tokens=256,
+            seed=42,
+        )
+    )
+    decoded = policy.generate(
+        {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "system"}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": "prompt"},
+                    ],
+                },
+                {"role": "assistant", "content": ""},
+            ],
+            "image_paths": [str(image)],
+            "tool_schemas": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "communicate",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+        }
+    )
+
+    assert captured["url"] == "http://127.0.0.1:8000/v1/chat/completions"
+    assert captured["timeout"] == 12.0
+    assert captured["payload"]["model"] == "robocasa-v2"
+    assert captured["payload"]["temperature"] == 0
+    assert captured["payload"]["seed"] == 42
+    assert captured["payload"]["tool_choice"] == "auto"
+    assert captured["payload"]["chat_template_kwargs"] == {
+        "enable_thinking": False
+    }
+    parsed = live_sim_eval.parse_first_qwen_tool_call(decoded)
+    assert parsed == {
+        "name": "communicate",
+        "arguments": {
+            "agent": "agent_0",
+            "to": "agent_1",
+            "message": "ready",
+        },
+    }
+
+
+def test_model_policy_dispatch_uses_generate_interface():
+    class ModelPolicy:
+        def generate(self, _feature):
+            return ""
+
+    class StepPolicy:
+        def next_step(self):
+            return None
+
+    assert live_sim_eval._uses_model_generation(ModelPolicy())
+    assert live_sim_eval._uses_model_generation(
+        object.__new__(live_sim_eval.VllmPolicy)
+    )
+    assert not live_sim_eval._uses_model_generation(StepPolicy())

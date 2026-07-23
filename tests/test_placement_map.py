@@ -14,9 +14,14 @@ class _FakeAxis:
         self.patches = []
         self.plots = []
         self.texts = []
+        self.images = []
+        self.title = None
 
     def add_patch(self, patch):
         self.patches.append(patch)
+
+    def imshow(self, image, **kwargs):
+        self.images.append((np.asarray(image).copy(), kwargs))
 
     def plot(self, *args, **kwargs):
         self.plots.append((args, kwargs))
@@ -24,6 +29,24 @@ class _FakeAxis:
     def text(self, x, y, label, **kwargs):
         self.texts.append((x, y, label, kwargs))
         return SimpleNamespace()
+
+    def set_xlim(self, *_args):
+        pass
+
+    def set_ylim(self, *_args):
+        pass
+
+    def set_aspect(self, *_args):
+        pass
+
+    def set_xlabel(self, *_args):
+        pass
+
+    def set_ylabel(self, *_args):
+        pass
+
+    def set_title(self, title):
+        self.title = title
 
 
 class PlacementMapTests(unittest.TestCase):
@@ -40,6 +63,40 @@ class PlacementMapTests(unittest.TestCase):
             [label for _, _, label, _ in ax.texts],
             ["agent 0", "agent 1"],
         )
+    def test_raster_grid_preserves_cell_classes_in_one_artist(self):
+        grid = SimpleNamespace(
+            _rows=2,
+            _cols=2,
+            _origin=np.array([0.0, 0.0]),
+            cell_size=1.0,
+            _grid=np.array([[False, True], [False, False]], dtype=bool),
+            _grid_to_world=lambda r, c: np.array([c + 0.5, r + 0.5]),
+            is_standable=lambda xy: not np.allclose(xy, [0.5, 1.5]),
+        )
+        runner = SimpleNamespace(
+            _occupancy_grid=grid,
+            _fixtures={},
+            _num_robots=0,
+            env=SimpleNamespace(objects={}),
+        )
+
+        raster_ax = _FakeAxis()
+        pm.draw_grid_map(raster_ax, runner, grid_renderer="raster")
+        self.assertEqual(len(raster_ax.images), 1)
+        self.assertEqual(len(raster_ax.patches), 0)
+        np.testing.assert_array_equal(
+            raster_ax.images[0][0],
+            np.array([[0, 2], [1, 0]], dtype=np.uint8),
+        )
+        self.assertIn("occ=1, enclosed=1, free=2", raster_ax.title)
+
+        legacy_ax = _FakeAxis()
+        pm.draw_grid_map(legacy_ax, runner)
+        self.assertEqual(len(legacy_ax.images), 0)
+        self.assertEqual(len(legacy_ax.patches), 4)
+
+        with self.assertRaisesRegex(ValueError, "grid_renderer"):
+            pm.draw_grid_map(_FakeAxis(), runner, grid_renderer="unknown")
 
     def test_draw_fixtures_keeps_full_names_and_offsets_overlapping_labels(self):
         ax = _FakeAxis()
