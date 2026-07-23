@@ -246,12 +246,15 @@ def build_user_message(*, user_prompt: str, num_images: int) -> dict[str, Any]:
     }
 
 
-def build_assistant_text_message(*, target_text: str) -> dict[str, Any]:
+def build_assistant_text_message(
+    *, target_text: str, reasoning_text: str | None = None
+) -> dict[str, Any]:
     """Builds one assistant text message for plain SFT supervision."""
 
+    content = f"<think>{reasoning_text}</think>{target_text}" if reasoning_text else target_text
     return {
         "role": "assistant",
-        "content": target_text,
+        "content": content,
     }
 
 
@@ -263,8 +266,14 @@ def build_messages(
     target_text: str | None = None,
     predict_agent: bool = False,
     train_get_image: bool = False,
+    reasoning_text: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Builds one chat conversation for training or generation."""
+    """Builds one chat conversation for training or generation.
+
+    With reasoning_text (v1.5 probe), the assistant turn is supervised with a
+    `<think>{reasoning_text}</think>` prefix before the target. Orthogonal to
+    predict_agent/train_get_image; composes with either.
+    """
 
     if target_tool_call is not None and target_text is not None:
         raise ValueError("Provide either target_tool_call or target_text, not both.")
@@ -276,7 +285,11 @@ def build_messages(
         build_user_message(user_prompt=user_prompt, num_images=num_images),
     ]
     if target_text is not None:
-        messages.append(build_assistant_text_message(target_text=target_text))
+        messages.append(
+            build_assistant_text_message(
+                target_text=target_text, reasoning_text=reasoning_text
+            )
+        )
     elif target_tool_call is not None:
         from training.bc_task_vlm.tool_calling import build_assistant_tool_call_message
 
@@ -284,6 +297,7 @@ def build_messages(
             build_assistant_tool_call_message(
                 tool_name=target_tool_call["name"],
                 arguments=target_tool_call["arguments"],
+                reasoning_text=reasoning_text,
             )
         )
     return messages

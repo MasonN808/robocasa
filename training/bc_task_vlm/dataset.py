@@ -797,6 +797,7 @@ def _build_centralized_examples_for_trajectory(
     tool_schemas: list[dict[str, Any]],
     predict_agent: bool = False,
     train_get_image: bool = False,
+    train_reasoning: bool = False,
 ) -> list[CentralizedExample]:
     task_metadata = get_task_metadata(task_name)
     allowed_tool_specs = task_metadata.allowed_tool_specs
@@ -914,6 +915,11 @@ def _build_centralized_examples_for_trajectory(
                     num_images=len(image_paths),
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
+                    reasoning_text=(
+                        effective_raw_step.get("reasoning")
+                        if train_reasoning
+                        else None
+                    ),
                     **message_kwargs,
                 ),
             )
@@ -1039,6 +1045,7 @@ def build_centralized_examples(
     example_build_workers: int = 1,
     predict_agent: bool = False,
     train_get_image: bool = False,
+    train_reasoning: bool = False,
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step.
 
@@ -1046,6 +1053,10 @@ def build_centralized_examples(
     supervised output (as the "agent" argument), the tool set gains
     task_complete, and one synthetic terminal task_complete example is added
     per trajectory.
+
+    With train_reasoning (v1.5 probe, orthogonal to predict_agent): each
+    assistant turn is supervised with a `<think>{reasoning}</think>` prefix
+    sourced from the trajectory's per-step `reasoning` string.
     """
 
     sft_format = _validate_sft_format(sft_format)
@@ -1096,6 +1107,7 @@ def build_centralized_examples(
                 tool_schemas=tool_schemas,
                 predict_agent=predict_agent,
                 train_get_image=train_get_image,
+                train_reasoning=train_reasoning,
             )
 
         if example_build_workers > 1 and len(selected_trajectory_dirs) > 1:
@@ -1140,6 +1152,7 @@ def build_example_cache_fingerprint(
     sft_format: str = SFT_FORMAT_TOOL_CALL,
     predict_agent: bool = False,
     train_get_image: bool = False,
+    train_reasoning: bool = False,
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
 
@@ -1187,6 +1200,8 @@ def build_example_cache_fingerprint(
         fingerprint["predict_acting_agent"] = True
     if train_get_image:
         fingerprint["train_get_image"] = True
+    if train_reasoning:
+        fingerprint["train_reasoning"] = True
     return fingerprint
 
 

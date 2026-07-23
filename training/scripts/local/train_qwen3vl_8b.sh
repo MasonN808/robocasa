@@ -28,6 +28,11 @@ fi
 if [[ "${TRAIN_GET_IMAGE:-0}" == "1" ]]; then
   launch_args+=(--train-get-image)
 fi
+# v1.5 reasoning probe: supervise a <think>{reasoning}</think> prefix before
+# each tool call. Orthogonal to PREDICT_ACTING_AGENT/TRAIN_GET_IMAGE.
+if [[ "${TRAIN_REASONING:-0}" == "1" ]]; then
+  launch_args+=(--train-reasoning)
+fi
 if [[ -n "${INIT_ADAPTER_PATH:-}" ]]; then
   launch_args+=(--init-adapter-path "${INIT_ADAPTER_PATH}")
 fi

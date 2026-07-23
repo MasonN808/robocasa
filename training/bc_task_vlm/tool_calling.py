@@ -172,12 +172,20 @@ def build_assistant_tool_call_message(
     *,
     tool_name: str,
     arguments: dict[str, Any],
+    reasoning_text: str | None = None,
 ) -> dict[str, Any]:
-    """Builds one assistant tool-call message for chat-template supervision."""
+    """Builds one assistant tool-call message for chat-template supervision.
 
+    With reasoning_text (v1.5 probe), the assistant content becomes a
+    `<think>...</think>` prefix supervising a rationale before the tool call.
+    The eval scorer already strips think blocks before parsing
+    (evaluation.py::split_reasoning), so this only adds supervision.
+    """
+
+    content = f"<think>{reasoning_text}</think>" if reasoning_text else ""
     return {
         "role": "assistant",
-        "content": "",
+        "content": content,
         "tool_calls": [
             {
                 "type": "function",
