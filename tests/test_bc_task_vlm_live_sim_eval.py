@@ -262,7 +262,94 @@ def test_causal_cache_owner_gate_and_physical_invalidation():
     assert not live_sim_eval._tool_invalidates_active_observation("communicate")
 
 
-def test_causal_cache_run_state_transitions(monkeypatch, tmp_path):
+def test_centralized_causal_cache_allows_only_cross_owner_communication():
+    assert (
+        live_sim_eval._causal_cache_rejection_reason(
+            tool_name="communicate",
+            proposed_agent="agent_0",
+            active_observation_agent="agent_1",
+            allow_cross_owner_communication=True,
+        )
+        is None
+    )
+    physical = live_sim_eval._causal_cache_rejection_reason(
+        tool_name="pick_up_object",
+        proposed_agent="agent_0",
+        active_observation_agent="agent_1",
+        allow_cross_owner_communication=True,
+    )
+    assert "belongs to agent_1" in physical
+
+
+def test_both_causal_modes_use_prefix_selected_cache():
+    assert live_sim_eval._uses_causal_cached_observations("causal_cache")
+    assert live_sim_eval._uses_causal_cached_observations(
+        "causal_cache_centralized"
+    )
+    assert not live_sim_eval._uses_causal_cached_observations("next_turn")
+
+
+def test_pruned_organize_condiments_native_checker_omits_only_distractor():
+    env = SimpleNamespace(
+        objects={
+            "condiment1": object(),
+            "condiment2": object(),
+            "condiment3": object(),
+        },
+        cab=object(),
+    )
+    inside = {"condiment1": True, "condiment2": True, "condiment3": True}
+    far = {"condiment1": True, "condiment2": True, "condiment3": True}
+    object_utils = SimpleNamespace(
+        obj_inside_of=lambda _env, name, _cab: inside[name],
+        gripper_obj_far=lambda _env, name: far[name],
+    )
+
+    assert live_sim_eval._check_pruned_organize_condiments_success(
+        env, object_utils=object_utils
+    )
+    inside["condiment2"] = False
+    assert not live_sim_eval._check_pruned_organize_condiments_success(
+        env, object_utils=object_utils
+    )
+    del env.objects["condiment3"]
+    with pytest.raises(KeyError, match="goal-relevant.*condiment3"):
+        live_sim_eval._check_pruned_organize_condiments_success(
+            env, object_utils=object_utils
+        )
+
+
+def test_native_success_routes_only_pruned_organize_condiments(monkeypatch):
+    required = {
+        "condiment1": object(),
+        "condiment2": object(),
+        "condiment3": object(),
+    }
+    pruned_env = SimpleNamespace(
+        objects=required,
+        _check_success=lambda: (_ for _ in ()).throw(
+            AssertionError("upstream checker must not run for pruned scene")
+        ),
+    )
+    session = object.__new__(live_sim_eval.SimSession)
+    session.composite_task = "OrganizeCondiments"
+    session.executor = SimpleNamespace(env=pruned_env)
+    monkeypatch.setattr(
+        live_sim_eval,
+        "_check_pruned_organize_condiments_success",
+        lambda _env: True,
+    )
+    assert session.native_success() == (True, None)
+
+    unpruned_env = SimpleNamespace(
+        objects={**required, "distractor": object()},
+        _check_success=lambda: False,
+    )
+    session.executor = SimpleNamespace(env=unpruned_env)
+    assert session.native_success() == (False, None)
+
+
+def test_centralized_causal_cache_run_state_transitions(monkeypatch, tmp_path):
     proposals = iter(
         [
             {
@@ -270,8 +357,13 @@ def test_causal_cache_run_state_transitions(monkeypatch, tmp_path):
                 "tool": "get_image",
                 "args": {"views": ["top_view"]},
             },
+            {
+                "agent": "agent_1",
+                "tool": "get_image",
+                "args": {"views": ["top_view"]},
+            },
             {"agent": "agent_0", "tool": "communicate", "args": {}},
-            {"agent": "agent_0", "tool": "navigate_to_fixture", "args": {}},
+            {"agent": "agent_1", "tool": "navigate_to_fixture", "args": {}},
             {"agent": "agent_0", "tool": "task_complete", "args": {}},
         ]
     )
@@ -313,7 +405,7 @@ def test_causal_cache_run_state_transitions(monkeypatch, tmp_path):
 
         def render_views(self, views, *, agent_id, **_kwargs):
             render_calls.append((tuple(views), agent_id))
-            return ["agent0_top.jpg"], list(views)
+            return [f"{agent_id}_top.jpg"], list(views)
 
         def native_success(self):
             return False, None
@@ -351,8 +443,8 @@ def test_causal_cache_run_state_transitions(monkeypatch, tmp_path):
         policy=FakePolicy(),
         args=SimpleNamespace(
             train_get_image=True,
-            get_image_observation_mode="causal_cache",
-            step_budget_factor=2.0,
+            get_image_observation_mode="causal_cache_centralized",
+            step_budget_factor=3.0,
             max_consecutive_rejections=3,
             output_dir=tmp_path,
             layout=0,
@@ -366,6 +458,7 @@ def test_causal_cache_run_state_transitions(monkeypatch, tmp_path):
             "task": "organize beverages",
             "steps": [
                 {"tool": "get_image"},
+                {"tool": "get_image"},
                 {"tool": "communicate"},
                 {"tool": "navigate_to_fixture"},
             ],
@@ -376,17 +469,26 @@ def test_causal_cache_run_state_transitions(monkeypatch, tmp_path):
     assert [state["active"] for state in proposal_states] == [
         None,
         "agent_0",
-        "agent_0",
+        "agent_1",
+        "agent_1",
         None,
     ]
     assert [state["cache_agents"] for state in proposal_states] == [
         [],
         ["agent_0"],
-        ["agent_0"],
-        ["agent_0"],
+        ["agent_0", "agent_1"],
+        ["agent_0", "agent_1"],
+        ["agent_0", "agent_1"],
     ]
-    assert render_calls == [(('top_view',), "agent_0")]
+    assert render_calls == [
+        (("top_view",), "agent_0"),
+        (("top_view",), "agent_1"),
+    ]
+    cross_owner_communication = result["steps"][2]
+    assert cross_owner_communication["legal"] is True
+    assert cross_owner_communication["executed"] is True
     assert result["termination"] == "task_complete_declared"
+
 
 def test_generate_once_reuses_cached_files_without_rendering(monkeypatch, tmp_path):
     captured = {}

@@ -77,9 +77,13 @@ OPENING_COMMUNICATION_STEP_INDICES = frozenset({2, 3})
 NAVIGATE_TOOLS = {"navigate_to_fixture"}
 GET_IMAGE_OBSERVATION_MODE_NEXT_TURN = "next_turn"
 GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE = "causal_cache"
+GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED = (
+    "causal_cache_centralized"
+)
 GET_IMAGE_OBSERVATION_MODES = (
     GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
     GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE,
+    GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED,
 )
 _NUMBERED_OBJECT_RE = re.compile(r"^obj_(\d+)$")
 
@@ -150,15 +154,27 @@ def _record_agent_observation(
     )
 
 
+def _uses_causal_cached_observations(observation_mode: str) -> bool:
+    """Return whether a mode uses prefix-derived per-agent image caches."""
+
+    return observation_mode in {
+        GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE,
+        GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED,
+    }
+
+
 def _causal_cache_rejection_reason(
     *,
     tool_name: str,
     proposed_agent: str,
     active_observation_agent: str | None,
+    allow_cross_owner_communication: bool = False,
 ) -> str | None:
-    """Enforce single-agent visual ownership for the causal compatibility mode."""
+    """Enforce the selected causal-cache action-ownership contract."""
 
     if tool_name in {"get_image", TASK_COMPLETE_TOOL_NAME}:
+        return None
+    if tool_name == "communicate" and allow_cross_owner_communication:
         return None
     if active_observation_agent is None:
         if tool_name == "communicate":
@@ -170,6 +186,40 @@ def _causal_cache_rejection_reason(
             f"not {proposed_agent}"
         )
     return None
+
+
+def _check_pruned_organize_condiments_success(
+    env,
+    *,
+    object_utils=None,
+) -> bool:
+    """Evaluate OrganizeCondiments when trajectory pruning omitted distractors.
+
+    The upstream task's native checker unconditionally indexes ``distractor``.
+    Generated trajectories intentionally omit that non-goal object, so the
+    trajectory-compatible native condition retains the three condiment and
+    gripper-clearance requirements while omitting only the impossible
+    distractor-on-counter and distractor-clearance clauses.
+    """
+
+    required_objects = ("condiment1", "condiment2", "condiment3")
+    objects = getattr(env, "objects", {})
+    missing = [name for name in required_objects if name not in objects]
+    if missing:
+        raise KeyError(
+            "missing goal-relevant OrganizeCondiments object(s): "
+            + ", ".join(missing)
+        )
+    if object_utils is None:
+        import robocasa.utils.object_utils as object_utils
+
+    return all(
+        object_utils.obj_inside_of(env, name, env.cab)
+        for name in required_objects
+    ) and all(
+        object_utils.gripper_obj_far(env, name)
+        for name in required_objects
+    )
 
 
 def _tool_invalidates_active_observation(tool_name: str) -> bool:
@@ -475,6 +525,18 @@ class SimSession:
             if candidate is None or not hasattr(candidate, "_check_success"):
                 continue
             try:
+                if (
+                    self.composite_task == "OrganizeCondiments"
+                    and "distractor" not in getattr(candidate, "objects", {})
+                ):
+                    return (
+                        bool(
+                            _check_pruned_organize_condiments_success(
+                                candidate
+                            )
+                        ),
+                        None,
+                    )
                 return bool(candidate._check_success()), None
             except Exception as exc:
                 return None, f"{type(exc).__name__}: {exc}"
@@ -844,7 +906,11 @@ def run_trajectory(
     )
     causal_cached_observations = (
         train_get_image
-        and get_image_observation_mode == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE
+        and _uses_causal_cached_observations(get_image_observation_mode)
+    )
+    centralized_causal_communication = (
+        get_image_observation_mode
+        == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED
     )
     tool_specs = augment_tool_specs_for_agent_prediction(
         task_metadata.allowed_tool_specs, include_get_image=train_get_image
@@ -1006,6 +1072,9 @@ def run_trajectory(
                 tool_name=proposal["tool"],
                 proposed_agent=proposal["agent"],
                 active_observation_agent=active_observation_agent,
+                allow_cross_owner_communication=(
+                    centralized_causal_communication
+                ),
             )
             if cache_reason is not None:
                 record.update(legal=False, executed=False, reason=cache_reason)
@@ -1194,7 +1263,7 @@ def _model_propose_step(
             "get_image_observation_mode",
             GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
         )
-        if observation_mode == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE:
+        if _uses_causal_cached_observations(observation_mode):
             cached_image_paths, views = _cached_observation_for_agent(
                 cached_observations_by_agent or {},
                 active_observation_agent,
@@ -1308,8 +1377,13 @@ def _generate_once(
         sft_format="tool_call",
         observation_owner=agent_hint,
         include_observation_owner=(
-            getattr(args, "get_image_observation_mode", None)
-            == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE
+            _uses_causal_cached_observations(
+                getattr(
+                    args,
+                    "get_image_observation_mode",
+                    GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
+                )
+            )
         ),
         predict_agent=True,
     )
@@ -1517,10 +1591,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "How model-emitted get_image observations condition later calls. "
             "next_turn sends them to the immediately following proposal. "
-            "causal_cache renders each successful request immediately, keeps "
-            "agent caches separate, and exposes only the previously active "
-            "agent's cache. A physical action clears the active visual context; "
-            "no step parity or current-target information is used."
+            "Both causal-cache modes render each successful request "
+            "immediately, keep agent caches separate, and expose only the "
+            "previously active agent's cache. causal_cache enforces that "
+            "communication uses that owner; causal_cache_centralized allows "
+            "the centralized policy to select either communication speaker. "
+            "Physical actions require the active owner and clear the active "
+            "visual context. No step parity or current-target information is "
+            "used."
         ),
     )
     parser.add_argument("--task-spec-detail", action="store_true")
