@@ -33,9 +33,11 @@ import mimetypes
 import shutil
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+import random
 import re
 from typing import Any
 from urllib import error as urllib_error, request as urllib_request
@@ -45,6 +47,7 @@ from training.bc_task_vlm.prompting import (
     build_user_prompt,
 )
 from training.bc_task_vlm.schema_utils import (
+    augment_tool_specs_with_get_image,
     TASK_COMPLETE_TOOL_NAME,
     augment_tool_specs_for_agent_prediction,
     compact_json_dumps,
@@ -219,6 +222,129 @@ def _check_pruned_organize_condiments_success(
     ) and all(
         object_utils.gripper_obj_far(env, name)
         for name in required_objects
+    )
+
+
+# ---------------------------------------------------------------------------
+# Partial-observability runtime: per-agent private state + concurrent scheduler
+# ---------------------------------------------------------------------------
+
+REJECTION_MODE_SILENT_RETRY = "silent-retry"
+REJECTION_MODE_REPORT_FAILED = "report-failed"
+RESOURCE_LOCKS_NONE = "none"
+RESOURCE_LOCKS_OBJECTS = "objects"
+RESOURCE_LOCKS_FIXTURES = "fixtures"
+
+# Tools that mutate nothing and therefore claim no shared resource.
+_NON_CLAIMING_TOOLS = frozenset({"communicate", "get_image", TASK_COMPLETE_TOOL_NAME})
+# Arg names that name a fixture vs a movable object, used to derive claims
+# without inventing a new schema.
+# Movable objects an agent would be holding.
+_OBJECT_ARG_NAMES = ("object_id", "reference_object_id")
+# Places an agent must occupy or reach into. `source_id` belongs here, not with
+# objects: pick_up_object(source_id=...) names the fixture being reached into
+# (fridge/cabinet/counter), so it must collide with a navigate to that fixture.
+_LOCATION_ARG_NAMES = (
+    "fixture_id",
+    "source_id",
+    "target_id",
+    "receptacle_id",
+    "reference_fixture_id",
+)
+
+
+def resource_claims(step: dict[str, Any], *, mode: str) -> frozenset[str]:
+    """Resources a proposed tool call would hold, derived from its arguments.
+
+    `communicate`/`get_image` are read-only and claim nothing, so two agents may
+    always look and talk simultaneously.
+    """
+
+    if mode == RESOURCE_LOCKS_NONE:
+        return frozenset()
+    tool = step.get("tool")
+    if tool in _NON_CLAIMING_TOOLS:
+        return frozenset()
+    args = step.get("args") or {}
+    # Flat namespace: the same entity named through different argument slots
+    # must collide, so claims are bare IDs rather than typed keys.
+    claims: set[str] = {
+        str(args[name]) for name in _OBJECT_ARG_NAMES if args.get(name)
+    }
+    if mode == RESOURCE_LOCKS_FIXTURES:
+        claims.update(
+            str(args[name]) for name in _LOCATION_ARG_NAMES if args.get(name)
+        )
+    return frozenset(claims)
+
+
+def _sim_clock(session: "SimSession") -> float | None:
+    """MuJoCo simulation time in seconds, or None if unavailable.
+
+    ToolResult carries no timing, so the only real measure of how long a tool
+    took is the simulator's own clock across the call.
+    """
+
+    try:
+        return float(session.executor.env.sim.data.time)
+    except Exception:
+        return None
+
+
+def _tool_duration(
+    tool_name: str, *, sim_steps: float | None, multiplier: float
+) -> float:
+    """Virtual-clock duration for a completed call.
+
+    Measured executor sim-steps scaled by `multiplier`, with per-class floors.
+    The floors matter because the executor teleports: if measured costs come out
+    uniform, equal durations from a common start would keep both agents in
+    lockstep forever, which is precisely the artificial regime the virtual clock
+    exists to avoid.
+    """
+
+    if tool_name in ("communicate", "get_image"):
+        floor = 0.25
+    elif tool_name == "navigate_to_fixture":
+        floor = 4.0
+    else:
+        floor = 2.0
+    measured = 0.0 if not sim_steps else float(sim_steps) * multiplier
+    return max(floor, measured)
+
+
+class AgentRuntime:
+    """Private state for one logical agent under partial observability."""
+
+    def __init__(self, agent_id: str) -> None:
+        self.agent_id = agent_id
+        self.private_history: list[dict[str, Any]] = []
+        self.pending_obs: tuple[list[str], list[str]] | None = None
+        self.ready_at: float = 0.0
+        self.local_turn = 0
+        self.silent_retries = 0
+        self.active_s = 0.0
+        self.last_proposal_key: str | None = None
+        self.repeated_proposals = 0
+
+    def deliver(self, step: dict[str, Any]) -> None:
+        """Appends to this agent's private history (own act or delivered msg)."""
+
+        self.private_history.append(deepcopy(step))
+
+    def take_observation(self) -> tuple[list[str], list[str]]:
+        """Consume-once: hand over the pending observation and clear it."""
+
+        if self.pending_obs is None:
+            return [], []
+        image_paths, view_names = self.pending_obs
+        self.pending_obs = None
+        return list(image_paths), list(view_names)
+
+
+def _proposal_key(step: dict[str, Any]) -> str:
+    return json.dumps(
+        {"tool": step.get("tool"), "args": step.get("args") or {}}, sort_keys=True
     )
 
 
@@ -1234,6 +1360,484 @@ def run_trajectory(
     }
 
 
+def run_trajectory_partial(
+    *,
+    session: SimSession,
+    policy,
+    args: argparse.Namespace,
+    task_name: str,
+    composite_task: str,
+    trajectory: dict[str, Any],
+    frames_dir: Path | None,
+) -> dict[str, Any]:
+    """Partial-observability episode: per-agent private state, virtual clock.
+
+    Each agent becomes ready when its own tool completes, so the two agents
+    desynchronize naturally and simultaneous proposals are the exception rather
+    than every cycle. Neither proposal sees the other's result before it is
+    generated. Execution stays serial (the executor runs a tool to completion);
+    only readiness ordering is event-timed.
+    """
+
+    task_metadata = get_task_metadata(task_name)
+    # Partial v3 supervises get_image with a FIXED caller, so the tool set gains
+    # get_image but never task_complete or the agent argument.
+    tool_specs = augment_tool_specs_with_get_image(task_metadata.allowed_tool_specs)
+    tool_schemas = build_tool_schemas(
+        agent_ids=AGENT_IDS,
+        allowed_tool_specs=tool_specs,
+        include_agent_param=False,
+    )
+    adapter, adapted = session.start_trajectory(trajectory)
+    mirror = FsmMirror(composite_task=composite_task, trajectory=trajectory)
+    if frames_dir is not None:
+        session.executor.save_scene_frames(str(frames_dir), prefix="step_-001")
+
+    expert_action_steps = [
+        s for s in trajectory["steps"] if s.get("tool") != "get_image"
+    ]
+    step_budget = max(4, int(len(expert_action_steps) * args.step_budget_factor * 2))
+    lock_mode = getattr(args, "resource_locks", RESOURCE_LOCKS_FIXTURES)
+    lock_priority = getattr(args, "conflict_priority", "agent-order")
+    rejection_mode = getattr(args, "rejection_mode", REJECTION_MODE_SILENT_RETRY)
+    max_silent = int(getattr(args, "max_silent_retries", 3))
+    multiplier = float(getattr(args, "duration_multiplier", 1.0))
+
+    agents = {aid: AgentRuntime(aid) for aid in AGENT_IDS}
+    is_model_policy = _uses_model_generation(policy)
+    # Non-model policies (oracle/degenerate) replay a JOINT expert sequence, but
+    # a per-agent scheduler asks a specific agent what it wants to do. Split the
+    # expert steps into per-agent queues so "agent A's next expert action" is
+    # well defined regardless of the order the scheduler picks agents in.
+    expert_queues: dict[str, list[dict[str, Any]]] = {aid: [] for aid in AGENT_IDS}
+    if not is_model_policy:
+        for raw in trajectory["steps"]:
+            if raw.get("tool") == "get_image":
+                continue
+            if raw.get("agent") in expert_queues:
+                expert_queues[raw["agent"]].append(
+                    {"agent": raw["agent"], "tool": raw["tool"],
+                     "args": deepcopy(raw.get("args", {}))}
+                )
+    records: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    clock = 0.0
+    turn_index = 0          # productive (executed) steps -- what step_budget caps
+    proposal_index = 0      # every model call, for logging/ids
+    rejected_total = 0
+    consecutive_rejections = 0
+    max_consec = int(getattr(args, "max_consecutive_rejections", 8))
+    # A rejected call is not productive work, so it must not consume the budget
+    # meant for it -- but it cannot be free either, or a livelock runs forever.
+    # Hence a separate allowance, generous relative to the step budget.
+    max_rejected = int(step_budget * float(getattr(args, "rejection_budget_ratio", 1.0)))
+    termination = "budget_exhausted"
+    simultaneous_cycles = 0
+    escalations = 0
+    silent_resolutions = 0
+
+    def _propose(agent: AgentRuntime) -> tuple[dict[str, Any], tuple[str, ...] | None]:
+        """One decision for one agent, using only that agent's private state."""
+
+        if not is_model_policy:
+            queue = expert_queues[agent.agent_id]
+            if not queue:
+                return {"exhausted": True}, None
+            return queue.pop(0), None
+        image_paths, view_names = agent.take_observation()
+        render_dir = frames_dir or Path(args.output_dir) / "_tmp_views"
+        proposal = _generate_once(
+            session=session,
+            policy=policy,
+            args=args,
+            task_metadata=task_metadata,
+            tool_specs=tool_specs,
+            tool_schemas=tool_schemas,
+            trajectory=trajectory,
+            history=agent.private_history,
+            step_index=turn_index,
+            views=tuple(view_names),
+            render_dir=render_dir,
+            agent_hint=agent.agent_id,
+            pre_rendered_image_paths=image_paths if image_paths else None,
+            partial_caller=agent.agent_id,
+        )
+        return proposal, tuple(view_names) if view_names else None
+
+    while turn_index < step_budget:
+        if all(a.ready_at == float("inf") for a in agents.values()):
+            termination = "policy_exhausted"
+            break
+        clock = min(a.ready_at for a in agents.values())
+        ready = sorted(
+            (a for a in agents.values()
+             if a.ready_at <= clock and a.ready_at != float("inf")),
+            key=lambda a: a.agent_id,
+        )
+        if not ready:
+            break
+        if len(ready) > 1:
+            simultaneous_cycles += 1
+
+        # --- concurrent generation: neither sees the other's result ---
+        started = time.perf_counter()
+        if len(ready) == 1 or not _uses_model_generation(policy):
+            proposals = [(a, *_propose(a)) for a in ready]
+        else:
+            with ThreadPoolExecutor(max_workers=len(ready)) as pool:
+                futures = {pool.submit(_propose, a): a for a in ready}
+                proposals = [(futures[f], *f.result()) for f in futures]
+            proposals.sort(key=lambda item: item[0].agent_id)
+        elapsed = round(time.perf_counter() - started, 3)
+
+        # --- resource conflict resolution against the same pre-batch state ---
+        claims = {
+            agent.agent_id: resource_claims(prop, mode=lock_mode)
+            for agent, prop, _ in proposals
+            if "error" not in prop
+        }
+        # Deterministic priority breaks the tie. Rejecting BOTH proposals is
+        # symmetric, so two agents wanting the same fixture would each retry the
+        # same call forever (observed: 6 conflicts, zero progress, livelock).
+        # One agent proceeds; the loser gets an ordinary tool error and replans.
+        conflicted: set[str] = set()
+        ids = sorted(claims)
+        if lock_priority == "seeded":
+            rng = random.Random(f"{args.seed}:{turn_index}")
+            rng.shuffle(ids)
+        held: set[str] = set()
+        for a_id in ids:
+            if claims[a_id] & held:
+                conflicted.add(a_id)
+            else:
+                held |= claims[a_id]
+
+        for agent, proposal, views_used in proposals:
+            record: dict[str, Any] = {
+                "step_index": turn_index,
+                "sim_time": round(clock, 3),
+                "agent": agent.agent_id,
+                "local_turn": agent.local_turn,
+                "proposal": deepcopy(proposal),
+                "views": list(views_used) if views_used else None,
+                "proposal_elapsed_s": elapsed,
+                "cycle_agents": [a.agent_id for a in ready],
+            }
+            agent.local_turn += 1
+            proposal_index += 1
+
+            key = _proposal_key(proposal)
+            if key == agent.last_proposal_key:
+                agent.repeated_proposals += 1
+            agent.last_proposal_key = key
+
+            if proposal.get("error") or proposal.get("_rejected"):
+                pass  # counted below
+            if proposal.get("exhausted"):
+                # This agent has no expert steps left; retire it from scheduling.
+                agent.ready_at = float("inf")
+                agent.local_turn -= 1
+                turn_index -= 1
+                continue
+
+            if "error" in proposal:
+                record.update(legal=False, executed=False, reason=proposal["error"])
+                agent.ready_at = clock + _tool_duration(
+                    "communicate", sim_steps=None, multiplier=multiplier
+                )
+                records.append(record)
+                continue
+
+            # Resource conflict -> ordinary tool error handed back to the agent.
+            if agent.agent_id in conflicted:
+                reason = "resource conflict: another agent holds a required resource"
+                record.update(
+                    legal=False, executed=False, reason=reason, conflict=True
+                )
+                conflicts.append(
+                    {"agent": agent.agent_id, "sim_time": round(clock, 3),
+                     "tool": proposal.get("tool"), "claims": sorted(claims[agent.agent_id])}
+                )
+                _handle_rejection(
+                    agent=agent,
+                    agents=agents,
+                    step={"agent": agent.agent_id, "tool": proposal["tool"],
+                          "args": deepcopy(proposal["args"])},
+                    reason=reason,
+                    clock=clock,
+                    mode=rejection_mode,
+                    max_silent=max_silent,
+                    multiplier=multiplier,
+                    record=record,
+                )
+                if not is_model_policy and not record.get("escalated"):
+                    # Silent retry leaves state untouched, so an expert step
+                    # consumed by a rejected proposal must go back on the queue.
+                    expert_queues[agent.agent_id].insert(0, proposal)
+                if record.get("escalated"):
+                    escalations += 1
+                else:
+                    silent_resolutions += 1
+                records.append(record)
+                continue
+
+            # --- get_image: render, deliver to the requester only ---
+            if proposal["tool"] == "get_image":
+                views = tuple(proposal.get("args", {}).get("views", ()))
+                known = set(OVERHEAD_VIEWS + SCOUT_VIEWS + WRIST_VIEWS)
+                if not views or any(v not in known for v in views):
+                    record.update(
+                        legal=False, executed=False, reason="invalid observation views"
+                    )
+                    agent.ready_at = clock + _tool_duration(
+                        "get_image", sim_steps=None, multiplier=multiplier
+                    )
+                    records.append(record)
+                    continue
+                render_dir = frames_dir or Path(args.output_dir) / "_tmp_views"
+                image_paths, view_names = session.render_views(
+                    views,
+                    agent_id=agent.agent_id,
+                    out_dir=render_dir,
+                    tag=f"t{turn_index:03d}_{agent.agent_id}",
+                )
+                # Consume-once: only the requester ever sees this.
+                turn_index += 1
+                consecutive_rejections = 0
+                agent.pending_obs = (image_paths, view_names)
+                agent.deliver(
+                    {"agent": agent.agent_id, "tool": "get_image",
+                     "args": {"views": list(views)}}
+                )
+                record.update(legal=True, executed=True, reason=None)
+                agent.ready_at = clock + _tool_duration(
+                    "get_image", sim_steps=None, multiplier=multiplier
+                )
+                agent.silent_retries = 0
+                records.append(record)
+                continue
+
+            symbolic_step = {
+                "step": turn_index,
+                "agent": agent.agent_id,
+                "tool": proposal["tool"],
+                "args": deepcopy(proposal["args"]),
+            }
+            state_before = deepcopy(mirror.runtime_state)
+            goal_before = mirror.goal_satisfied
+            legal, reason = mirror.step(symbolic_step)
+            record.update(legal=legal, reason=reason)
+
+            if not legal:
+                record["executed"] = False
+                _handle_rejection(
+                    agent=agent, agents=agents, step=symbolic_step,
+                    reason=reason or "illegal", clock=clock, mode=rejection_mode,
+                    max_silent=max_silent, multiplier=multiplier, record=record,
+                )
+                if record.get("escalated"):
+                    escalations += 1
+                else:
+                    silent_resolutions += 1
+                records.append(record)
+                continue
+
+            try:
+                tool_call = adapter._adapt_step(
+                    symbolic_step,
+                    resolved_initial_state=adapted["initial_state"],
+                    output_dir=None,
+                )
+                sim_t0 = _sim_clock(session)
+                result = session.executor.execute(
+                    tool_call["tool"],
+                    robot_idx=tool_call.get("robot_idx", 0),
+                    **tool_call.get("args", {}),
+                )
+                record.update(executed=True, sim_success=bool(result.success))
+                if not result.success:
+                    mirror.runtime_state = state_before
+                    mirror.goal_satisfied = goal_before
+                    details = getattr(result, "details", None) or {}
+                    sim_reason = str(
+                        details.get("error")
+                        or details.get("reason")
+                        or "simulator reported an unsuccessful tool call"
+                    )
+                    record["sim_error"] = sim_reason
+                    _handle_rejection(
+                        agent=agent, agents=agents, step=symbolic_step,
+                        reason=sim_reason, clock=clock, mode=rejection_mode,
+                        max_silent=max_silent, multiplier=multiplier, record=record,
+                    )
+                    if record.get("escalated"):
+                        escalations += 1
+                    else:
+                        silent_resolutions += 1
+                    records.append(record)
+                    continue
+            except Exception as exc:
+                mirror.runtime_state = state_before
+                mirror.goal_satisfied = goal_before
+                record.update(
+                    executed=False, sim_success=False,
+                    sim_error=f"{type(exc).__name__}: {exc}",
+                )
+                _handle_rejection(
+                    agent=agent, agents=agents, step=symbolic_step,
+                    reason=f"{type(exc).__name__}: {exc}", clock=clock,
+                    mode=rejection_mode, max_silent=max_silent,
+                    multiplier=multiplier, record=record,
+                )
+                records.append(record)
+                continue
+
+            # --- committed: private history, then delivery to the recipient ---
+            agent.silent_retries = 0
+            turn_index += 1
+            consecutive_rejections = 0
+            agent.deliver(symbolic_step)
+            if symbolic_step["tool"] == "communicate":
+                recipient = (symbolic_step.get("args") or {}).get("to")
+                if recipient in agents and recipient != agent.agent_id:
+                    agents[recipient].deliver(symbolic_step)
+                    record["delivered_to"] = recipient
+            sim_t1 = _sim_clock(session)
+            measured = (
+                (sim_t1 - sim_t0)
+                if (sim_t0 is not None and sim_t1 is not None and sim_t1 > sim_t0)
+                else None
+            )
+            duration = _tool_duration(
+                symbolic_step["tool"], sim_steps=measured, multiplier=multiplier
+            )
+            record["measured_sim_seconds"] = (
+                round(measured, 3) if measured is not None else None
+            )
+            agent.ready_at = clock + duration
+            agent.active_s += duration
+            record["duration"] = round(duration, 3)
+
+            if frames_dir is not None:
+                try:
+                    session.executor.save_scene_frames(
+                        str(frames_dir), prefix=f"step_{turn_index:03d}"
+                    )
+                except Exception:
+                    pass
+
+            record["fsm_goal"] = mirror.goal_satisfied
+            native_now, native_err = session.native_success()
+            record["native_success"] = native_now
+            if native_err:
+                record["native_error"] = native_err
+            records.append(record)
+
+            criterion = getattr(args, "success_criterion", "fsm")
+            reached = (
+                mirror.goal_satisfied
+                if criterion == "fsm"
+                else (mirror.goal_satisfied and native_now)
+            )
+            if reached:
+                termination = "goal_satisfied"
+                break
+        if termination in ("goal_satisfied", "max_consecutive_rejections",
+                           "rejection_budget_exhausted"):
+            break
+
+    native, native_error = session.native_success()
+    finite = [a.ready_at for a in agents.values() if a.ready_at != float("inf")]
+    makespan = max(finite, default=0.0)
+    return {
+        "task_name": task_name,
+        "composite_task": composite_task,
+        "trajectory_id": trajectory.get("trajectory_id"),
+        "partial_history": True,
+        "resource_locks": lock_mode,
+        "rejection_mode": rejection_mode,
+        "scene": {"layout": args.layout, "style": args.style, "seed": args.seed},
+        "expert_steps": len(expert_action_steps),
+        "steps_used": len(records),
+        "productive_steps": turn_index,
+        "rejected_total": rejected_total,
+        "executed_steps": sum(1 for r in records if r.get("executed")),
+        "rejected_steps": sum(
+            1 for r in records
+            if r.get("legal") is False or r.get("sim_success") is False
+        ),
+        "termination": termination,
+        "declared_complete": False,
+        "native_success": native,
+        "native_error": native_error,
+        "fsm_goal_satisfied": mirror.goal_satisfied,
+        "partial_goal_fraction": mirror.partial_goal_fraction(),
+        "makespan": round(makespan, 3),
+        "simultaneous_cycles": simultaneous_cycles,
+        "resource_conflicts": len(conflicts),
+        "conflict_details": conflicts,
+        "silent_resolutions": silent_resolutions,
+        "escalations": escalations,
+        "per_agent": {
+            aid: {
+                "turns": a.local_turn,
+                "active_sim_time": round(a.active_s, 3),
+                "idle_sim_time": round(max(0.0, makespan - a.active_s), 3),
+                "repeated_proposals": a.repeated_proposals,
+                "private_history_len": len(a.private_history),
+            }
+            for aid, a in agents.items()
+        },
+        "agent_turns": [r["agent"] for r in records if r.get("executed")],
+        "steps": records,
+    }
+
+
+def _handle_rejection(
+    *,
+    agent: AgentRuntime,
+    agents: dict[str, AgentRuntime],
+    step: dict[str, Any],
+    reason: str,
+    clock: float,
+    mode: str,
+    max_silent: int,
+    multiplier: float,
+    record: dict[str, Any],
+) -> None:
+    """Silent-retry by default; escalate to a FAILED: entry only as a last resort.
+
+    Silent retry sleeps the agent until the NEXT WORLD EVENT rather than a fixed
+    delay. That matters: under greedy decoding an unchanged prompt reproduces the
+    identical call, so a constant sleep would loop forever. Waiting for the other
+    agent to finish means the retry sees a released lock, a satisfied
+    precondition, or a delivered message.
+    """
+
+    agent.silent_retries += 1
+    escalate = (
+        mode == REJECTION_MODE_REPORT_FAILED or agent.silent_retries > max_silent
+    )
+    record["silent_retries"] = agent.silent_retries
+    record["escalated"] = escalate
+    if escalate:
+        # Accepts the distribution shift: the model never saw FAILED: in training.
+        agent.deliver({**step, "error": reason[:120]})
+        agent.silent_retries = 0
+        agent.ready_at = clock + _tool_duration(
+            step.get("tool", "communicate"), sim_steps=None, multiplier=multiplier
+        )
+        return
+    # State untouched: no history entry, observation not consumed.
+    others = [a.ready_at for a in agents.values() if a.agent_id != agent.agent_id]
+    next_event = max((t for t in others if t > clock), default=None)
+    if next_event is None:
+        next_event = clock + _tool_duration(
+            "navigate_to_fixture", sim_steps=None, multiplier=multiplier
+        )
+    agent.ready_at = next_event
+
+
 def _model_propose_step(
     *,
     session: SimSession,
@@ -1353,6 +1957,7 @@ def _generate_once(
     render_dir: Path,
     agent_hint: str | None = None,
     pre_rendered_image_paths: list[str] | None = None,
+    partial_caller: str | None = None,
 ) -> dict[str, Any]:
     if pre_rendered_image_paths is not None:
         image_paths = list(pre_rendered_image_paths)
@@ -1366,40 +1971,67 @@ def _generate_once(
         )
     else:
         image_paths, view_names = [], []
-    user_prompt = build_user_prompt(
-        composite_task=task_metadata.composite_task,
-        task_instruction=trajectory.get("task", ""),
-        agent_id="",
-        next_step_index=step_index,
-        observation_views=view_names,
-        history_steps=history,
-        allowed_tool_specs=tool_specs,
-        sft_format="tool_call",
-        observation_owner=agent_hint,
-        include_observation_owner=(
-            _uses_causal_cached_observations(
-                getattr(
-                    args,
-                    "get_image_observation_mode",
-                    GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
+    partial = partial_caller is not None
+    if partial:
+        # The caller is the actor: no agent prediction, no joint step index,
+        # and observation ownership is implicit in the private state.
+        index_mode = getattr(args, "partial_step_index_mode", "none")
+        if index_mode == "local":
+            prompt_step_index: int | None = len(history)
+            step_index_label = "Next local agent turn index"
+        elif index_mode == "none":
+            prompt_step_index = None
+            step_index_label = "Next global step index"
+        else:
+            prompt_step_index = step_index
+            step_index_label = "Next global step index"
+        user_prompt = build_user_prompt(
+            composite_task=task_metadata.composite_task,
+            task_instruction=trajectory.get("task", ""),
+            agent_id=partial_caller,
+            next_step_index=prompt_step_index,
+            step_index_label=step_index_label,
+            observation_views=view_names,
+            history_steps=history,
+            allowed_tool_specs=tool_specs,
+            sft_format="tool_call",
+            predict_agent=False,
+        )
+    else:
+        user_prompt = build_user_prompt(
+            composite_task=task_metadata.composite_task,
+            task_instruction=trajectory.get("task", ""),
+            agent_id="",
+            next_step_index=step_index,
+            observation_views=view_names,
+            history_steps=history,
+            allowed_tool_specs=tool_specs,
+            sft_format="tool_call",
+            observation_owner=agent_hint,
+            include_observation_owner=(
+                _uses_causal_cached_observations(
+                    getattr(
+                        args,
+                        "get_image_observation_mode",
+                        GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
+                    )
                 )
-            )
-        ),
-        predict_agent=True,
-    )
+            ),
+            predict_agent=True,
+        )
     feature = {
         "sample_id": f"live/{trajectory.get('trajectory_id')}/turn_{step_index}",
         "task_name": task_metadata.dataset_name,
         "trajectory_id": str(trajectory.get("trajectory_id") or ""),
         "step_index": step_index,
-        "agent_id": agent_hint or "",
+        "agent_id": partial_caller or agent_hint or "",
         "target_payload": None,
         "target_tool_call": None,
         "target_text": "",
         "messages": build_messages(
             user_prompt=user_prompt,
             num_images=len(image_paths),
-            predict_agent=True,
+            predict_agent=not partial,
             train_get_image=bool(getattr(args, "train_get_image", False)),
             # The generation collator strips the labeled assistant turn before
             # tokenization, so retain its expected training-example shape.
@@ -1422,7 +2054,12 @@ def _generate_once(
     try:
         decoded = policy.generate(feature)
         parsed = parse_first_qwen_tool_call(decoded)
-        agent, stripped = pop_agent_argument(parsed)
+        if partial:
+            # Caller identity is fixed by the scheduler; the model never names
+            # an acting agent under the distributed contract.
+            agent, stripped = partial_caller, parsed
+        else:
+            agent, stripped = pop_agent_argument(parsed)
         if agent not in AGENT_IDS:
             return {"error": f'missing/invalid "agent" argument: {agent!r}'}
         payload = tool_call_to_single_step_payload(
@@ -1611,6 +2248,84 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-output-tokens", type=int, default=256)
     parser.add_argument("--thinking-budget", type=int, default=0)
+    partial = parser.add_argument_group("partial observability")
+    partial.add_argument(
+        "--partial-history",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run the distributed contract: per-agent private history (own "
+        "actions + delivered messages), consume-once observations, and a "
+        "concurrent per-agent scheduler. The caller IS the actor, so the model "
+        "no longer predicts the acting agent.",
+    )
+    partial.add_argument(
+        "--partial-step-index-mode",
+        choices=("global", "local", "none"),
+        default="none",
+        help="How step indices are rendered; 'none' (default) omits them, since "
+        "a joint index leaks the other agent's hidden activity.",
+    )
+    partial.add_argument(
+        "--partial-observation-mode",
+        choices=("cache", "consume-once"),
+        default="consume-once",
+        help="'consume-once' feeds a get_image result to that agent's next call "
+        "then discards it, matching the trained contract.",
+    )
+    partial.add_argument(
+        "--resource-locks",
+        choices=(RESOURCE_LOCKS_NONE, RESOURCE_LOCKS_OBJECTS, RESOURCE_LOCKS_FIXTURES),
+        default=RESOURCE_LOCKS_FIXTURES,
+        help="Which shared resources a tool call claims. Conflicts REJECT and "
+        "hand the problem back to the agent; they never queue.",
+    )
+    partial.add_argument(
+        "--conflict-priority",
+        choices=("agent-order", "seeded"),
+        default="agent-order",
+        help="Tie-break when two agents claim the same resource. 'agent-order' "
+        "lets the lower agent id proceed; 'seeded' shuffles per turn. Rejecting "
+        "both is symmetric and livelocks under deterministic retry.",
+    )
+    partial.add_argument(
+        "--duration-multiplier",
+        type=float,
+        default=1.0,
+        help="Scales measured executor sim-steps into virtual-clock duration.",
+    )
+    partial.add_argument(
+        "--rejection-mode",
+        choices=(REJECTION_MODE_SILENT_RETRY, REJECTION_MODE_REPORT_FAILED),
+        default=REJECTION_MODE_SILENT_RETRY,
+        help="silent-retry: a rejected call leaves state untouched and the agent "
+        "sleeps until the next world event, then retries (no distribution "
+        "shift). report-failed: append a FAILED: line the model never saw in "
+        "training.",
+    )
+    partial.add_argument(
+        "--rejection-budget-ratio",
+        type=float,
+        default=1.0,
+        help="Rejected proposals get their own allowance, sized as this "
+        "multiple of the step budget, instead of consuming the budget meant "
+        "for productive work.",
+    )
+    partial.add_argument(
+        "--success-criterion",
+        choices=("fsm", "native-and-fsm"),
+        default="fsm",
+        help="What ends an episode successfully. 'fsm' (default) stops when the "
+        "verified task spec's symbolic goal is satisfied; native success is "
+        "still recorded as a diagnostic. Native disagreement is a property of "
+        "the teleporting executor's geometric predicates, not of the policy, "
+        "and requiring both wastes budget after the task is already done.",
+    )
+    partial.add_argument(
+        "--max-silent-retries",
+        type=int,
+        default=3,
+        help="Silent retries before a rejection escalates to a FAILED: entry.",
+    )
     parser.add_argument(
         "--two-pass-views",
         action=argparse.BooleanOptionalAction,
@@ -1781,7 +2496,12 @@ def main() -> None:
                         trajectory_policy = OraclePolicy(trajectory["steps"])
                     else:
                         trajectory_policy = policy
-                    result = run_trajectory(
+                    runner = (
+                        run_trajectory_partial
+                        if getattr(args, "partial_history", False)
+                        else run_trajectory
+                    )
+                    result = runner(
                         session=session,
                         policy=trajectory_policy,
                         args=args,
@@ -1939,6 +2659,56 @@ def _write_metrics(
         same / total_transitions if total_transitions else None
     )
     metrics["same_agent_run_lengths"] = run_lengths
+
+    # Partial-observability scheduler metrics. Only emitted for partial runs so
+    # centralized outputs keep their existing shape.
+    partial_records = [r for r in records if r.get("partial_history")]
+    if partial_records:
+        conflicts = sum(r.get("resource_conflicts", 0) for r in partial_records)
+        escalations = sum(r.get("escalations", 0) for r in partial_records)
+        silent = sum(r.get("silent_resolutions", 0) for r in partial_records)
+        rejections = escalations + silent
+        cycles = sum(r.get("steps_used", 0) for r in partial_records)
+        per_agent: dict[str, dict[str, float]] = {}
+        for agent_id in AGENT_IDS:
+            active = [
+                r["per_agent"][agent_id]["active_sim_time"]
+                for r in partial_records
+                if r.get("per_agent", {}).get(agent_id)
+            ]
+            idle = [
+                r["per_agent"][agent_id]["idle_sim_time"]
+                for r in partial_records
+                if r.get("per_agent", {}).get(agent_id)
+            ]
+            repeats = sum(
+                r.get("per_agent", {}).get(agent_id, {}).get("repeated_proposals", 0)
+                for r in partial_records
+            )
+            per_agent[agent_id] = {
+                "mean_active_sim_time": _mean_present(active),
+                "mean_idle_sim_time": _mean_present(idle),
+                "repeated_proposals": repeats,
+            }
+        metrics["partial"] = {
+            "trajectories": len(partial_records),
+            "mean_makespan": _mean_present(
+                r.get("makespan") for r in partial_records
+            ),
+            "simultaneous_cycle_rate": (
+                sum(r.get("simultaneous_cycles", 0) for r in partial_records)
+                / max(1, cycles)
+            ),
+            "resource_conflicts": conflicts,
+            "rejections_observed": rejections,
+            # Rates over rejections are only interpretable with enough of them;
+            # report the raw count alongside so a ratio from five events is
+            # visible as such.
+            "silent_resolve_rate": (silent / rejections) if rejections else None,
+            "escalation_rate": (escalations / rejections) if rejections else None,
+            "conflict_metrics_interpretable": rejections >= 20,
+            "per_agent": per_agent,
+        }
     for r in records:
         term = r.get("termination", "unknown")
         metrics["terminations"][term] = metrics["terminations"].get(term, 0) + 1

@@ -59,6 +59,7 @@ from training.bc_task_vlm.prompting import (
 from training.bc_task_vlm.schema_utils import (
     TASK_COMPLETE_TOOL_NAME,
     augment_tool_specs_for_agent_prediction,
+    augment_tool_specs_with_get_image,
     build_single_step_response_schema,
     compact_json_dumps,
     validate_single_step_payload,
@@ -81,6 +82,20 @@ _TRAJECTORY_METADATA_FILENAMES = (
 SFT_FORMAT_PLAIN = "plain"
 SFT_FORMAT_TOOL_CALL = "tool_call"
 SUPPORTED_SFT_FORMATS = (SFT_FORMAT_PLAIN, SFT_FORMAT_TOOL_CALL)
+# How partial-observability prompts render step indices. "global" keeps the
+# joint demonstration index (leaks the other agent's hidden activity through
+# the gaps between this agent's turns); "local" renumbers per agent; "none"
+# omits indices from the prompt entirely. See the design doc's decision #8.
+_PARTIAL_STEP_INDEX_MODES = ("global", "local", "none")
+# How partial-observability prompts supply pixels.
+#   "cache"        - persistent per-agent latest observation (design-doc default)
+#   "consume_once" - a get_image result feeds that agent's NEXT target tool
+#                    call and is then discarded
+# Measured on the training corpus: 100% of physical actions are immediately
+# preceded by that agent's own get_image, so the cache does no work for
+# actions; and 70% of what a cache shows a get_image target is already stale.
+# Under "consume_once" every attached image is fresh by construction.
+_PARTIAL_OBSERVATION_MODES = ("cache", "consume_once")
 _EXAMPLE_CACHE_FORMAT_VERSION = 3
 _EXAMPLE_CACHE_BINARY_FORMAT_VERSION = 1
 _EXAMPLE_CACHE_ZSTD_SUFFIX = ".pkl.zst"
@@ -798,13 +813,30 @@ def _build_centralized_examples_for_trajectory(
     predict_agent: bool = False,
     train_get_image: bool = False,
     causal_single_cache: bool = False,
+    partial_history: bool = False,
+    partial_step_index_mode: str = "global",
+    partial_observation_mode: str = "consume_once",
 ) -> list[CentralizedExample]:
+    if partial_history and predict_agent:
+        raise ValueError(
+            "partial_history requires predict_agent=False (the caller is the actor)"
+        )
+    if partial_step_index_mode not in _PARTIAL_STEP_INDEX_MODES:
+        raise ValueError(
+            f"partial_step_index_mode must be one of {sorted(_PARTIAL_STEP_INDEX_MODES)}"
+        )
+    if partial_observation_mode not in _PARTIAL_OBSERVATION_MODES:
+        raise ValueError(
+            f"partial_observation_mode must be one of {sorted(_PARTIAL_OBSERVATION_MODES)}"
+        )
     task_metadata = get_task_metadata(task_name)
     allowed_tool_specs = task_metadata.allowed_tool_specs
     if predict_agent:
         allowed_tool_specs = augment_tool_specs_for_agent_prediction(
             allowed_tool_specs, include_get_image=train_get_image
         )
+    elif partial_history and train_get_image:
+        allowed_tool_specs = augment_tool_specs_with_get_image(allowed_tool_specs)
     original_trajectory = _load_json(trajectory_dir / "original_trajectory.json")
     plan_steps = _load_json(trajectory_dir / "plan.json")
     metadata = _load_json(trajectory_dir / "metadata.json")
@@ -823,8 +855,14 @@ def _build_centralized_examples_for_trajectory(
 
     examples: list[CentralizedExample] = []
     history_steps: list[dict[str, Any]] = []
+    private_history: dict[str, list[dict[str, Any]]] = {
+        agent_id: [] for agent_id in AGENT_IDS
+    }
     latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
+    # Unconsumed observation per agent, for the non-"cache" partial modes.
+    pending_observation_by_agent: dict[str, tuple[list[str], list[str]] | None] = {}
     active_observation_agent: str | None = None
+    consuming_partial_images = partial_history and partial_observation_mode != "cache"
     for raw_step, plan_step, executed_step in zip(
         raw_steps,
         plan_steps,
@@ -836,11 +874,16 @@ def _build_centralized_examples_for_trajectory(
                 latest_observations_by_agent=latest_observations_by_agent,
                 plan_step=plan_step, task_name=task_name,
                 trajectory_id=trajectory_id, trajectory_dir=trajectory_dir)
+            if consuming_partial_images:
+                pending_observation_by_agent[raw_step["agent"]] = (
+                    latest_observations_by_agent.get(raw_step["agent"])
+                )
             continue
 
         effective_raw_step = raw_step
         if (
             not causal_single_cache
+            and not partial_history
             and raw_step["tool"] == "get_image"
             and set(raw_step["args"]["views"]).issubset(
                 {"top_view", "room_view", "map"}
@@ -852,7 +895,12 @@ def _build_centralized_examples_for_trajectory(
         if not executed_step.get("success", False):
             continue
 
-        if causal_single_cache:
+        if consuming_partial_images:
+            pending = pending_observation_by_agent.get(raw_step["agent"])
+            image_paths, observation_views = (
+                pending if pending is not None else ([], [])
+            )
+        elif causal_single_cache:
             if active_observation_agent is not None:
                 image_paths, observation_views = _require_latest_observation(
                     latest_observations_by_agent=latest_observations_by_agent,
@@ -862,7 +910,16 @@ def _build_centralized_examples_for_trajectory(
             else:
                 image_paths, observation_views = [], []
         elif raw_step["tool"] == "get_image":
-            image_paths, observation_views = [], []
+            if partial_history:
+                # The requester may legitimately already hold images (the July
+                # audit found 2,990 of 3,314 requests had a prior private
+                # cache); forcing image-free here is the target-conditioned
+                # leak the design doc rejects.
+                image_paths, observation_views = latest_observations_by_agent.get(
+                    raw_step["agent"], ([], [])
+                )
+            else:
+                image_paths, observation_views = [], []
         else:
             image_paths, observation_views = _require_latest_observation(
                 latest_observations_by_agent=latest_observations_by_agent,
@@ -876,13 +933,33 @@ def _build_centralized_examples_for_trajectory(
             sft_format=sft_format,
             predict_agent=predict_agent,
         )
+        effective_history_steps = (
+            private_history[effective_raw_step["agent"]]
+            if partial_history
+            else history_steps
+        )
+        prompt_step_index: int | None = raw_step["step"]
+        step_index_label = "Next global step index"
+        if partial_history and partial_step_index_mode != "global":
+            # Renumber by position in this agent's own private history so the
+            # index carries no information about the other agent's activity.
+            effective_history_steps = [
+                {**step, "step": (local_index if partial_step_index_mode == "local" else None)}
+                for local_index, step in enumerate(effective_history_steps)
+            ]
+            if partial_step_index_mode == "local":
+                prompt_step_index = len(effective_history_steps)
+                step_index_label = "Next local agent turn index"
+            else:
+                prompt_step_index = None
         user_prompt = build_user_prompt(
             composite_task=task_metadata.composite_task,
             task_instruction=metadata["task"],
             agent_id=effective_raw_step["agent"],
-            next_step_index=raw_step["step"],
+            next_step_index=prompt_step_index,
+            step_index_label=step_index_label,
             observation_views=observation_views,
-            history_steps=history_steps,
+            history_steps=effective_history_steps,
             allowed_tool_specs=allowed_tool_specs,
             sft_format=sft_format,
             observation_owner=active_observation_agent,
@@ -916,7 +993,7 @@ def _build_centralized_examples_for_trajectory(
                 task_instruction=metadata["task"],
                 observation_views=observation_views,
                 image_paths=list(image_paths),
-                history_steps=list(history_steps),
+                history_steps=list(effective_history_steps),
                 allowed_tool_specs=allowed_tool_specs,
                 tool_schemas=tool_schemas,
                 response_schema=response_schema,
@@ -932,11 +1009,29 @@ def _build_centralized_examples_for_trajectory(
                 ),
             )
         )
-        history_steps.append(_normalize_history_step(effective_raw_step))
+        normalized_step = _normalize_history_step(effective_raw_step)
+        if partial_history:
+            owner = effective_raw_step["agent"]
+            private_history[owner].append(normalized_step)
+            if raw_step["tool"] == "communicate":
+                recipient = raw_step["args"].get("to")
+                if recipient and recipient != owner and recipient in private_history:
+                    private_history[recipient].append(normalized_step)
+        else:
+            history_steps.append(normalized_step)
         _record_latest_observation(
             latest_observations_by_agent=latest_observations_by_agent,
             plan_step=plan_step, task_name=task_name,
             trajectory_id=trajectory_id, trajectory_dir=trajectory_dir)
+        if consuming_partial_images:
+            owner = raw_step["agent"]
+            if raw_step["tool"] == "get_image":
+                pending_observation_by_agent[owner] = latest_observations_by_agent.get(
+                    owner
+                )
+            else:
+                # Consumed by this decision; the agent must look again.
+                pending_observation_by_agent[owner] = None
         if causal_single_cache:
             if raw_step["tool"] == "get_image":
                 active_observation_agent = effective_raw_step["agent"]
@@ -1079,6 +1174,9 @@ def build_centralized_examples(
     predict_agent: bool = False,
     train_get_image: bool = False,
     causal_single_cache: bool = False,
+    partial_history: bool = False,
+    partial_step_index_mode: str = "global",
+    partial_observation_mode: str = "consume_once",
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step.
 
@@ -1086,6 +1184,11 @@ def build_centralized_examples(
     supervised output (as the "agent" argument), the tool set gains
     task_complete, and one synthetic terminal task_complete example is added
     per trajectory.
+
+    With partial_history (partial-observability v1): each example's history
+    is restricted to the acting agent's own prior actions plus delivered
+    `communicate` messages, instead of the full joint history. Mutually
+    exclusive with predict_agent/train_get_image (see design doc stage 2).
     """
 
     sft_format = _validate_sft_format(sft_format)
@@ -1093,6 +1196,10 @@ def build_centralized_examples(
     if causal_single_cache and not (predict_agent and train_get_image):
         raise ValueError(
             "causal_single_cache requires predict_agent=True and train_get_image=True"
+        )
+    if partial_history and predict_agent:
+        raise ValueError(
+            "partial_history requires predict_agent=False (the caller is the actor)"
         )
     examples: list[CentralizedExample] = []
 
@@ -1102,6 +1209,10 @@ def build_centralized_examples(
         if predict_agent:
             effective_tool_specs = augment_tool_specs_for_agent_prediction(
                 effective_tool_specs, include_get_image=train_get_image
+            )
+        elif partial_history and train_get_image:
+            effective_tool_specs = augment_tool_specs_with_get_image(
+                effective_tool_specs
             )
         trajectory_dirs = _trajectory_dirs_for_task(
             dataset_root=dataset_root,
@@ -1141,6 +1252,9 @@ def build_centralized_examples(
                 predict_agent=predict_agent,
                 train_get_image=train_get_image,
                 causal_single_cache=causal_single_cache,
+                partial_history=partial_history,
+                partial_step_index_mode=partial_step_index_mode,
+                partial_observation_mode=partial_observation_mode,
             )
 
         if example_build_workers > 1 and len(selected_trajectory_dirs) > 1:
@@ -1186,6 +1300,9 @@ def build_example_cache_fingerprint(
     predict_agent: bool = False,
     train_get_image: bool = False,
     causal_single_cache: bool = False,
+    partial_history: bool = False,
+    partial_step_index_mode: str = "global",
+    partial_observation_mode: str = "consume_once",
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
 
@@ -1235,6 +1352,14 @@ def build_example_cache_fingerprint(
         fingerprint["train_get_image"] = True
     if causal_single_cache:
         fingerprint["causal_single_cache"] = True
+    if partial_history:
+        fingerprint["partial_history"] = True
+        if partial_step_index_mode != "global":
+            fingerprint["partial_step_index_mode"] = partial_step_index_mode
+        # "cache" stays unstamped so pre-existing partial caches (built when
+        # it was the default) remain valid; any other mode is stamped.
+        if partial_observation_mode != "cache":
+            fingerprint["partial_observation_mode"] = partial_observation_mode
     return fingerprint
 
 

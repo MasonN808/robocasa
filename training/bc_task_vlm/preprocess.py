@@ -137,6 +137,35 @@ def parse_args() -> argparse.Namespace:
         help="Build v3 examples from one prefix-derived, agent-owned visual cache.",
     )
     parser.add_argument(
+        "--partial-observation-mode",
+        choices=("cache", "consume-once"),
+        default="consume-once",
+        help=(
+            "With --partial-history: 'cache' keeps a persistent per-agent "
+            "observation; 'consume-once' feeds a get_image result to that "
+            "agent's next target tool call, then discards it."
+        ),
+    )
+    parser.add_argument(
+        "--partial-step-index-mode",
+        choices=("global", "local", "none"),
+        default="global",
+        help=(
+            "With --partial-history: 'global' keeps the leaky joint index, "
+            "'local' renumbers per agent, 'none' omits step indices."
+        ),
+    )
+    parser.add_argument(
+        "--partial-history",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Partial-observability v1: restrict each example's history to the "
+            "acting agent's own actions plus delivered communicate messages. "
+            "Mutually exclusive with --predict-acting-agent/--train-get-image."
+        ),
+    )
+    parser.add_argument(
         "--validation-split-mode",
         choices=("same-task", "task-holdout"),
         default="same-task",
@@ -581,6 +610,9 @@ def _build_examples_for_tasks(
     predict_agent: bool = False,
     train_get_image: bool = False,
     causal_single_cache: bool = False,
+    partial_history: bool = False,
+    partial_step_index_mode: str = "global",
+    partial_observation_mode: str = "consume_once",
     example_filter: Callable[[str], bool] | None = None,
 ) -> list[Any]:
     examples: list[Any] = []
@@ -608,6 +640,12 @@ def _build_examples_for_tasks(
                 predict_agent=predict_agent,
                 train_get_image=train_get_image,
                 causal_single_cache=causal_single_cache,
+                partial_history=partial_history,
+        partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
+                partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
+                partial_observation_mode=partial_observation_mode,
             )
             cache_path = build_example_cache_path(
                 cache_dir=training_samples_cache_dir,
@@ -677,6 +715,16 @@ def _build_examples_for_tasks(
                         predict_agent=predict_agent,
                         train_get_image=train_get_image,
                         causal_single_cache=causal_single_cache,
+                        partial_history=partial_history,
+        partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
+                        partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
+                        partial_observation_mode=partial_observation_mode,
+                partial_observation_mode=partial_observation_mode,
+                partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
+                partial_observation_mode=partial_observation_mode,
                     )
                     if (
                         cache_allowed
@@ -716,15 +764,28 @@ def main() -> None:
     predict_acting_agent = getattr(args, "predict_acting_agent", False)
     train_get_image = getattr(args, "train_get_image", False)
     causal_single_cache = getattr(args, "causal_single_cache", False)
+    partial_history = getattr(args, "partial_history", False)
+    partial_step_index_mode = getattr(args, "partial_step_index_mode", "global")
+    partial_observation_mode = getattr(
+        args, "partial_observation_mode", "consume-once"
+    ).replace("-", "_")
     if args.skip_existing_artifact_image_validation:
         args.resume_existing_artifact_images = "unchecked"
 
-    if train_get_image and not predict_acting_agent:
-        raise ValueError("--train-get-image requires --predict-acting-agent.")
+    if train_get_image and not (predict_acting_agent or partial_history):
+        raise ValueError(
+            "--train-get-image requires --predict-acting-agent (centralized v3) "
+            "or --partial-history (partial-observability v3)."
+        )
     if causal_single_cache and not (predict_acting_agent and train_get_image):
         raise ValueError(
             "--causal-single-cache requires --predict-acting-agent "
             "and --train-get-image."
+        )
+    if partial_history and predict_acting_agent:
+        raise ValueError(
+            "--partial-history requires --no-predict-acting-agent: under "
+            "partial observability the caller IS the actor."
         )
     shard_args = (
         args.pretokenize_shard_index,
@@ -899,6 +960,9 @@ def main() -> None:
         predict_agent=predict_acting_agent,
         train_get_image=train_get_image,
         causal_single_cache=causal_single_cache,
+        partial_history=partial_history,
+        partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
         example_filter=pretokenization_shard_sample_id_filter,
     )
     validation_examples = _build_examples_for_tasks(
@@ -907,6 +971,9 @@ def main() -> None:
         predict_agent=predict_acting_agent,
         train_get_image=train_get_image,
         causal_single_cache=causal_single_cache,
+        partial_history=partial_history,
+        partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
         task_names=val_tasks,
         split_name="validation",
         trajectory_ids_by_task=val_trajectory_ids_by_task,
@@ -1111,6 +1178,9 @@ def main() -> None:
         "predict_acting_agent": predict_acting_agent,
         "train_get_image": train_get_image,
         "causal_single_cache": causal_single_cache,
+        "partial_history": partial_history,
+        "partial_step_index_mode": partial_step_index_mode,
+        "partial_observation_mode": partial_observation_mode,
         "pretokenization": pretokenization_config,
         "pretokenize_batch_size": args.pretokenize_batch_size,
         "push_to_hub": args.push_to_hub,

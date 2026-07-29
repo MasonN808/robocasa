@@ -68,6 +68,9 @@ class RunConfiguration:
     predict_acting_agent: bool
     train_get_image: bool
     causal_single_cache: bool
+    partial_history: bool
+    partial_step_index_mode: str
+    partial_observation_mode: str
     init_adapter_path: str | None
     use_example_cache: bool
     trust_example_cache: bool
@@ -224,6 +227,36 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Use causal single-agent visual cache semantics for active-observation SFT.",
+    )
+    parser.add_argument(
+        "--partial-history",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Partial-observability v1 SFT: restrict each example's history to "
+            "the acting agent's own actions plus delivered communicate "
+            "messages, instead of the full joint history. Mutually exclusive "
+            "with --predict-acting-agent/--train-get-image."
+        ),
+    )
+    parser.add_argument(
+        "--partial-step-index-mode",
+        choices=("global", "local", "none"),
+        default="global",
+        help=(
+            "With --partial-history: how step indices are rendered. 'global' "
+            "keeps the joint demonstration index (leaks the other agent's "
+            "hidden activity via gaps between this agent's turns), 'local' "
+            "renumbers per agent, 'none' omits indices from the prompt."
+        ),
+    )
+    parser.add_argument(
+        "--partial-observation-mode",
+        choices=("cache", "consume-once"),
+        default="consume-once",
+        help=(
+            'With --partial-history: how pixels are supplied. "cache" keeps a persistent per-agent observation; "consume-once" feeds a get_image result to that agent\'s next target tool call, then discards it.'
+        ),
     )
     parser.add_argument(
         "--init-adapter-path",
@@ -654,6 +687,9 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         predict_acting_agent=args.predict_acting_agent,
         train_get_image=args.train_get_image,
         causal_single_cache=args.causal_single_cache,
+        partial_history=args.partial_history,
+        partial_step_index_mode=args.partial_step_index_mode,
+        partial_observation_mode=args.partial_observation_mode.replace('-', '_'),
         init_adapter_path=args.init_adapter_path,
         use_example_cache=args.use_example_cache,
         trust_example_cache=args.trust_example_cache,
@@ -951,6 +987,9 @@ def _build_examples_for_tasks(
     predict_agent: bool = False,
     train_get_image: bool = False,
     causal_single_cache: bool = False,
+    partial_history: bool = False,
+    partial_step_index_mode: str = "global",
+    partial_observation_mode: str = "cache",
     use_example_cache: bool,
     trust_example_cache: bool,
     training_samples_cache_dir: Path,
@@ -1008,6 +1047,9 @@ def _build_examples_for_tasks(
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
                     causal_single_cache=causal_single_cache,
+                    partial_history=partial_history,
+                    partial_step_index_mode=partial_step_index_mode,
+                    partial_observation_mode=partial_observation_mode,
                 )
                 trajectory_count = len(fingerprint.get("trajectories", ()))
                 task_examples = load_examples_from_cache(
@@ -1048,6 +1090,9 @@ def _build_examples_for_tasks(
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
                     causal_single_cache=causal_single_cache,
+                    partial_history=partial_history,
+                    partial_step_index_mode=partial_step_index_mode,
+                    partial_observation_mode=partial_observation_mode,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1081,6 +1126,9 @@ def _build_examples_for_tasks(
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
                     causal_single_cache=causal_single_cache,
+                    partial_history=partial_history,
+                    partial_step_index_mode=partial_step_index_mode,
+                    partial_observation_mode=partial_observation_mode,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1530,8 +1578,13 @@ class StructuredEvalTrainer(Trainer):
 def main() -> None:
     load_dotenv_file()
     args = parse_args()
-    if args.train_get_image and not args.predict_acting_agent:
-        raise SystemExit("--train-get-image requires --predict-acting-agent.")
+    if args.train_get_image and not (
+        args.predict_acting_agent or args.partial_history
+    ):
+        raise SystemExit(
+            "--train-get-image requires --predict-acting-agent (centralized v3) "
+            "or --partial-history (partial-observability v3)."
+        )
     config = _build_run_configuration(args)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1541,6 +1594,11 @@ def main() -> None:
         raise SystemExit(
             "--causal-single-cache requires --predict-acting-agent "
             "and --train-get-image."
+        )
+    if args.partial_history and args.predict_acting_agent:
+        raise SystemExit(
+            "--partial-history requires --no-predict-acting-agent: under "
+            "partial observability the caller IS the actor."
         )
 
     _configure_wandb(args, config.report_to, output_dir)
@@ -1633,6 +1691,9 @@ def main() -> None:
         predict_agent=config.predict_acting_agent,
         train_get_image=config.train_get_image,
         causal_single_cache=config.causal_single_cache,
+        partial_history=config.partial_history,
+        partial_step_index_mode=config.partial_step_index_mode,
+        partial_observation_mode=config.partial_observation_mode,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
@@ -1651,6 +1712,9 @@ def main() -> None:
         predict_agent=config.predict_acting_agent,
         train_get_image=config.train_get_image,
         causal_single_cache=config.causal_single_cache,
+        partial_history=config.partial_history,
+        partial_step_index_mode=config.partial_step_index_mode,
+        partial_observation_mode=config.partial_observation_mode,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),

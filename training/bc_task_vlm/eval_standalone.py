@@ -62,7 +62,7 @@ METRICS_FILENAME = "structured_eval_metrics.json"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend", choices=("hf", "gemini"), required=True)
+    parser.add_argument("--backend", choices=("hf", "gemini", "vllm"), required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument(
         "--dataset-root",
@@ -125,6 +125,36 @@ def parse_args() -> argparse.Namespace:
         help="Rebuild v3 examples with the causal single-cache contract.",
     )
     parser.add_argument(
+        "--partial-history",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Partial-observability v1 eval: restrict each example's history "
+            "to the acting agent's own actions plus delivered communicate "
+            "messages. Mutually exclusive with --predict-acting-agent/"
+            "--train-get-image."
+        ),
+    )
+    parser.add_argument(
+        "--partial-step-index-mode",
+        choices=("global", "local", "none"),
+        default="global",
+        help=(
+            "With --partial-history: how step indices are rendered. 'global' "
+            "keeps the joint demonstration index (leaks the other agent's "
+            "hidden activity via gaps), 'local' renumbers per agent, 'none' "
+            "omits indices from the prompt."
+        ),
+    )
+    parser.add_argument(
+        "--partial-observation-mode",
+        choices=("cache", "consume-once"),
+        default="consume-once",
+        help=(
+            'With --partial-history: how pixels are supplied. "cache" keeps a persistent per-agent observation; "consume-once" feeds a get_image result to that agent\'s next target tool call, then discards it.'
+        ),
+    )
+    parser.add_argument(
         "--few-shot",
         type=int,
         default=0,
@@ -180,6 +210,21 @@ def parse_args() -> argparse.Namespace:
     )
     hf_group.add_argument("--num-workers", type=int, default=0)
     hf_group.add_argument("--trust-remote-code", action="store_true")
+
+    vllm_group = parser.add_argument_group("vllm backend")
+    vllm_group.add_argument(
+        "--vllm-base-url",
+        default="http://127.0.0.1:8000/v1",
+        help="OpenAI-compatible vLLM API base URL.",
+    )
+    vllm_group.add_argument(
+        "--vllm-model",
+        default=None,
+        help="Served model or LoRA name used in requests. Defaults to "
+        "--adapter-path, else --model-name-or-path.",
+    )
+    vllm_group.add_argument("--vllm-api-key", default=None)
+    vllm_group.add_argument("--vllm-request-timeout", type=float, default=180.0)
 
     gemini_group = parser.add_argument_group("gemini backend")
     gemini_group.add_argument("--model", type=str, default="gemini-3-flash-preview")
@@ -320,6 +365,9 @@ def load_eval_samples(
     predict_agent: bool = False,
     train_get_image: bool = False,
     causal_single_cache: bool = False,
+    partial_history: bool = False,
+    partial_step_index_mode: str = "global",
+    partial_observation_mode: str = "cache",
 ) -> list[EvalSample]:
     manifest_samples = manifest["samples"]
     if max_samples is not None:
@@ -343,6 +391,9 @@ def load_eval_samples(
         predict_agent=predict_agent,
         train_get_image=train_get_image,
         causal_single_cache=causal_single_cache,
+        partial_history=partial_history,
+        partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
     )
     examples_by_id = {example.sample_id: example for example in examples}
 
@@ -781,6 +832,87 @@ _GEMINI_MIME_BY_SUFFIX = {
 }
 
 
+def run_vllm_backend(
+    eval_samples: list[EvalSample],
+    args: argparse.Namespace,
+    writer: "RecordWriter",
+) -> None:
+    """Scores samples against a localhost vLLM OpenAI-compatible server.
+
+    Reuses live_sim_eval.VllmPolicy so off-sim and live-sim share one request
+    encoder: identical message/image serialization and identical tool-call
+    decoding, which keeps the two eval regimes comparable.
+    """
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from training.bc_task_vlm.live_sim_eval import VllmPolicy
+
+    if not args.vllm_model:
+        args.vllm_model = str(args.adapter_path or args.model_name_or_path or "")
+    if not args.vllm_model:
+        raise ValueError(
+            "--vllm-model (or --adapter-path/--model-name-or-path) is required "
+            "for the vllm backend."
+        )
+    policy = VllmPolicy(args)
+    total = len(eval_samples)
+    done = 0
+    lock = threading.Lock()
+
+    def worker(sample: EvalSample) -> None:
+        nonlocal done
+        started = time.perf_counter()
+        last_error: str | None = None
+        for attempt in range(1, args.max_retries + 1):
+            try:
+                decoded_text = policy.generate(sample.feature)
+                record = score_structured_prediction(
+                    decoded_text=decoded_text,
+                    metadata=sample.metadata,
+                    sft_format=args.sft_format,
+                    predict_agent=args.predict_acting_agent,
+                )
+                record["generation_info"] = {
+                    "backend": "vllm",
+                    "model": args.vllm_model,
+                    "attempts": attempt,
+                    "elapsed_s": round(time.perf_counter() - started, 3),
+                    "usage": dict(policy.last_usage or {}),
+                }
+                with lock:
+                    writer.write(record)
+                    done += 1
+                    if done % 50 == 0 or done == total:
+                        print(f"[vllm] {done}/{total}", flush=True)
+                return
+            except Exception as exc:  # transport/server errors are retryable
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt < args.max_retries:
+                    time.sleep(min(2 ** attempt, 30))
+        record = score_structured_prediction(
+            decoded_text="",
+            metadata=sample.metadata,
+            sft_format=args.sft_format,
+            predict_agent=args.predict_acting_agent,
+        )
+        record["generation_info"] = {
+            "backend": "vllm",
+            "model": args.vllm_model,
+            "attempts": args.max_retries,
+            "error": last_error,
+        }
+        with lock:
+            writer.write(record)
+            done += 1
+
+    with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+        futures = [executor.submit(worker, sample) for sample in eval_samples]
+        for future in as_completed(futures):
+            future.result()
+    print(f"[vllm] finished {done} samples", flush=True)
+
+
 def run_gemini_backend(
     eval_samples: list[EvalSample],
     args: argparse.Namespace,
@@ -1019,6 +1151,9 @@ _PROMPT_DEFINING_CONFIG_KEYS = (
     "native_tools",
     "predict_acting_agent",
     "train_get_image",
+    "partial_history",
+    "partial_step_index_mode",
+    "partial_observation_mode",
     "temperature",
     "thinking_budget",
     "enable_thinking",
@@ -1096,14 +1231,24 @@ def finalize_metrics(
 
 def main() -> None:
     args = parse_args()
-    if args.train_get_image and not args.predict_acting_agent:
-        raise SystemExit("--train-get-image requires --predict-acting-agent.")
+    if args.train_get_image and not (
+        args.predict_acting_agent or args.partial_history
+    ):
+        raise SystemExit(
+            "--train-get-image requires --predict-acting-agent (centralized v3) "
+            "or --partial-history (partial-observability v3)."
+        )
     if args.causal_single_cache and not (
         args.predict_acting_agent and args.train_get_image
     ):
         raise SystemExit(
             "--causal-single-cache requires --predict-acting-agent "
             "and --train-get-image."
+        )
+    if args.partial_history and args.predict_acting_agent:
+        raise SystemExit(
+            "--partial-history requires --no-predict-acting-agent: under "
+            "partial observability the caller IS the actor."
         )
     if args.predict_acting_agent and args.forced_json and not args.native_tools:
         raise SystemExit(
@@ -1134,6 +1279,9 @@ def main() -> None:
         predict_agent=args.predict_acting_agent,
         train_get_image=args.train_get_image,
         causal_single_cache=args.causal_single_cache,
+        partial_history=args.partial_history,
+        partial_step_index_mode=args.partial_step_index_mode,
+        partial_observation_mode=args.partial_observation_mode.replace('-', '_'),
     )
     manifest_sample_ids = [sample.sample_id for sample in eval_samples]
     dump_prompts(eval_samples, count=args.dump_prompts, output_dir=args.output_dir)
@@ -1168,6 +1316,8 @@ def main() -> None:
         if pending_samples:
             if args.backend == "hf":
                 run_hf_backend(pending_samples, args, writer)
+            elif args.backend == "vllm":
+                run_vllm_backend(pending_samples, args, writer)
             else:
                 run_gemini_backend(pending_samples, args, writer)
     finally:

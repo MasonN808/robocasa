@@ -1,9 +1,13 @@
+
 # Design: centralized Task-VLM vs distributed partial observability
 
-Status: brainstorming design options; proposed follow-up to v3
-active-observation SFT. The contracts below are not final until they are
-implemented, smoke-tested, and compared experimentally.
-Date: 2026-07-22
+Status: partial-observability **v1 and v3 off-sim are implemented** (dataset
+builder, eval harness, manifest builder, tests) and a partial-v1 adapter is in
+training. The distributed runtime (per-agent scheduler, concurrency, live-sim)
+remains design-only. Sections marked "Superseded" or "Revised July 2026" were
+changed by corpus measurement — see Corpus measurements behind the July 2026
+revisions.
+Date: 2026-07-22, revised 2026-07-25
 
 ## Purpose
 
@@ -17,7 +21,8 @@ The target architecture is instead a shared-weight distributed policy:
 - one model and one model server;
 - two logical agent sessions with separate private state;
 - agent-owned `get_image` results, including global-camera results;
-- explicit observation freshness independent of memory lifetime;
+- observations consumed by the next decision, so every attached image is fresh
+  by construction (revised; see Memory lifetime and freshness);
 - concurrent agent decisions and, eventually, overlapping physical work;
 - no learned `yield_control` or centralized next-agent oracle;
 - no global step number as an input dependency.
@@ -32,10 +37,15 @@ servers.
 2. A `get_image` result is revealed only to the requesting agent.
 3. Identical rendering may be memoized internally without granting access to
    an agent that did not request it.
-4. An agent's latest visual memory persists until replaced. Freshness is tracked
-   separately and changes when the world changes.
+4. **(Revised July 2026)** A `get_image` result feeds that agent's next target
+   tool call and is then discarded (`--partial-observation-mode consume-once`).
+   Every attached image is therefore fresh by construction, and no freshness
+   metadata is emitted — a freshness flag would leak the other agent's hidden
+   activity for the 20% of staleness it alone causes. See Memory lifetime and
+   freshness.
 5. Physical actions require a fresh, agent-owned observation with appropriate
-   views. Communication may use stale private memory.
+   views. Under `consume-once` this holds automatically, and the corpus already
+   satisfies it: 0 of 9,153 physical-action targets carried a stale image.
 6. Both agents may request decisions independently whenever idle. Their
    requests are multiplexed or dynamically batched by one model server.
 7. The episode runtime is a deterministic event scheduler, not an intelligent
@@ -45,6 +55,34 @@ servers.
 9. A causal centralized Task-VLM remains a valid baseline: it sees the complete
    joint prefix and both agents' prefix-derived caches, then predicts which
    agent acts. It must not use the current target to construct those inputs.
+10. Rejected or non-invoked proposals never update agent-visible state. Only
+    accepted/executed events call the state-update function; a model call that
+    is generated but not accepted must not be appended to any agent's private
+    history, cache, or inbox, even for the agent that proposed it.
+11. The runtime scheduler is per-agent, not a shared central arbiter. Each
+    logical agent runs an independent loop that blocks only on its own
+    outstanding tool call, exactly like a standard single-agent tool-use loop.
+    The only shared state is the environment itself (resource locks, inboxes,
+    world version). Resource contention surfaces to the losing agent as an
+    ordinary tool-call error, not as a joint decision the model must learn to
+    coordinate.
+12. Sequencing dependencies between agents (agent 1's action requires agent
+    0's action to have actually completed) are enforced as FSM legality
+    preconditions on the dependent tool call itself, never inferred from
+    message content. This keeps the check consistent with partial
+    observability: it reveals only whether the caller's own action is
+    currently valid, never the other agent's private state or reasoning.
+13. The model never predicts the acting agent under partial observability: the
+    caller **is** the actor. Agent prediction is a centralized-scheduling
+    construct; in the distributed design the WHO decision belongs to the
+    runtime's per-agent loops (decision #11), not the policy. `partial_history`
+    with `predict_agent` is rejected at build time.
+14. Model inputs carry no joint step index. `--partial-step-index-mode none`
+    (default for partial runs) omits indices entirely; `local` renumbers per
+    agent. The joint index leaks the other agent's activity through the gaps
+    between this agent's turns. Measured cost of removing it: none — all three
+    modes scored within noise zero-shot (exact tool-call .323 global / .325
+    local / .328 none, 95% CI half-width ~.028).
 
 ## Why the current centralized contract is insufficient
 
@@ -57,7 +95,6 @@ distributed partial-observability interpretation:
    agent. Live inference must choose its input before it knows the output agent.
 3. Global-only requests are normalized to a placeholder agent, erasing which
    logical agent acquired the observation.
-4. Every example sees the joint symbolic history, including the other agent's
    private tool calls and actions, whether or not they were communicated.
 
 This creates a circular live-inference dependency:
@@ -309,36 +346,54 @@ identical.
 
 ## Memory lifetime and freshness
 
-One-step image consumption is not recommended. It creates artificial amnesia
-and conflicts with the observed reuse of caches for communication and later
-image requests.
+**Superseded (July 2026).** This section previously recommended a persistent
+per-agent cache plus explicit `Fresh: false` metadata, and rejected one-step
+image consumption as "artificial amnesia". Measurement on the full training
+corpus reversed both conclusions. The implemented default is
+`--partial-observation-mode consume-once`: a `get_image` result feeds that
+agent's **next** target tool call and is then discarded. `cache` is retained
+as a flag value for ablation.
 
-Instead, distinguish memory from action validity:
+Three measurements drove the change:
 
-- The latest agent-owned observation remains private memory until replaced.
-- It is fresh while its captured world version matches the relevant current
-  world version.
-- A physical state change marks affected observations stale.
-- The model may still receive stale private memory if it is explicitly labelled
-  stale.
-- The legality gate must reject a physical action that lacks a sufficiently
-  fresh, agent-owned observation.
-- Communication may proceed with stale visual memory.
+| finding | measurement |
+| --- | --- |
+| The cache does no work where vision matters | **100%** of 9,153 physical-action targets are immediately preceded by that agent's own `get_image` — zero exceptions |
+| Most cached pixels are wrong | **70%** of 18,306 `get_image` targets with a prior cache were shown a *stale* image; 34% of communicate targets likewise |
+| Physical actions never act on stale pixels | **0** of 9,153 physical targets had a stale cache |
 
-The input must state:
+Under `consume-once` every attached image is fresh **by construction**, so the
+freshness question does not arise: there is no stale pixel to label or drop.
 
-```text
-Observation owner: agent_0
-Views: wrist, agentview_center
-Captured world version: 18
-Current world version: 20
-Fresh: false
-```
+### Why a freshness label would leak
 
-Attaching stale images without freshness metadata is unsafe because the model
-may treat them as the current scene. Dropping all stale pixels is a simpler
-initial option, but it weakens visual memory. Whichever policy is chosen must
-be deterministic and independent of the current target tool.
+The earlier `Fresh: false` proposal is not privacy-neutral, and this is the
+decisive argument against it. Splitting the causes of staleness:
+
+| cause | share of `get_image` targets |
+| --- | --- |
+| the agent's **own** prior action (inferable from its private history) | 50% |
+| genuinely fresh | 30% |
+| **the other agent's action only — invisible to this agent** | 20% |
+
+For that last 20%, telling agent 1 "your observation is stale" reveals, in one
+bit, that agent 0 acted. That is the same covert channel as the joint step
+index (see Step numbers and clocks), and it is forbidden by the same
+reasoning. A self-caused-only freshness label would be privacy-clean but
+redundant, since the agent's own history already implies it.
+
+The correct response to the unknowable 20% is **defensive re-observation** —
+which is also what a real robot should do when it cannot see what its teammate
+has been doing. Training data already teaches this: the expert always looks
+before acting. Watch `redundant request rate` in evaluation to quantify the
+cost of that uncertainty.
+
+### Residual role of the legality gate
+
+Off-sim training never exercises a stale-action case (0 of 9,153), so the
+legality gate is not needed to build the dataset. It remains worthwhile in
+live-sim, where a model's own choices could reach a state the demonstrations
+never contain.
 
 At minimum, the following tools mutate pose or scene state and invalidate
 relevant fresh observations:
@@ -446,23 +501,39 @@ The requests have independent messages, images, caches, and request IDs. vLLM
 may dynamically batch them on one GPU. Prefix-cache reuse is acceptable, but
 conversation or KV state must never be shared semantically between agents.
 
-The episode runtime uses an event loop:
+### Per-agent loop, not a shared central scheduler
+
+The scheduler is per agent, modeled directly on an ordinary single-agent
+tool-use loop rather than a joint arbiter. Each logical agent runs its own
+independent loop:
 
 ```text
-while task is not terminal:
-    identify idle, unblocked agents
-    snapshot the world state visible at this decision boundary
-    submit all ready agent requests concurrently
-    validate proposals against the same snapshot
-    resolve resource conflicts deterministically
-    schedule compatible tools
-    advance simulation events
-    deliver tool results and messages to their owners
-    update world version, freshness, and success checks
+while episode not terminal:
+    if agent has an outstanding tool call:
+        block until that specific call returns
+    else:
+        propose(agent_state[agent])
+        submit the tool call to the shared environment
+    on result: append to this agent's own private_history only
 ```
 
-This runtime coordinates clocks and resources; it does not choose semantic
-actions for either agent.
+"Waiting for a tool" is therefore not a learned decision, the same way a
+single-agent coding loop does not decide to wait for its own shell command —
+the harness simply does not re-invoke the agent until its own call resolves.
+Two agents running this loop independently need no joint decision batch,
+snapshot-and-resolve step, or shared eligibility state machine; the only
+shared component is the environment underneath both loops (resource locks,
+inboxes, world version, FSM legality). Concurrency emerges from running two
+independent loops against one shared environment, not from an explicit
+central event loop that decides both agents' turns at once.
+
+Resource contention is therefore an ordinary tool-call error, not a joint
+decision: if agent_0's call would conflict with a lock agent_1 currently
+holds, the environment simply returns a failed result to agent_0's own loop,
+which reacts to it the same way it would react to any other tool error
+(retry, communicate, try something else). No new "standby" primitive or
+central conflict-resolution batch is required for this case (see Resource
+conflicts and Sequencing dependencies below).
 
 ### Concurrency implementation levels
 
@@ -510,24 +581,77 @@ workspace zone
 receptacle or destination
 ```
 
-Proposals are validated against the same pre-batch state. Disjoint proposals
-may proceed together. Conflicting proposals must not gain an arbitrary hidden
-advantage from Python call order.
+Because the scheduler is per-agent (see above), resource conflicts do not
+require a joint decision batch. The environment holds the lock table; each
+agent's independent loop calls into it and gets an ordinary success or
+failure result for its own attempted call. Conflicting proposals must not gain
+an arbitrary hidden advantage from Python call order, but this is an
+environment-level atomicity property (like a mutex acquire), not a property
+that requires collecting both agents' proposals before deciding either one.
 
-Initial deterministic policy:
+Initial deterministic policy (**revised**: rejecting *both* proposals livelocks
+under deterministic decoding — see the implementation findings section. A
+visible, constant priority rule now decides which proceeds):
 
-- reject both conflicting proposals with the same structured conflict result;
-- let both agents replan from the updated inbox and history;
-- record the conflict as a coordination error, not a harness error.
+- the losing call fails with a structured, ordinary tool-call error (e.g.
+  resource held by the other agent);
+- the losing agent's own loop reacts to that error like any other tool
+  failure — retry, communicate, or attempt something else;
+- record the conflict as a coordination event for metrics, not a harness
+  error, and not as a joint "reject both" decision the model must learn.
 
 A seeded priority or reservation protocol may be added later, but must be
-visible to the agents and constant across compared runs.
+visible to the agents (via the ordinary error result) and constant across
+compared runs.
+
+## Sequencing dependencies and FSM legality gating
+
+A distinct problem from resource contention: agent 1's action can depend on
+agent 0's action having actually *completed*, independent of any resource
+lock (e.g. agent 1 places an item that requires agent 0 to have already
+retrieved it). Agents may narrate this dependency ("I'll wait for your
+confirmation") in `communicate`, but the runtime must not parse message
+content to decide whether the dependent action is allowed — that would
+require semantic understanding of the message and would blur the privacy
+boundary.
+
+Instead, the dependent tool call carries an ordinary FSM legality
+precondition, the same mechanism already used for observation freshness:
+
+- the FSM/task graph declares that agent 1's action requires agent 0's
+  action's real world-state effect, not agent 0's message;
+- if agent 1's own loop attempts the action before that effect exists, the
+  tool call fails with an ordinary precondition-not-met error, exactly like a
+  resource conflict;
+- agent 1's loop reacts to the failure the same way it reacts to any other
+  tool error, and may retry after (real or eventual) confirmation.
+
+This does not compromise partial observability: the rejection reveals only
+that the caller's own action is currently invalid, never agent 0's private
+state, images, or reasoning — the same class of feedback as a resource-lock
+failure. It also means no `standby`/`wait` action is required to solve this
+case: an early attempt simply fails and the agent's ordinary tool-use loop
+retries, at the cost of a wasted call rather than a correctness problem (see
+zero-progress tracking below). Key the legality check to the real task
+dependency in the FSM goal graph, not to the verbal commitment — the message
+is narrative, the precondition is the enforcement mechanism.
+
+As of the July 2026 trajectory audit there is no evidence of an
+*information*-blocked case in the existing demonstrations (an agent lacking
+information it has no resource or sequencing dependency for) — only
+resource- and sequencing-blocked cases, both handled above without a learned
+wait primitive. Revisit if live-sim collection surfaces a genuine
+information-blocked case.
 
 ## Standby, progress, and deadlock (brainstorming)
 
-An agent sometimes has no useful action while the other agent continues
-working. A durable `standby` or `wait` action is therefore a candidate part of
-the protocol. It is not `yield_control`:
+Resource contention and sequencing dependencies are handled above via
+ordinary tool-call failures on the per-agent loop, without a new action. A
+durable `standby` primitive remains open only for a case not yet evidenced in
+the data: an agent that has no resource or sequencing block on any action,
+but genuinely has nothing useful to attempt. Do not build this speculatively;
+revisit only if live-sim smoke testing surfaces it. If added, it is not
+`yield_control`:
 
 - `yield_control` implies exclusive turn-taking or transfer of control;
 - `standby` changes only the caller's state and does not prevent the other
@@ -833,23 +957,59 @@ in the simplest existing training/evaluation setting.
 1. **Near-term existing-v3 diagnostic:** use the causal single-cache live-sim
    mode described above. Do not call it a true partial-observability result and
    do not use it as the training specification for the future partial policy.
-2. **Partial-observability v1 dataset:** construct one example for the expert
-   acting agent with caller identity fixed, that agent's own cached image,
-   private action history, sent messages, received messages, and explicitly
-   public events. Do not predict the acting agent and do not train `get_image`.
-3. **Partial-observability v1 off-sim training:** train a fresh adapter at the
-   same scale as centralized v1. This isolates history/image privacy from active
-   observation, self-scheduling, live execution, and concurrency.
-4. **Matched off-sim evaluation:** evaluate centralized v1 and partial v1 on
-   the same expert targets and splits. Report per-step accuracy, judged
-   communication, trajectory-all-correct rate, and correct-prefix fraction.
+2. **Partial-observability v1 dataset — implemented:** a `partial_history`
+   flag on `_build_centralized_examples_for_trajectory`/
+   `build_centralized_examples` (`training/bc_task_vlm/dataset.py`) replaces
+   the flat joint `history_steps` with a per-agent `private_history` dict:
+   each step's example sees only the acting agent's own prior actions plus
+   `communicate` events delivered to it (recipient appended at execution
+   time, not before). Images were already agent-owned via
+   `latest_observations_by_agent`, so no change was needed there. Guarded to
+   require `predict_agent=False` and `train_get_image=False`. Threaded as
+   `--partial-history` through `main.py`, `eval_standalone.py`, and
+   `preprocess.py`, alongside the existing `--causal-single-cache` flag.
+   Tests: `tests/test_bc_task_vlm_partial_observability.py` (agent isolation,
+   message delivery timing, prefix invariance, the flag-combination guard,
+   and cache-fingerprint invalidation).
+3. **Partial-observability v1 off-sim training — supported, not yet run:**
+   `main.py --partial-history` trains a fresh adapter at the same scale as
+   centralized v1; no dedicated partial-history adapter has been trained yet
+   (see the diagnostic sweep below for why).
+4. **Matched off-sim evaluation — harness implemented, diagnostic sweep
+   pending a dedicated adapter:** `eval_standalone.py --partial-history`
+   reuses the existing teacher-forced `EvalSample`/`finalize_metrics` scoring
+   loop unchanged, just fed per-agent-private examples. Before training a
+   dedicated adapter,
+   `training/scripts/run_partial_observability_backend_sweep.sh` runs the
+   same partial-history-formatted off-sim samples through five backends with
+   no dedicated partial-history training (Gemini 3 Flash, a second Gemini
+   model, base Qwen3-VL-8B-Instruct, and the existing centralized v1/v1.5 SFT
+   adapters evaluated out-of-distribution on this prompt shape) to gauge
+   whether the privacy restriction is costly before committing training
+   compute. Results from the two SFT checkpoints are diagnostics, not
+   partial-observability results, per the same reasoning as the v3
+   checkpoint interpretation below.
 5. **Off-sim communication diagnostics:** run the message-content and delivery
    ablations where meaningful. Inspect whether private agents use messages to
    predict actions that the centralized policy can infer directly from joint
    history.
-6. **Causal active-observation dataset:** only after partial v1 works, add
-   `get_image` as a target using prefix-derived private caches. Train partial
-   v3 off-sim and verify request ownership, view choice, and cache freshness.
+6. **Causal active-observation dataset (partial v3) — implemented:** `get_image`
+   becomes a supervised target with caller identity still fixed
+   (`partial_history=True, train_get_image=True, predict_agent=False`; the
+   guards were relaxed to permit exactly this combination). Changes required:
+   the global-request agent relabel is disabled under partial history so the
+   true requester is preserved (verified 21/21 agent split where the old code
+   filed all 42 under agent_0); `get_image` enters the tool specs via
+   `augment_tool_specs_with_get_image` without dragging in `task_complete` or
+   the agent argument; and a new `SYSTEM_PROMPT_ACTIVE_OBSERVATION_FIXED_AGENT`
+   replaces both the v1 prompt (which forbade `get_image`) and the centralized
+   v3 prompt (which asked the model to choose an agent). No `task_complete`:
+   off-sim is teacher-forced, so nothing needs to decide termination, and an
+   agent with private-only history often cannot know the joint task is done.
+   Eval manifests must be rebuilt with `--train-get-image`; the pre-existing
+   exp52 manifests contain **zero** `get_image` targets and `eval_standalone`
+   silently skips manifest rows with no matching example, so reusing them
+   would quietly score only the v1-shaped subset.
 7. **Single-agent-at-a-time live smoke:** run the partial policy with a fixed
    caller scheduler before adding concurrent inference or overlapping tools.
 8. **Concurrent live evaluation:** add event-driven invocation, one shared
@@ -864,24 +1024,377 @@ creates interpretable intermediate comparisons and keeps a failure in
 partial-observability v1 from being confused with `get_image`, scheduler, or
 simulator failures.
 
+## Evaluation coverage: privacy x sim mode x control mode
+
+Coverage for centralized-vs-partial and off-sim-vs-live-sim is not
+complete without a third axis: whether the model's output actually
+determines what happens next (**execution-driving**) or whether WHO and WHEN
+are fixed from the ground-truth trajectory and the model is only scored
+(**passive-scoring**). This axis is what separates today's off-sim v1/v2
+(passive-scoring) from a genuine test of the per-agent scheduler
+(execution-driving).
+
+| | passive-scoring | execution-driving |
+| --- | --- | --- |
+| **Centralized, off-sim** | existing v1/v2: fixed or predicted acting agent, scored against the expert prefix | marginal value: one session has no real concurrency to schedule, so this degenerates close to v2 |
+| **Centralized, live-sim** | not meaningful (see below) | existing causal single-cache live-sim: one session, sequential, real physics |
+| **Partial, off-sim** | v1 off-sim (stage 2-5 above): cheap, isolates privacy alone | next build target after v1: symbolic (no-physics) per-agent scheduler replay — cheapest place to validate WHO/WHEN coordination logic before paying for live-sim |
+| **Partial, live-sim** | not meaningful (see below) | the stage 8/9 target: real per-agent loops, real environment, real physics |
+
+**Live-sim is only meaningful paired with execution-driving.** Once physics
+is real, the world after an agent's action is whatever its actual action
+produced, not what the expert recorded; forcing an external ground-truth
+WHO/WHEN schedule onto a world that has already diverged from the recording
+makes the schedule incoherent the moment the model's action differs even
+slightly from the expert's. Off-sim passive-scoring has no such problem
+because the whole trajectory is teacher-forced against a fixed recording.
+Drop the two live-sim/passive-scoring cells from the matrix; they are not a
+useful ablation.
+
+Recommended build order given the above: partial off-sim passive-scoring (v1,
+already staged) -> partial off-sim execution-driving (new: validates the
+per-agent-loop/FSM-legality scheduler cheaply, without live-sim cost) ->
+partial live-sim execution-driving (stage 8/9, the real target). The
+centralized execution-driving/off-sim cell is a low-priority footnote, not a
+build target — it does not isolate a variable v2 does not already isolate.
+
+## Corpus measurements behind the July 2026 revisions
+
+All figures from the full local training corpus
+(`/home/dorian/robocasa_local_train_subset_21`, 47 tasks), not the 162-trajectory
+subset used earlier in this document.
+
+**Observation lifetime.** Of targets that had a prior observation from the same
+agent, the share where that observation was taken *immediately* before (i.e. no
+other own-decision intervened):
+
+| target type | n | immediately preceded by own `get_image` |
+| --- | --- | --- |
+| physical | 9,153 | **100.0%** |
+| communicate | 5,730 | 85.8% |
+| `get_image` | 18,306 | 25.2% |
+
+**Staleness** (world mutated by either agent since the observation was taken):
+
+| target type | stale |
+| --- | --- |
+| physical | **0.0%** |
+| communicate | 34.3% |
+| `get_image` | 70.0% |
+
+**Who caused the staleness**, for `get_image` targets — the basis for rejecting
+a freshness label: 50% own action (inferable), 30% fresh, **20% the other agent
+only (invisible to this agent)**.
+
+**View vocabulary.** Only three distinct view bundles exist across 20,280
+`get_image` calls, and no bundle ever appears in two orderings:
+`[wrist, agentview_center]` (62%), `[agentview_center, left, right]` (28%),
+`[top_view, room_view, map]` (10%). List-order sensitivity in
+`canonicalize_for_comparison` is therefore harmless for a trained model, though
+`observation_view_set_exact_match` compares sets and is the safer metric.
+
+## Partial-observability diagnostic results (zero-shot, no partial training)
+
+Gemini-3 Flash, `heldout_tasks`, 1,097 samples (v1) / 2,649 (v3). No checkpoint
+in this table was trained on a partial-observability prompt, so these are
+floors and harness validation, not partial-observability results.
+
+| condition | exact tool-call | tool-name | action exact |
+| --- | --- | --- | --- |
+| v1 partial, step index `global` | .323 | .622 | .505 |
+| v1 partial, step index `local` | .325 | .639 | .509 |
+| v1 partial, step index `none` | .328 | .620 | .514 |
+| v3 partial (`consume-once`, `none`) | .146 | .422 | .492 |
+
+Two findings worth carrying forward:
+
+- **Removing the step-index leak costs nothing.** All three v1 modes fall
+  within a 95% CI half-width of ~.028 of each other.
+- **v3's aggregate is *deflated*, not inflated, zero-shot.** The prior
+  expectation was that an easy 3-way view choice would inflate it. Instead
+  `observation_recall` is .273 and `observation_view_set_exact_match` is .039:
+  the observation protocol is a learned convention, not something inferable
+  from the prompt. Crucially the physical columns barely move (action exact
+  .505 -> .492, action tool-name .840 -> .832), so adding `get_image` targets
+  does not degrade action prediction. Report per-tool breakdowns for v3;
+  aggregates mix a convention-dependent subtask with the rest.
+
+## What partial v3 changes relative to partial v1
+
+"v3 adds a tool" understates it. Measured on three tasks of the training
+corpus, holding `partial_history` and `consume-once` fixed:
+
+| property | v1 | v3 |
+| --- | --- | --- |
+| examples | 802 | **1,964** (+145%) |
+| image-free examples | 45 (6%) | **911 (46%)** |
+| mean history length | 4.5 (max 13) | **9.2** (max 26) |
+| own `get_image` lines visible in histories | **0** | 8,790 |
+| tools offered | 5 | 6 |
+
+Physical and communicate targets are **identical** between the two (same
+144/126/84/80/42 physical and 326 communicate); v3 adds 1,162 `get_image`
+targets on top. Consequences:
+
+1. **Aggregate v1/v3 numbers are not comparable** — 59% of v3's denominator is
+   a target type v1 does not contain. Compare the physical/communicate subsets,
+   which are target-identical, to ask whether active observation costs anything.
+2. **`get_image` steps enter the private history in v3 but not v1.** In v1 they
+   hit the `continue` before the history append, so an agent never sees its own
+   looks; in v3 they are supervised and therefore also accumulate.
+3. **Image-free prompts go from an edge case to the normal state** (6% -> 46%).
+   Under consume-once the absent image is the cue to look.
+4. **The system prompt inverts.** The v1 prompt says "do not output get_image";
+   v3 requires it. Hence `SYSTEM_PROMPT_ACTIVE_OBSERVATION_FIXED_AGENT` rather
+   than a tool-list edit.
+5. **Perception control moves from harness to model.** A v1 policy cannot drive
+   a live loop without an external rule for when to render; a v3 policy is
+   self-sufficient. This is the property that matters for live-sim.
+
+## Observation-mode A/B (measured, zero-shot)
+
+Identical manifest, model, and flags; only observation lifetime differs
+(Gemini-3 Flash, partial v3, `heldout_tasks`, n=2,649):
+
+| metric | `cache` | `consume-once` |
+| --- | --- | --- |
+| observation recall | .191 | **.273** |
+| view-set exact match | .024 | **.039** |
+| tool-name accuracy | .373 | **.422** |
+| action exact (physical) | .495 | .492 |
+| comm judged | .189 | .174 |
+
+Observation recall improves 43% relative (n=1,552 `get_image` targets, CI
+half-width ~.022). Mechanism: an **absent** image is itself the cue to look,
+while a persistent cache always shows something (70% of it stale) and destroys
+that cue. Action and communication columns are unchanged, so this is a targeted
+gain rather than a trade. The comm-judged difference is within noise
+(n=396, CI half-width ~.038), which is the first evidence that consume-once's
+image-free communicates (14% of them) cost nothing measurable.
+
+## Off-sim v3 vs live-sim: what transfers
+
+`live_sim_eval.py` already implements an FSM mirror with incremental legality
+checking, `validate_task_preconditions`, and a goal checker, with model
+proposals passing the legality gate (oracle replay bypasses it). It has **no**
+partial-observability support, no per-agent loops, and no resource locks.
+
+| dimension | transfers to live-sim? |
+| --- | --- |
+| observation semantics | **yes** — consume-once maps exactly onto a live loop: request -> receive -> use -> discard |
+| prompt shape / tool schema | yes — one builder feeds both |
+| WHO / WHEN scheduling | **no** — off-sim inherits the expert ordering; live-sim needs the per-agent scheduler |
+| legality rejection | **no** — see below |
+
+**The rejection gap is a real train/serve mismatch.** Every step in the corpus
+executed successfully, so off-sim never shows the model a refused call. Live-sim
+*will* refuse calls, and `format_history_steps` renders those as a trailing
+`FAILED: <reason>` line whose own docstring notes "training data never sets it".
+So in live-sim the model meets a history line-shape it has never seen, exactly
+when it most needs to recover. This affects centralized v3 equally — partial
+observability did not introduce it — but it should be closed before any partial
+live-sim run, either by synthesizing rejection examples or at minimum verifying
+graceful degradation when a `FAILED:` line appears.
+
+## Dataset roots and manifest construction
+
+The two local roots are curated for different splits, and neither serves both:
+
+| root | train tasks | held-out tasks | usable for |
+| --- | --- | --- | --- |
+| `eval_data_subset` | 46 tasks, **1-3 trajectories each** | 5 tasks, **15 each** | `heldout_tasks` (75 trajectories, matches exp52) |
+| `robocasa_local_train_subset_21` | 47 tasks, ~21 each | **none** | `heldout_trajectories`; also the training root |
+
+A `heldout_trajectories` manifest built from `eval_data_subset` yields only ~34
+trajectories, because that split draws from the *train* tasks' 10% validation
+holdout and the subset holds 1-3 trajectories per train task. It is not
+comparable to exp52's 75-trajectory split. For a checkpoint trained on
+`robocasa_local_train_subset_21`, build that split from the training root with
+the same `--validation-split-seed 42` and `--validation-trajectory-fraction 0.1`
+so the manifest selects exactly the trajectories training held out.
+
+Note also that `eval_standalone` **silently skips** manifest rows with no
+matching example (`examples_by_id.get(...)` then `continue`), so a manifest and
+an eval whose flags disagree fail quietly rather than loudly.
+
+## Evaluation cost
+
+Off-sim eval on the `hf` backend runs ~11 minutes per 1,097-sample split
+(Qwen3-VL-8B + LoRA, RTX 5090, `--batch-size 4`, 512px images). `eval_standalone`
+supports only `hf` and `gemini`; `live_sim_eval` additionally supports a `vllm`
+backend against a localhost OpenAI-compatible server. Porting that backend, or
+simply raising `--batch-size`, is the available speedup once run counts grow.
+
+## Result: partial v1 vs centralized v1 (trained, matched root)
+
+Both adapters: Qwen3-VL-8B + LoRA r=16, `robocasa_local_train_subset_21`, same
+47 train tasks, same box. Centralized 14,840 examples (no holdout); partial
+12,702 (+2,134 validation). Native tool calls, greedy. The matched baseline
+lands within noise of the previously-used cluster adapter on every metric, so
+the training-data confound is ruled out.
+
+| metric | centralized | partial | delta |
+| --- | --- | --- | --- |
+| **held-out trajectories** | | | |
+| action exact (physical) | .986 | .978 | -.008 |
+| comm judged | .726 | **.726** | **.000** |
+| judged overall | .883 | .878 | -.005 |
+| full trajectory (judged) | .160 | **.200** | **+.040** |
+| **never-seen tasks** | | | |
+| action exact (physical) | .675 | **.675** | **.000** |
+| comm judged | .669 | .561 | **-.108** |
+| judged overall | .673 | .634 | -.039 |
+| full trajectory (judged) | .227 | .067 | -.160 |
+
+**Privacy is free in-distribution; its cost is a generalization cost, and it
+lives entirely in communication.** Physical action prediction is *exactly*
+equal in both regimes. On familiar tasks the partial policy matches
+centralized on communication to three decimals and completes more
+trajectories.
+
+### The qualifier that matters
+
+Of the 78 communicate steps where centralized was judged correct and partial
+was not, **39 (50%) had zero hidden information** — the partial agent's
+history was identical to the centralized one at that step. By failure mode:
+
+| | count |
+| --- | --- |
+| wrong content, same information | 37 (47%) |
+| wrong content, information hidden | 24 (31%) |
+| no communicate call, information hidden | 15 (19%) |
+| no communicate call, same information | 2 (3%) |
+
+So per-step information loss explains **at most half** the gap. The rest is
+better described as a training-distribution effect than a per-step
+information effect: the partial model trained on prompts where partner
+context was *never* present, so it never learned to exploit it even at the
+minority of steps where the two histories coincide (typically early, before
+the partner has acted).
+
+A confirmed instance of the information mechanism does exist
+(`cluster_items_for_clearing/traj_000013/step_17`): agent_1 says it is going
+to the table to **place** item2 when the expert says **pick up**, having not
+seen agent_0's complete `navigate -> pick_up -> place_next_to -> give_space`
+cycle. But it is not the dominant driver.
+
+**The message-ablation experiment is what would separate these two
+explanations causally**; the evidence above is correlational plus one
+hand-inspected case.
+
+### Metric caveats
+
+- `judged_trajectory_all_steps_rate` carries ~1.4 points of LLM-judge noise:
+  byte-identical predictions scored .067 and .053 on separate judge runs.
+- The judge's `action_exact_call_accuracy` and structured eval's use different
+  denominators under v3 (all non-communicate steps vs physical only), so the
+  same 388 matches read as .172 or .492 depending on the source.
+
+## Live-sim partial observability: implementation findings (July 2026)
+
+The distributed contract is implemented in `live_sim_eval.py` as a separate
+`run_trajectory_partial`, gated behind `--partial-history`. `run_trajectory` and
+`_model_propose_step` are byte-identical to their pre-change versions, so the
+centralized path carries no regression risk. Verified with the oracle backend
+against the real simulator: **5/5 native success, 5/5 FSM goal, 0 harness
+errors**, 27% of cycles genuinely simultaneous.
+
+Three findings changed the design as written above.
+
+### 1. Tool durations cannot be measured — the floors ARE the model
+
+The section "Durations — measured, with escape hatches" overstated what is
+available. Measurement yields **nothing**:
+
+- `ToolResult` carries only `tool_name`, `success`, `details` — no step count.
+- MuJoCo `sim.data.time` advances **~0** across a tool call. Of 51 executed
+  steps, only 8 registered any delta at all, and every one rounded to 0.00 s.
+
+The cause is not that settle logic is missing — `_settle_scene()` does loop
+`sim.step()`. It is that (a) most tool paths call `sim.forward()`, which
+recomputes kinematics **without advancing time**, and (b) where settling does
+run it is `_SETTLE_STEPS = 2` or `_PLACEMENT_SETTLE_STEPS = 6` steps, which at
+control_freq 20 is a few hundredths of a second — orders of magnitude below the
+seconds-scale motion a real robot would take.
+
+So the per-tool floors (`communicate`/`get_image` 0.25, manipulation 2.0,
+navigation 4.0) are not a fallback; they are the only duration model available,
+and the concurrency structure of every live-sim run is a consequence of those
+chosen constants. State this whenever reporting makespan or idle time.
+
+**TODO (not now, but worth checking):** whether the executor can be made to
+free-run the physics for a short interval after each teleport. If it can,
+durations become measured rather than assumed, and makespan becomes a physical
+quantity instead of a bookkeeping one. `_settle_scene` is the natural hook.
+
+### 2. "Reject both conflicting proposals" livelocks
+
+The Resource conflicts section proposed rejecting both conflicting proposals as
+the initial deterministic policy. It does not survive contact with a
+deterministic policy: both agents propose `navigate_to_fixture` at the same
+fixture, both are rejected, both sleep until the next world event, both wake and
+propose **the identical call** again. Observed live: 6 conflicts, zero progress,
+`makespan 0.0`, episode failed.
+
+Symmetric rejection plus greedy decoding has no tie-breaker. Resolved with
+`--conflict-priority {agent-order,seeded}`: one agent proceeds, the loser gets an
+ordinary tool-call error and replans. This preserves the property that matters —
+the harness never queues on the agent's behalf — while removing the livelock.
+The same trajectory then reached `goal_satisfied` with 2 conflicts and a
+makespan of 14.25 vs ~8.75 for uncontended ones, i.e. contention now costs time
+instead of deadlocking.
+
+### 3. Silent retry must not consume state
+
+Under `--rejection-mode silent-retry` a rejected call leaves the agent untouched.
+For the oracle backend that means a rejected expert step must be **pushed back
+onto that agent's queue**; popping it consumed expert actions through rejections
+and drained the episode into `policy_exhausted`. The general principle applies
+to any policy with consumable state.
+
+Non-model policies also need **per-agent expert queues**: an oracle replays a
+joint sequence, but a per-agent scheduler asks a *specific* agent what it wants
+to do, so "the next expert step" is only well defined per agent.
+
+### Environment note
+
+Live sim requires the `robocasa-live-sim` conda env (numpy 2.2.5, numba 0.61.2,
+mujoco 3.3.1). The base env has numpy 2.4, which numba rejects, so the simulator
+cannot import there at all — this is unrelated to partial observability and
+affects centralized live-sim identically. `robocasa-vllm` carries vLLM 0.25.1 for
+the ported off-sim vLLM backend.
+
 ## Open decisions
 
-- Whether stale pixels remain attached with an explicit freshness marker or are
-  replaced by metadata-only memory in the first implementation.
-- Which events are public without communication.
-- The resource granularity required to determine safe concurrency.
-- Whether equal-time conflicts reject both proposals or use a visible seeded
-  reservation policy.
+- ~~Whether stale pixels remain attached with an explicit freshness marker~~
+  **RESOLVED (July 2026):** neither. `consume-once` makes every attached image
+  fresh by construction; a freshness marker was rejected because it leaks the
+  other agent's hidden activity (see Memory lifetime and freshness).
+- Which events are public without communication (resolved for v1: only
+  delivered `communicate` messages; see Decision summary #12 and Sequencing
+  dependencies for how non-communicated sequencing is instead enforced by FSM
+  legality rather than treated as public information).
+- The resource granularity required to determine safe concurrency, and which
+  preconditions the FSM must declare per tool for sequencing gating (see
+  Sequencing dependencies and FSM legality gating).
 - How to infer partial-order concurrency safely from existing sequential
   demonstrations.
 - Whether local agent turn indices should appear in the prompt at all; the
   default recommendation is metadata only.
-- Whether to add `standby`, which wake predicates it supports, and whether
-  agent-owned timers are causally appropriate.
+- Whether a persistent cache ever beats `consume-once` for message quality.
+  The only cases that differ are communicate targets following another decision
+  by the same agent (14% of communicates): `cache` shows them a possibly-stale
+  image, `consume-once` shows none. The comm-judged delta between two otherwise
+  identical runs is the experiment.
+- Whether `standby` is ever needed at all: resolved that resource- and
+  sequencing-blocked waiting do not need it (ordinary tool-call failure on the
+  per-agent loop suffices); remains open only for a genuinely
+  information-blocked case, which is unevidenced in the current data.
 - Which events advance an agent's observable state version and which remain
   completely hidden.
-- The zero-progress threshold and whether repeated calls are rejected,
-  penalized, or only used as an evaluation termination criterion.
+- The zero-progress threshold and whether repeated calls (including calls that
+  fail an FSM legality or resource precondition) are rejected, penalized, or
+  only used as an evaluation termination criterion.
 
 ## Interpretation of the existing v3 checkpoint
 
