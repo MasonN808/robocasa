@@ -35,7 +35,7 @@ from data_generation.task_level.runtime.client import (
     build_raw_google_genai_client,
     load_dotenv_file,
 )
-from training.bc_task_vlm.evaluation import (
+from training.bc_task_vlm.prediction_io import (
     _is_communicate_record,
     load_prediction_records,
 )

@@ -810,7 +810,12 @@ def _load_model(config: RunConfiguration):
         **model_kwargs,
     )
     if config.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+        # use_reentrant=False: reentrant checkpointing (the default) is
+        # incompatible with DDP + find_unused_parameters when some batches
+        # don't exercise every module (e.g. no-image communicate/give_space
+        # steps skip the vision tower) -- it raises "Expected to mark a
+        # variable ready only once".
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         # Model stores fewer intermediate activations during the forward pass and recomputes them during backprop. Lower VRAM use, but slower training.
         if hasattr(model, "enable_input_require_grads"):
             model.enable_input_require_grads()

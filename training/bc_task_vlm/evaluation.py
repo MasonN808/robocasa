@@ -13,6 +13,15 @@ from tqdm.auto import tqdm
 from transformers import AutoProcessor
 
 from training.bc_task_vlm.metrics import build_structured_eval_metrics
+# Re-exported for backwards compatibility: these live in the stdlib-only
+# prediction_io so judge_communications.py can read predictions without
+# importing torch/transformers. Existing
+# `from training.bc_task_vlm.evaluation import load_prediction_records`
+# call sites keep working.
+from training.bc_task_vlm.prediction_io import (  # noqa: F401
+    _is_communicate_record,
+    load_prediction_records,
+)
 from training.bc_task_vlm.schema_utils import (
     canonicalize_for_comparison,
     compact_json_dumps,
@@ -426,10 +435,6 @@ def score_structured_prediction(
     return record
 
 
-def _is_communicate_record(record: dict[str, Any]) -> bool:
-    return (record.get("target_tool_call") or {}).get("name") == "communicate"
-
-
 def _target_tool_name(record: dict[str, Any]) -> str | None:
     return (record.get("target_tool_call") or {}).get("name")
 
@@ -542,16 +547,6 @@ def metrics_from_prediction_records(
                 _predicted_tool(r) == "task_complete" for r in non_terminal_records
             ) / len(non_terminal_records)
     return metrics
-
-
-def load_prediction_records(predictions_path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    with predictions_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
 
 
 def evaluate_structured_generation(
