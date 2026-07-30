@@ -254,12 +254,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--partial-step-index-mode",
         choices=("global", "local", "none"),
-        default="global",
+        default="local",
         help=(
-            "With --partial-history: how step indices are rendered. 'global' "
-            "keeps the joint demonstration index (leaks the other agent's "
-            "hidden activity via gaps between this agent's turns), 'local' "
-            "renumbers per agent, 'none' omits indices from the prompt."
+            "With --partial-history: how step indices are rendered. 'local' "
+            "(default) renumbers per agent, giving a step count that does not "
+            "leak the other agent's activity; 'global' keeps the joint "
+            "demonstration index (which does leak it, via the gaps between "
+            "this agent's turns); 'none' omits indices from the prompt."
         ),
     )
     parser.add_argument(
@@ -1007,8 +1008,8 @@ def _build_examples_for_tasks(
     train_reasoning: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "global",
-    partial_observation_mode: str = "cache",
+    partial_step_index_mode: str = "local",
+    partial_observation_mode: str = "consume_once",
     use_example_cache: bool,
     trust_example_cache: bool,
     training_samples_cache_dir: Path,

@@ -36,11 +36,13 @@ fi
 # Partial-observability (v1) SFT: PARTIAL_HISTORY=1 restricts each example's
 # history to the acting agent's own actions plus delivered communicate
 # messages. PARTIAL_STEP_INDEX_MODE picks how step indices are rendered;
-# "none" is the default here because a joint demonstration index leaks the
-# other agent's hidden activity through the gaps between this agent's turns.
+# "local" is the default -- it renumbers per agent, so the agent still gets a
+# step count without the joint demonstration index leaking the other agent's
+# hidden activity through the gaps between this agent's turns ("global" leaks
+# it, "none" drops the count entirely).
 if [[ "${PARTIAL_HISTORY:-0}" == "1" ]]; then
   launch_args+=(--partial-history)
-  launch_args+=(--partial-step-index-mode "${PARTIAL_STEP_INDEX_MODE:-none}")
+  launch_args+=(--partial-step-index-mode "${PARTIAL_STEP_INDEX_MODE:-local}")
   launch_args+=(--partial-observation-mode "${PARTIAL_OBSERVATION_MODE:-consume-once}")
 fi
 if [[ -n "${INIT_ADAPTER_PATH:-}" ]]; then

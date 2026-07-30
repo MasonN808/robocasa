@@ -815,7 +815,7 @@ def _build_centralized_examples_for_trajectory(
     train_reasoning: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "global",
+    partial_step_index_mode: str = "local",
     partial_observation_mode: str = "consume_once",
 ) -> list[CentralizedExample]:
     if partial_history and predict_agent:
@@ -1182,7 +1182,7 @@ def build_centralized_examples(
     train_reasoning: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "global",
+    partial_step_index_mode: str = "local",
     partial_observation_mode: str = "consume_once",
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step.
@@ -1313,7 +1313,7 @@ def build_example_cache_fingerprint(
     train_reasoning: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "global",
+    partial_step_index_mode: str = "local",
     partial_observation_mode: str = "consume_once",
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""

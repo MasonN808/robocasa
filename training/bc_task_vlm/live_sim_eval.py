@@ -1320,7 +1320,20 @@ def run_trajectory(
             record["native_error"] = native_err
         records.append(record)
 
-        if mirror.goal_satisfied and native_now:
+        # Honor --success-criterion here exactly as run_trajectory_partial
+        # does. This path used to hardcode "native and fsm", which scored
+        # centralized rollouts on a strictly harder bar than partial ones and
+        # made the centralized-vs-partial comparison invalid: a rollout that
+        # satisfies the task spec but fails the teleporting executor's
+        # geometric native check terminated as goal_satisfied under partial
+        # and ran to budget_exhausted under centralized.
+        criterion = getattr(args, "success_criterion", "fsm")
+        reached = (
+            mirror.goal_satisfied
+            if criterion == "fsm"
+            else (mirror.goal_satisfied and native_now)
+        )
+        if reached:
             termination = "goal_satisfied"
             turn_index += 1
             break
