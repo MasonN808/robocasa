@@ -161,6 +161,25 @@ Full numbers in `results_table.{csv,md}` (rows `Qwen3-VL-8B SFT`); the interface
   (.878 / 16% traj on held-out trajectories); adding a few-shot example collapses
   it (.868 → .550, traj → 0). Prompt engineering does not add to fine-tuning here.
 
+## 5c. Per-step reasoning supervision (SFT v1.5)
+
+Full numbers are in the `Qwen3-VL-8B SFT v1.5` table rows and
+`eval_runs/reasoning_comparison.{csv,png,pdf}`.
+
+- **Small, consistent step-level gains.** Relative to the native-format v1
+  aggregate, v1.5 raises judged-overall **.878 → .908** on held-out
+  trajectories and **.675 → .686** on held-out tasks. Action-exact moves
+  **.984 → .994** / **.675 → .686**, and judged communication moves
+  **.717 → .769** / **.674 → .687**.
+- **Trajectory transfer is mixed.** Full completion improves from **13/75 to
+  15/75** on trained tasks (.173 → .200), but drops from **19/75 to 15/75** on
+  never-trained tasks (.253 → .200). The task-split prefix fraction also slips
+  slightly (.363 → .347), so the step gains do not compound into a clear
+  sequential-competence win.
+- **Comparison caveat:** v1.5 used a fresh stratified 75-trajectory manifest,
+  not the exact v1 trajectory IDs. These are aggregate reference deltas, not a
+  paired ablation. A same-manifest v1 rerun is needed for a causal claim.
+
 ## 6. Bugs found and fixed (high-effort code review)
 
 Verified findings, all fixed (see git history):
@@ -220,9 +239,12 @@ Verified findings, all fixed (see git history):
       NCCL example-build timeout (parked; needs a pre-built example cache).
 - [x] **Stage 4b** — SFT evaluated on both splits, both interfaces (native +
       forced-JSON control), + judge. Interface 2×2 complete (§5b).
-- [x] **Stage 5** — `results_table` regenerated (70 rows); `sft_headline.png`,
-      `interface_comparison.png`, `qwen8b_comparison.png` + interactive artifact
+- [x] **Stage 5** — `results_table` registry updated for 74 rows; `sft_headline.png`,
+      `interface_comparison.png`, `qwen8b_comparison.png`,
+      `reasoning_comparison.png` + interactive artifact
       updated. **Headline: SFT is the only thing that moves `traj_all` off 0.000.**
+- [x] **SFT v1.5 (reasoning supervision)** — both splits evaluated and all 829
+      communication steps judged; small step gains, mixed trajectory transfer (§5c).
 - [ ] **Follow-up** — cluster 27B SFT (example-cache fix).
 - [ ] **Live-sim (closed-loop) eval** — harness implemented; cluster runs and
       reporting remain. Full plan and implementation status in

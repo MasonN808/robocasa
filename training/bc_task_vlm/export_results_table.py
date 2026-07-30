@@ -78,6 +78,8 @@ RUNS = [
     ("Qwen3-VL-8B base", "baseline (plain fmt control)", "heldout_tasks", "qwen3vl_8b_base_plain__heldout_tasks"),
     ("Qwen3-VL-8B SFT", "baseline *", "heldout_trajectories", "qwen3vl_8b_sft_nativefmt__heldout_trajectories"),
     ("Qwen3-VL-8B SFT", "baseline *", "heldout_tasks", "qwen3vl_8b_sft_nativefmt__heldout_tasks"),
+    ("Qwen3-VL-8B SFT v1.5", "reasoning supervision *", "heldout_trajectories", "qwen3vl_8b_v1_5_reasoning__heldout_trajectories"),
+    ("Qwen3-VL-8B SFT v1.5", "reasoning supervision *", "heldout_tasks", "qwen3vl_8b_v1_5_reasoning__heldout_tasks"),
     ("Qwen3-VL-8B SFT", "baseline (forced-JSON control)", "heldout_trajectories", "qwen3vl_8b_sft__heldout_trajectories"),
     ("Qwen3-VL-8B SFT", "baseline (forced-JSON control)", "heldout_tasks", "qwen3vl_8b_sft__heldout_tasks"),
     ("Qwen3-VL-8B base", "+task spec", "heldout_trajectories", "qwen3vl_8b_base_spec__heldout_trajectories"),

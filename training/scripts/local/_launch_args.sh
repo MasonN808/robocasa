@@ -28,6 +28,7 @@ image_resolution="${IMAGE_RESOLUTION:-512}"
 
 read_train_tasks='import json,sys; print(",".join(json.load(open(sys.argv[1]))["train_tasks"]))'
 train_tasks="$("${python_bin}" -c "${read_train_tasks}" "${selection}")"
+val_tasks="${VAL_TASKS-${train_tasks}}"
 
 launch_args=(
   --dataset-root "${data_root}"
@@ -36,7 +37,7 @@ launch_args=(
   --sft-format tool_call
   --image-resolution "${image_resolution}"
   --train-tasks "${train_tasks}"
-  --val-tasks "${train_tasks}"
+  --val-tasks "${val_tasks}"
   --validation-trajectories-per-task 0
   --validation-trajectory-fraction "${VAL_TRAJECTORY_FRACTION:-0.1}"
   --validation-split-seed "${VAL_SPLIT_SEED:-42}"
@@ -59,3 +60,10 @@ launch_args=(
   --wandb-mode "${WANDB_MODE:-offline}"
   --wandb-run-name "${WANDB_RUN_NAME:-qwen3vl-8b-local-sft}"
 )
+
+# Optional: a smaller eval micro-batch than the train micro-batch, to keep the
+# full-vocab eval loss within VRAM without slowing training. Unset by default
+# (eval batch falls back to the train batch), so v1 behavior is unchanged.
+if [[ -n "${PER_DEVICE_EVAL_BATCH_SIZE:-}" ]]; then
+  launch_args+=(--per-device-eval-batch-size "${PER_DEVICE_EVAL_BATCH_SIZE}")
+fi

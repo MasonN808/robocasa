@@ -33,6 +33,16 @@ fi
 if [[ "${TRAIN_REASONING:-0}" == "1" ]]; then
   launch_args+=(--train-reasoning)
 fi
+# Partial-observability (v1) SFT: PARTIAL_HISTORY=1 restricts each example's
+# history to the acting agent's own actions plus delivered communicate
+# messages. PARTIAL_STEP_INDEX_MODE picks how step indices are rendered;
+# "none" is the default here because a joint demonstration index leaks the
+# other agent's hidden activity through the gaps between this agent's turns.
+if [[ "${PARTIAL_HISTORY:-0}" == "1" ]]; then
+  launch_args+=(--partial-history)
+  launch_args+=(--partial-step-index-mode "${PARTIAL_STEP_INDEX_MODE:-none}")
+  launch_args+=(--partial-observation-mode "${PARTIAL_OBSERVATION_MODE:-consume-once}")
+fi
 if [[ -n "${INIT_ADAPTER_PATH:-}" ]]; then
   launch_args+=(--init-adapter-path "${INIT_ADAPTER_PATH}")
 fi

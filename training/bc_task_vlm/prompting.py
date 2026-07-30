@@ -22,6 +22,16 @@ SYSTEM_PROMPT_PREDICT_AGENT = (
     "get_image, and do not describe the images."
 )
 
+# Partial-observability (v3) variant: active observation with a FIXED caller.
+# The agent is told who it is, so it must not choose an acting agent; it only
+# decides whether to look first and what tool to call.
+SYSTEM_PROMPT_ACTIVE_OBSERVATION_FIXED_AGENT = (
+    "You are a robot task planner. Predict exactly one next tool call for the "
+    "current acting agent. Request the camera views you need before an action "
+    "by calling get_image. Use images only as scene context. Do not output "
+    "image paths or describe the images."
+)
+
 SYSTEM_PROMPT_ACTIVE_OBSERVATION = (
     "You are a robot task planner. Decide which agent should act next and "
     'predict exactly one next tool call for it, passing the agent as the "agent" '
@@ -72,8 +82,12 @@ def format_history_steps(history_steps: Iterable[dict[str, Any]]) -> str:
 
     rendered_steps = []
     for step in history_steps:
+        # step=None omits the index entirely (partial-observability
+        # step_index_mode="none"): a joint demonstration index leaks how much
+        # hidden activity the other agent performed between this agent's turns.
+        index_text = "" if step.get("step") is None else f"step={step['step']} "
         line = (
-            f"- step={step['step']} agent={step['agent']} tool={step['tool']} "
+            f"- {index_text}agent={step['agent']} tool={step['tool']} "
             f"args={compact_json_dumps(step['args'])}"
         )
         error_text = step.get("error")
@@ -90,12 +104,15 @@ def build_user_prompt(
     composite_task: str,
     task_instruction: str,
     agent_id: str,
-    next_step_index: int,
+    next_step_index: int | None,
+    step_index_label: str = "Next global step index",
     observation_views: list[str],
     history_steps: list[dict[str, Any]],
     allowed_tool_specs: dict[str, dict[str, Any]],
     sft_format: str = "tool_call",
     predict_agent: bool = False,
+    observation_owner: str | None = None,
+    include_observation_owner: bool = False,
 ) -> str:
     """Builds the text block that accompanies the current image observation.
 
@@ -104,7 +121,10 @@ def build_user_prompt(
     goal is already satisfied. Default keeps the v1 prompt byte-identical.
     """
 
-    observations_text = ", ".join(observation_views) if observation_views else "unknown"
+    # "none" (not "unknown") when no images are attached: under partial-v3
+    # consume-once semantics that is the normal state after an observation has
+    # been spent, and "unknown" would imply views exist but are unidentified.
+    observations_text = ", ".join(observation_views) if observation_views else "none"
     if predict_agent:
         agent_rule = (
             '- First decide which agent acts next; pass it as the "agent" argument.\n'
@@ -148,11 +168,24 @@ def build_user_prompt(
         raise ValueError(f"Unsupported SFT format: {sft_format!r}")
 
     acting_agent_line = "" if predict_agent else f"Current acting agent: {agent_id}\n"
+    # next_step_index=None omits the line (step_index_mode="none");
+    # step_index_label lets partial-observability prompts say "local turn
+    # index" instead of the leaky joint "global step index".
+    if next_step_index is None:
+        step_index_line = ""
+    else:
+        step_index_line = f"{step_index_label}: {next_step_index}\n"
+    observation_owner_line = ""
+    if include_observation_owner:
+        observation_owner_line = (
+            f"Active observation owner: {observation_owner or 'none'}\n"
+        )
     return (
         f"Task family: {composite_task}\n"
         f"Task instruction: {task_instruction}\n"
         f"{acting_agent_line}"
-        f"Next global step index: {next_step_index}\n"
+        f"{observation_owner_line}"
+        f"{step_index_line}"
         f"Observation views attached in order: {observations_text}\n\n"
         "Previous executed symbolic action history:\n"
         f"{format_history_steps(history_steps)}\n\n"
@@ -168,7 +201,11 @@ def build_system_message(
     """Builds the fixed system instruction for one chat conversation."""
 
     if train_get_image:
-        system_text = SYSTEM_PROMPT_ACTIVE_OBSERVATION
+        system_text = (
+            SYSTEM_PROMPT_ACTIVE_OBSERVATION
+            if predict_agent
+            else SYSTEM_PROMPT_ACTIVE_OBSERVATION_FIXED_AGENT
+        )
     else:
         system_text = SYSTEM_PROMPT_PREDICT_AGENT if predict_agent else SYSTEM_PROMPT
     return {

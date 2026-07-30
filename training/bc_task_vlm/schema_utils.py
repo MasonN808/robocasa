@@ -52,6 +52,21 @@ def augment_tool_specs_for_agent_prediction(
     return augmented
 
 
+def augment_tool_specs_with_get_image(
+    allowed_tool_specs: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Adds get_image without the agent-prediction machinery.
+
+    Partial-observability v3 supervises get_image while the acting agent stays
+    fixed by caller identity, so it needs get_image in the tool set but not
+    task_complete or the "agent" argument.
+    """
+
+    augmented = dict(allowed_tool_specs)
+    augmented[GET_IMAGE_TOOL_NAME] = deepcopy(GET_IMAGE_TOOL_SPEC)
+    return augmented
+
+
 def build_single_step_response_schema(
     *,
     agent_ids: tuple[str, ...],

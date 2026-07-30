@@ -60,6 +60,28 @@ def parse_args() -> argparse.Namespace:
         default=12,
         help="Trajectories for the pilot manifest (disjoint from headline).",
     )
+    parser.add_argument(
+        "--train-get-image",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Emit get_image steps as eval targets (v3 active observation).",
+    )
+    parser.add_argument(
+        "--partial-history",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Partial observability: per-agent private history + delivered messages.",
+    )
+    parser.add_argument(
+        "--partial-step-index-mode",
+        choices=("global", "local", "none"),
+        default="global",
+    )
+    parser.add_argument(
+        "--partial-observation-mode",
+        choices=("cache", "consume-once"),
+        default="consume-once",
+    )
     parser.add_argument("--sample-seed", type=int, default=1234)
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args()
@@ -110,12 +132,20 @@ def build_manifest(
     dataset_root: Path,
     trajectory_ids_by_task: dict[str, list[str]],
     config: dict[str, Any],
+    train_get_image: bool = False,
+    partial_history: bool = False,
+    partial_step_index_mode: str = "global",
+    partial_observation_mode: str = "consume_once",
 ) -> dict[str, Any]:
     task_names = sorted(trajectory_ids_by_task)
     examples = build_centralized_examples(
         dataset_root=dataset_root,
         task_names=task_names,
         sft_format=SFT_FORMAT_PLAIN,
+        train_get_image=train_get_image,
+        partial_history=partial_history,
+        partial_step_index_mode=partial_step_index_mode,
+        partial_observation_mode=partial_observation_mode,
         trajectory_ids_by_task={
             task: set(ids) for task, ids in trajectory_ids_by_task.items()
         },
@@ -182,6 +212,13 @@ def main() -> None:
         "sample_seed": args.sample_seed,
         "held_out_tasks": held_out_tasks,
         "train_tasks": train_tasks,
+        # Recorded so an eval run can be checked against the manifest it was
+        # built from: get_image targets and the partial-observability prompt
+        # shape must match between manifest, training, and eval.
+        "train_get_image": args.train_get_image,
+        "partial_history": args.partial_history,
+        "partial_step_index_mode": args.partial_step_index_mode,
+        "partial_observation_mode": args.partial_observation_mode.replace("-", "_"),
     }
 
     # Split A pool: the exact training-time validation holdout.
@@ -226,24 +263,33 @@ def main() -> None:
         rng=rng,
     )
 
+    manifest_kwargs = {
+        "train_get_image": args.train_get_image,
+        "partial_history": args.partial_history,
+        "partial_step_index_mode": args.partial_step_index_mode,
+        "partial_observation_mode": args.partial_observation_mode.replace("-", "_"),
+    }
     manifests = {
         "eval_manifest_heldout_trajectories.json": build_manifest(
             split_name="heldout_trajectories",
             dataset_root=args.dataset_root,
             trajectory_ids_by_task=headline_pick,
             config=shared_config,
+            **manifest_kwargs,
         ),
         "eval_manifest_heldout_tasks.json": build_manifest(
             split_name="heldout_tasks",
             dataset_root=args.dataset_root,
             trajectory_ids_by_task=heldout_pick,
             config=shared_config,
+            **manifest_kwargs,
         ),
         "eval_manifest_pilot.json": build_manifest(
             split_name="pilot",
             dataset_root=args.dataset_root,
             trajectory_ids_by_task=pilot_pick,
             config=shared_config,
+            **manifest_kwargs,
         ),
     }
     for filename, manifest in manifests.items():

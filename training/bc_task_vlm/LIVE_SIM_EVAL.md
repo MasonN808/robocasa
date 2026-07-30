@@ -269,6 +269,89 @@ For throughput experiments, use `--map-renderer raster --map-dpi 60`. Keep the
 legacy default for compatibility comparisons, and do not mix map settings
 within a reported evaluation split.
 
+## V3 active-observation causal compatibility
+
+For the causal centralized v3 adapter, use the training-compatible centralized
+single-cache mode:
+
+```text
+--train-get-image --get-image-observation-mode causal_cache_centralized
+```
+
+The matching training and standalone-evaluation flags are:
+
+```text
+--predict-acting-agent --train-get-image --causal-single-cache
+```
+
+Both causal-cache modes avoid legacy target-conditioned image selection. Each
+proposal's visual input is determined entirely by already-executed events:
+
+1. The episode starts with no active visual context, so the first proposal is
+   image-free.
+2. A successful `get_image(agent, views)` renders immediately, updates only
+   that agent's logical cache, and makes that cache the sole visual context for
+   the next proposal.
+3. Even when both logical caches exist, a proposal receives at most the active
+   agent's cache. It never receives both agents' images. The prompt explicitly
+   names that prefix-derived cache owner.
+4. A physical action must name the active cache owner. A physical action
+   without an active agent-owned observation is rejected.
+5. Successful communication does not invalidate the cache. A successful
+   physical tool clears the active visual context because the scene or robot
+   pose changed. The separate logical caches remain stored but are not attached
+   again until refreshed by a later request.
+6. Global views remain logically agent-specific. Identical pixels may be
+   render-memoized later, but requesting global views for one agent does not
+   populate the other agent's cache.
+
+The two modes differ only in communication ownership:
+
+| Mode | Cross-owner communication | Cross-owner physical action |
+|---|---|---|
+| `causal_cache_centralized` | Allowed | Rejected |
+| `causal_cache` | Rejected | Rejected |
+
+`causal_cache_centralized` matches the current centralized checkpoint. Its
+full joint symbolic history lets the central policy select either communication
+speaker even when the one attached visual bundle came from the other agent.
+The `Active observation owner` prompt line records visual provenance; it is not
+communication authorization in this mode. All expert physical actions in the
+audited subset immediately follow a same-agent `get_image`, so physical tools
+still require a fresh matching owner.
+
+`causal_cache` is the stricter private-cache diagnostic. It requires
+communication and physical actions to name the attached cache owner. Do not use
+it to report performance for a checkpoint trained with centralized
+cross-owner communication examples.
+
+The centralized mode is not a partial-observability evaluation. It retains one
+central model invocation, full joint symbolic history, and model-selected
+agent/tool calls. It processes at most one visual bundle per proposal and
+removes current-target lookahead, but cache ownership is informational for
+communication. Genuine partial observability requires scheduler-selected or
+otherwise separate logical agent invocations.
+
+Do not mix records from the two modes. A mode change alters proposal legality,
+history, and all later closed-loop states, so use a fresh output directory.
+
+The `oracle` backend currently replays action steps without model-emitted
+`get_image` calls. Run oracle verification with the default `next_turn` mode;
+combining oracle with either causal-cache mode will correctly reject physical
+actions that have no active observation, but does not test the model protocol.
+
+The legacy default `next_turn` mode still attaches a requested observation only
+to the immediately following proposal. Use separate output directories for the
+three modes and always report the selected mode.
+
+### Pruned `OrganizeCondiments` native success
+
+Generated trajectories omit the task's non-goal `distractor`, while upstream
+RoboCasa's native checker unconditionally indexes it. Live sim therefore uses a
+task-specific compatibility check only when the distractor is absent. It keeps
+the original requirements that `condiment1`, `condiment2`, and `condiment3` are
+inside the cabinet and sufficiently far from the robot grippers.
+
 ## vLLM throughput mode
 
 Run simulator clients in the documented RoboCasa environment and keep the

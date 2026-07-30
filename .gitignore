@@ -240,3 +240,5 @@ slurm-*.out
 
 # Local agent config
 .claude/
+model_evals/data/
+*.orig
