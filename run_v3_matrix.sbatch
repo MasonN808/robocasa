@@ -130,10 +130,14 @@ if [[ "${NO_CKPT}" == "1" ]]; then
   export PER_DEVICE_BATCH_SIZE=2
   export GRAD_ACCUM=8
 else
-  # partial-obs: checkpointing is back on, so batch 8 fits again, and accum
-  # drops to 2 to stay near the working run's accum=1 (see above).
-  export PER_DEVICE_BATCH_SIZE=8
-  export GRAD_ACCUM=2
+  # partial-obs: accum MUST be 1. ckpt+accum2 crashed "marked as ready twice"
+  # (job 239825) exactly as ckpt+accum8 did; the one partial-obs run that ever
+  # completed used accum=1. With accumulation, HF wraps non-final micro-steps
+  # in no_sync, changing when DDP prepares for backward, and checkpointing's
+  # recomputation hooks then fire where DDP does not expect them. accum=1
+  # removes that window. batch 16 keeps the effective batch at 64 on 4 GPUs.
+  export PER_DEVICE_BATCH_SIZE=16
+  export GRAD_ACCUM=1
 fi
 # Recommended by the OOM message itself; costs nothing when memory is ample.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
