@@ -87,7 +87,10 @@ def collect() -> list[dict]:
     return rows
 
 
-BASELINES = [("gemini-3-flash-preview", "Gemini 3 Flash")]
+BASELINES = [
+    ("gemini-3-flash-preview", "Gemini 3 Flash"),
+    ("gemini-robotics-er-2-preview", "Gemini Robotics ER 2"),
+]
 
 
 def collect_baselines() -> list[dict]:
