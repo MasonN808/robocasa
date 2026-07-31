@@ -77,24 +77,24 @@ if [[ "${REASONING}" == "1" ]]; then
   reason_tag=reason
 fi
 
-# DDP "Expected to mark a variable ready only once" fires whenever
+# Gradient checkpointing is disabled for EVERY cell. It interacts badly with
 # ddp_find_unused_parameters=True (hardcoded in _build_training_arguments)
-# meets gradient checkpointing on a config where some batches don't exercise
-# every LoRA param. Observed for:
-#   - structured_random, with and without reasoning (v1/v1.5, 2026-07-29)
-#   - v3 + reasoning on verbalized_sampling (job 239494, 2026-07-30)
-# but NOT for v1.5 reasoning without v3 (job 231038 completed), nor v3
-# without reasoning (the original v3 run completed). So the trigger is the
-# source OR the reasoning+v3 combination -- disable checkpointing for both.
-# Non-reentrant checkpointing was tried and did NOT fix it.
+# whenever some batches leave LoRA params untouched, and it fails two
+# different ways:
+#   - hard crash, "Expected to mark a variable ready only once"
+#     (structured_random v1/v1.5 2026-07-29; v3+reasoning job 239494)
+#   - silent hang, no output at all, until the NCCL timeout
+#     (v3 no-reasoning job 239493 -- 11 min of silence where the first loss
+#     line was due at ~69s, so a hang, not slow progress)
+# The hang is why this is applied unconditionally rather than only to the
+# combinations already seen to crash: a cell that merely hangs looks like a
+# healthy queued job until it burns its whole walltime. Non-reentrant
+# checkpointing was tried and did NOT fix it.
 #
-# Dropping checkpointing raises activation memory, so those cells also halve
-# per-device batch and double grad-accum, holding effective batch at 64.
-ckpt_args=()
-if [[ "${SOURCE}" == "structured_random" || "${REASONING}" == "1" ]]; then
-  ckpt_args=(--no-gradient-checkpointing)
-  NO_CKPT=1
-fi
+# Without checkpointing activation memory rises, so per-device batch halves
+# (8->4) and grad-accum doubles (2->4), holding effective batch at 64.
+ckpt_args=(--no-gradient-checkpointing)
+NO_CKPT=1
 
 run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}"
 export OUTPUT_DIR="training/bc_task_vlm/runs/${run_name}"
