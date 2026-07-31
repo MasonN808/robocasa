@@ -77,7 +77,8 @@ if [[ "${REASONING}" == "1" ]]; then
   reason_tag=reason
 fi
 
-# Gradient checkpointing is disabled for EVERY cell. It interacts badly with
+# Gradient checkpointing is disabled for CENTRALIZED cells (partial-obs takes
+# the opposite branch below -- read both). It interacts badly with
 # ddp_find_unused_parameters=True (hardcoded in _build_training_arguments)
 # whenever some batches leave LoRA params untouched, and it fails two
 # different ways:
@@ -96,6 +97,25 @@ fi
 ckpt_args=(--no-gradient-checkpointing)
 NO_CKPT=1
 
+# ...except partial-observability, which needs the opposite treatment.
+# The only partial-obs run known to have trained successfully
+# (qwen3vl-8b-v3-partial-observability) used checkpointing ON with
+# grad_accum=1; this script's no-checkpointing + accum-8 config hung both
+# verbalized partial cells (239685/239686: zero loss lines, silent from the
+# second trainer.train() logged, while both centralized cells on the same
+# code were happily logging loss).
+#
+# Suspected mechanism: with find_unused_parameters=True, DDP re-derives the
+# unused-param set every forward. consume_once hands an image to exactly one
+# following call, so a whole accumulation micro-batch can be image-free --
+# ranks then disagree about whether the vision tower participated and the
+# allreduce deadlocks. accum=1 gives that disagreement no window to open,
+# which is what the working run had.
+if [[ "${OBS}" == "partial" ]]; then
+  ckpt_args=(--gradient-checkpointing)
+  NO_CKPT=0
+fi
+
 run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}"
 export OUTPUT_DIR="training/bc_task_vlm/runs/${run_name}"
 export WANDB_RUN_NAME="${run_name}"
@@ -106,10 +126,20 @@ export WANDB_RUN_NAME="${run_name}"
 # 2: batch 4 OOM'd on a 178GB B200 (job 239629 -- 173GB in use, tried to
 # allocate another 8.18GB). accum 8 keeps the effective batch at 64.
 export NUM_PROCESSES=4
-export PER_DEVICE_BATCH_SIZE=2
-export GRAD_ACCUM=8
+if [[ "${NO_CKPT}" == "1" ]]; then
+  export PER_DEVICE_BATCH_SIZE=2
+  export GRAD_ACCUM=8
+else
+  # partial-obs: checkpointing is back on, so batch 8 fits again, and accum
+  # drops to 2 to stay near the working run's accum=1 (see above).
+  export PER_DEVICE_BATCH_SIZE=8
+  export GRAD_ACCUM=2
+fi
 # Recommended by the OOM message itself; costs nothing when memory is ample.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# The working partial-obs run allowed 5400s; 1800 is tight for a slow first
+# collective and turns a recoverable stall into a dead job.
+export DDP_TIMEOUT_SECONDS=5400
 export ATTN_IMPLEMENTATION=flash_attention_2
 export IMAGE_RESOLUTION=512
 export MAX_LENGTH=8192
@@ -131,7 +161,7 @@ launch_args+=(
   "${obs_args[@]}"
   "${reason_args[@]}"
   "${ckpt_args[@]}"
-  --ddp-timeout-seconds 1800
+  --ddp-timeout-seconds "${DDP_TIMEOUT_SECONDS}"
   --num-epochs "${NUM_EPOCHS}"
   --eval-steps "${EVAL_STEPS}"
   --save-steps "${SAVE_STEPS}"

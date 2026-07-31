@@ -94,6 +94,7 @@ class RunConfiguration:
     bf16: bool
     fp16: bool
     gradient_checkpointing: bool
+    ddp_find_unused_parameters: bool
     attn_implementation: str
     trust_remote_code: bool
     lora_r: int
@@ -407,6 +408,17 @@ def parse_args() -> argparse.Namespace:
         "--gradient-checkpointing",
         action=argparse.BooleanOptionalAction,
         default=True,
+    )
+    parser.add_argument(
+        "--ddp-find-unused-parameters",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "DDP find_unused_parameters. True (default) is needed when some "
+            "batches leave LoRA params ungradiented, but it breaks gradient "
+            "checkpointing (double-marked params -> crash or silent hang). "
+            "Pass --no-ddp-find-unused-parameters to keep checkpointing."
+        ),
     )
     parser.add_argument("--attn-implementation", default="sdpa")
     parser.add_argument(
@@ -742,6 +754,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         bf16=args.bf16,
         fp16=args.fp16,
         gradient_checkpointing=args.gradient_checkpointing,
+        ddp_find_unused_parameters=args.ddp_find_unused_parameters,
         attn_implementation=args.attn_implementation,
         trust_remote_code=args.trust_remote_code,
         lora_r=args.lora_r,
@@ -1404,7 +1417,16 @@ def _build_training_arguments(
         "run_name": config.wandb_run_name or output_dir.name,
         "dataloader_num_workers": config.num_workers,
         "gradient_checkpointing": config.gradient_checkpointing,
-        "ddp_find_unused_parameters": True,
+        # True is required when some batches leave LoRA params without
+        # gradients (variable image counts do exactly that), but it is also
+        # what makes gradient checkpointing fail: checkpointing re-runs the
+        # forward during backward, firing each param's hook a second time, so
+        # DDP raises "marked as ready twice" -- or, seen on job 239493, just
+        # hangs silently until the NCCL timeout. transformers' own default is
+        # `not model.is_gradient_checkpointing` for this reason.
+        # Kept True by default so existing runs are unchanged; pass
+        # --no-ddp-find-unused-parameters to try checkpointing + batch 8.
+        "ddp_find_unused_parameters": config.ddp_find_unused_parameters,
         "warmup_ratio": config.warmup_ratio,
         "lr_scheduler_type": config.lr_scheduler_type,
         "optim": config.optim,
