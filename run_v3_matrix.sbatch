@@ -112,7 +112,24 @@ NO_CKPT=1
 # allreduce deadlocks. accum=1 gives that disagreement no window to open,
 # which is what the working run had.
 if [[ "${OBS}" == "partial" ]]; then
-  ckpt_args=(--gradient-checkpointing)
+  # accum=1 did NOT help: 239866/239867/239868 all crashed "marked as ready
+  # twice" at accum=1 with checkpointing on, so accumulation was never the
+  # variable. That error is precisely the find_unused_parameters=True +
+  # checkpointing incompatibility, and smoke test 239769 showed
+  # --no-ddp-find-unused-parameters clears it (checkpointing ON, batch 8,
+  # 30 steps, loss logging normally).
+  #
+  # This likely also explains the earlier no-checkpointing HANG: with
+  # find_unused_parameters=True, ranks independently derive which params went
+  # ungradiented, and consume_once makes whole micro-batches image-free, so
+  # ranks can disagree and the allreduce deadlocks. Turning the detection off
+  # removes both failure modes.
+  #
+  # Residual risk, stated plainly: if a partial batch genuinely leaves params
+  # without gradients, find_unused=False raises "Expected to have finished
+  # reduction in the prior iteration" instead. That is a loud, immediate
+  # failure, not a silent wrong result.
+  ckpt_args=(--gradient-checkpointing --no-ddp-find-unused-parameters)
   NO_CKPT=0
 fi
 
@@ -136,8 +153,8 @@ else
   # in no_sync, changing when DDP prepares for backward, and checkpointing's
   # recomputation hooks then fire where DDP does not expect them. accum=1
   # removes that window. batch 16 keeps the effective batch at 64 on 4 GPUs.
-  export PER_DEVICE_BATCH_SIZE=16
-  export GRAD_ACCUM=1
+  export PER_DEVICE_BATCH_SIZE=8
+  export GRAD_ACCUM=2
 fi
 # Recommended by the OOM message itself; costs nothing when memory is ample.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
