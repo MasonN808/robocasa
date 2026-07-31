@@ -70,6 +70,18 @@ case "${OBS}" in
   *) echo "Unknown OBS: ${OBS}" >&2; exit 1 ;;
 esac
 
+# TASK_COMPLETE=0 drops the synthetic task_complete tool + terminal example
+# from centralized cells, making them structurally comparable to partial-obs
+# (which never offers task_complete). Centralized cells measurably over-use it:
+# they declared completion at 0.27-0.45 while succeeding at 0.05-0.40, and each
+# premature declaration ends the episode and forfeits remaining budget.
+tc_args=()
+tc_tag=""
+if [[ "${TASK_COMPLETE:-1}" == "0" ]]; then
+  tc_args=(--no-predict-task-complete)
+  tc_tag="-notc"
+fi
+
 reason_args=()
 reason_tag=noreason
 if [[ "${REASONING}" == "1" ]]; then
@@ -133,7 +145,7 @@ if [[ "${OBS}" == "partial" ]]; then
   NO_CKPT=0
 fi
 
-run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}"
+run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}${tc_tag}"
 export OUTPUT_DIR="training/bc_task_vlm/runs/${run_name}"
 export WANDB_RUN_NAME="${run_name}"
 
@@ -181,6 +193,7 @@ source training/scripts/local/_launch_args.sh
 launch_args+=(
   "${obs_args[@]}"
   "${reason_args[@]}"
+  ${tc_args[@]+"${tc_args[@]}"}
   "${ckpt_args[@]}"
   --ddp-timeout-seconds "${DDP_TIMEOUT_SECONDS}"
   --num-epochs "${NUM_EPOCHS}"

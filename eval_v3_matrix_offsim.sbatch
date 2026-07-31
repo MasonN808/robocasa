@@ -65,7 +65,14 @@ esac
 reason_tag=noreason
 [[ "${REASONING}" == "1" ]] && reason_tag=reason
 
-run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}"
+tc_args=()
+tc_tag=""
+if [[ "${TASK_COMPLETE:-1}" == "0" ]]; then
+  tc_args=(--no-predict-task-complete)
+  tc_tag="-notc"
+fi
+
+run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}${tc_tag}"
 adapter_path="training/bc_task_vlm/runs/${run_name}"
 run_prefix="training/bc_task_vlm/eval_runs/offsim_${run_name}"
 
@@ -81,6 +88,7 @@ for split in heldout_trajectories heldout_tasks; do
     --model-name-or-path Qwen/Qwen3-VL-8B-Instruct \
     --adapter-path "${adapter_path}" \
     "${obs_args[@]}" \
+    ${tc_args[@]+"${tc_args[@]}"} \
     --sft-format tool_call \
     --no-forced-json \
     --image-resolution 512 \

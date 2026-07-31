@@ -74,8 +74,25 @@ esac
 reason_tag=noreason
 [[ "${REASONING}" == "1" ]] && reason_tag=reason
 
-run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}"
+tc_args=()
+tc_tag=""
+if [[ "${TASK_COMPLETE:-1}" == "0" ]]; then
+  tc_args=(--no-predict-task-complete)
+  tc_tag="-notc"
+fi
+
+run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}${tc_tag}"
 adapter_path="training/bc_task_vlm/runs/${run_name}"
+
+# SLURM --export is comma-delimited and so is --tasks, so a task list cannot be
+# passed through --export directly (it gets split into bogus env assignments --
+# jobs 242698-242700 silently received only the first task and exited as
+# "COMPLETED" having done nothing). Pass a FILE path instead.
+TASKS_ARG=""
+if [[ -n "${TASKS_FILE:-}" && -f "${TASKS_FILE}" ]]; then
+  TASKS_ARG="--tasks $(cat "${TASKS_FILE}")"
+  echo "  task filter from ${TASKS_FILE}: $(tr ',' '\n' < "${TASKS_FILE}" | wc -l) tasks"
+fi
 
 echo "=== live-sim: ${run_name} / ${SPLIT} ==="
 echo "  obs_args=${obs_args[*]}"
@@ -85,6 +102,7 @@ exec "${PYTHON_BIN}" -m training.bc_task_vlm.live_sim_eval \
   --model-name-or-path Qwen/Qwen3-VL-8B-Instruct \
   --adapter-path "${adapter_path}" \
   "${obs_args[@]}" \
+  ${tc_args[@]+"${tc_args[@]}"} \
   --sft-format tool_call \
   --no-forced-json \
   --manifest "${manifest_dir}/eval_manifest_${SPLIT}.json" \
@@ -93,4 +111,4 @@ exec "${PYTHON_BIN}" -m training.bc_task_vlm.live_sim_eval \
   --success-criterion fsm \
   --step-budget-factor 2.0 \
   --gl-backend egl \
-  --resume
+  --resume ${TASKS_ARG:-}

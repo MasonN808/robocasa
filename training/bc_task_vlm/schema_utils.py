@@ -42,11 +42,20 @@ def augment_tool_specs_for_agent_prediction(
     allowed_tool_specs: dict[str, dict[str, Any]],
     *,
     include_get_image: bool = False,
+    include_task_complete: bool = True,
 ) -> dict[str, dict[str, Any]]:
-    """Returns the task's tool specs plus the synthetic task_complete tool."""
+    """Returns the task's tool specs, optionally plus synthetic tools.
+
+    include_task_complete=False drops task_complete, which makes a centralized
+    run structurally comparable to a partial-observability one: partial never
+    offers task_complete (the caller is the actor), so a centralized model that
+    keeps it has an extra way to end an episode -- and measurably over-uses it,
+    declaring completion roughly twice as often as it actually succeeds.
+    """
 
     augmented = dict(allowed_tool_specs)
-    augmented[TASK_COMPLETE_TOOL_NAME] = deepcopy(TASK_COMPLETE_TOOL_SPEC)
+    if include_task_complete:
+        augmented[TASK_COMPLETE_TOOL_NAME] = deepcopy(TASK_COMPLETE_TOOL_SPEC)
     if include_get_image:
         augmented[GET_IMAGE_TOOL_NAME] = deepcopy(GET_IMAGE_TOOL_SPEC)
     return augmented

@@ -1039,7 +1039,11 @@ def run_trajectory(
         == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED
     )
     tool_specs = augment_tool_specs_for_agent_prediction(
-        task_metadata.allowed_tool_specs, include_get_image=train_get_image
+        task_metadata.allowed_tool_specs,
+        include_get_image=train_get_image,
+        include_task_complete=bool(
+            getattr(args, "predict_task_complete", True)
+        ),
     )
     tool_schemas = build_tool_schemas(
         agent_ids=AGENT_IDS,
@@ -2222,6 +2226,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=180.0,
         help="Per-request timeout for the vLLM server.",
+    )
+    parser.add_argument(
+        "--predict-task-complete",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Match the adapter's training flag. --no-predict-task-complete "
+            "removes task_complete from the tool set, so a centralized rollout "
+            "can only end on goal satisfaction, budget exhaustion or "
+            "rejections -- the same terminations available to partial-obs."
+        ),
     )
     parser.add_argument("--image-resolution", type=int, default=512)
     parser.add_argument("--max-length", type=int, default=16384)

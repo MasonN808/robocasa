@@ -68,6 +68,7 @@ class RunConfiguration:
     predict_acting_agent: bool
     train_get_image: bool
     train_reasoning: bool
+    predict_task_complete: bool
     causal_single_cache: bool
     partial_history: bool
     partial_step_index_mode: str
@@ -233,6 +234,19 @@ def parse_args() -> argparse.Namespace:
             "prefix before each assistant tool call, sourced from the "
             "trajectory's per-step reasoning string. Orthogonal to "
             "--predict-acting-agent/--train-get-image; composes with either."
+        ),
+    )
+    parser.add_argument(
+        "--predict-task-complete",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "With --predict-acting-agent, supervise the synthetic task_complete "
+            "tool and terminal example (default). Pass "
+            "--no-predict-task-complete to drop it, which makes a centralized "
+            "run structurally comparable to partial-observability: partial "
+            "never offers task_complete, so keeping it gives centralized an "
+            "extra way to end an episode that it over-uses."
         ),
     )
     parser.add_argument(
@@ -712,6 +726,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         predict_acting_agent=args.predict_acting_agent,
         train_get_image=args.train_get_image,
         train_reasoning=args.train_reasoning,
+        predict_task_complete=args.predict_task_complete,
         causal_single_cache=args.causal_single_cache,
         partial_history=args.partial_history,
         partial_step_index_mode=args.partial_step_index_mode,
@@ -1019,6 +1034,7 @@ def _build_examples_for_tasks(
     predict_agent: bool = False,
     train_get_image: bool = False,
     train_reasoning: bool = False,
+    predict_task_complete: bool = True,
     causal_single_cache: bool = False,
     partial_history: bool = False,
     partial_step_index_mode: str = "local",
@@ -1080,6 +1096,7 @@ def _build_examples_for_tasks(
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
                     train_reasoning=train_reasoning,
+                    predict_task_complete=predict_task_complete,
                     causal_single_cache=causal_single_cache,
                     partial_history=partial_history,
                     partial_step_index_mode=partial_step_index_mode,
@@ -1124,6 +1141,7 @@ def _build_examples_for_tasks(
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
                     train_reasoning=train_reasoning,
+                    predict_task_complete=predict_task_complete,
                     causal_single_cache=causal_single_cache,
                     partial_history=partial_history,
                     partial_step_index_mode=partial_step_index_mode,
@@ -1161,6 +1179,7 @@ def _build_examples_for_tasks(
                     predict_agent=predict_agent,
                     train_get_image=train_get_image,
                     train_reasoning=train_reasoning,
+                    predict_task_complete=predict_task_complete,
                     causal_single_cache=causal_single_cache,
                     partial_history=partial_history,
                     partial_step_index_mode=partial_step_index_mode,
@@ -1736,6 +1755,7 @@ def main() -> None:
         predict_agent=config.predict_acting_agent,
         train_get_image=config.train_get_image,
         train_reasoning=config.train_reasoning,
+        predict_task_complete=config.predict_task_complete,
         causal_single_cache=config.causal_single_cache,
         partial_history=config.partial_history,
         partial_step_index_mode=config.partial_step_index_mode,
@@ -1758,6 +1778,7 @@ def main() -> None:
         predict_agent=config.predict_acting_agent,
         train_get_image=config.train_get_image,
         train_reasoning=config.train_reasoning,
+        predict_task_complete=config.predict_task_complete,
         causal_single_cache=config.causal_single_cache,
         partial_history=config.partial_history,
         partial_step_index_mode=config.partial_step_index_mode,

@@ -119,6 +119,16 @@ def parse_args() -> argparse.Namespace:
         help="Evaluate active-observation (v3) get_image targets.",
     )
     parser.add_argument(
+        "--predict-task-complete",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Match the flag the adapter was trained with. "
+            "--no-predict-task-complete drops task_complete from the tool set "
+            "and from the supervised targets."
+        ),
+    )
+    parser.add_argument(
         "--causal-single-cache",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -799,6 +809,7 @@ def run_hf_backend(
                         metadata=metadata,
                         sft_format=args.sft_format,
                         predict_agent=args.predict_acting_agent,
+        predict_task_complete=args.predict_task_complete,
                     )
                     truncated = False
                     if attention_mask is not None and args.max_length is not None:
@@ -872,6 +883,7 @@ def run_vllm_backend(
                     metadata=sample.metadata,
                     sft_format=args.sft_format,
                     predict_agent=args.predict_acting_agent,
+        predict_task_complete=args.predict_task_complete,
                 )
                 record["generation_info"] = {
                     "backend": "vllm",
@@ -895,6 +907,7 @@ def run_vllm_backend(
             metadata=sample.metadata,
             sft_format=args.sft_format,
             predict_agent=args.predict_acting_agent,
+        predict_task_complete=args.predict_task_complete,
         )
         record["generation_info"] = {
             "backend": "vllm",
@@ -1061,6 +1074,7 @@ def run_gemini_backend(
                     metadata=sample.metadata,
                     sft_format=args.sft_format,
                     predict_agent=args.predict_acting_agent,
+        predict_task_complete=args.predict_task_complete,
                 )
                 cost = observed_cost(usage_metadata)
                 record["generation_info"] = {
@@ -1150,6 +1164,7 @@ _PROMPT_DEFINING_CONFIG_KEYS = (
     "forced_json",
     "native_tools",
     "predict_acting_agent",
+    "predict_task_complete",
     "train_get_image",
     "partial_history",
     "partial_step_index_mode",
@@ -1277,6 +1292,7 @@ def main() -> None:
         max_samples=args.max_samples,
         example_build_workers=args.example_build_workers,
         predict_agent=args.predict_acting_agent,
+        predict_task_complete=args.predict_task_complete,
         train_get_image=args.train_get_image,
         causal_single_cache=args.causal_single_cache,
         partial_history=args.partial_history,

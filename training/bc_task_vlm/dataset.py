@@ -813,6 +813,7 @@ def _build_centralized_examples_for_trajectory(
     predict_agent: bool = False,
     train_get_image: bool = False,
     train_reasoning: bool = False,
+    predict_task_complete: bool = True,
     causal_single_cache: bool = False,
     partial_history: bool = False,
     partial_step_index_mode: str = "local",
@@ -834,7 +835,9 @@ def _build_centralized_examples_for_trajectory(
     allowed_tool_specs = task_metadata.allowed_tool_specs
     if predict_agent:
         allowed_tool_specs = augment_tool_specs_for_agent_prediction(
-            allowed_tool_specs, include_get_image=train_get_image
+            allowed_tool_specs,
+            include_get_image=train_get_image,
+            include_task_complete=predict_task_complete,
         )
     elif partial_history and train_get_image:
         allowed_tool_specs = augment_tool_specs_with_get_image(allowed_tool_specs)
@@ -1044,7 +1047,7 @@ def _build_centralized_examples_for_trajectory(
             elif raw_step["tool"] not in {"communicate", TASK_COMPLETE_TOOL_NAME}:
                 active_observation_agent = None
 
-    if predict_agent and examples:
+    if predict_agent and predict_task_complete and examples:
         examples.append(
             _build_task_complete_example(
                 task_metadata=task_metadata,
@@ -1180,6 +1183,7 @@ def build_centralized_examples(
     predict_agent: bool = False,
     train_get_image: bool = False,
     train_reasoning: bool = False,
+    predict_task_complete: bool = True,
     causal_single_cache: bool = False,
     partial_history: bool = False,
     partial_step_index_mode: str = "local",
@@ -1218,7 +1222,9 @@ def build_centralized_examples(
         effective_tool_specs = task_metadata.allowed_tool_specs
         if predict_agent:
             effective_tool_specs = augment_tool_specs_for_agent_prediction(
-                effective_tool_specs, include_get_image=train_get_image
+                effective_tool_specs,
+                include_get_image=train_get_image,
+                include_task_complete=predict_task_complete,
             )
         elif partial_history and train_get_image:
             effective_tool_specs = augment_tool_specs_with_get_image(
@@ -1262,6 +1268,7 @@ def build_centralized_examples(
                 predict_agent=predict_agent,
                 train_get_image=train_get_image,
                 train_reasoning=train_reasoning,
+                predict_task_complete=predict_task_complete,
                 causal_single_cache=causal_single_cache,
                 partial_history=partial_history,
                 partial_step_index_mode=partial_step_index_mode,
@@ -1311,6 +1318,7 @@ def build_example_cache_fingerprint(
     predict_agent: bool = False,
     train_get_image: bool = False,
     train_reasoning: bool = False,
+    predict_task_complete: bool = True,
     causal_single_cache: bool = False,
     partial_history: bool = False,
     partial_step_index_mode: str = "local",
@@ -1364,6 +1372,8 @@ def build_example_cache_fingerprint(
         fingerprint["train_get_image"] = True
     if train_reasoning:
         fingerprint["train_reasoning"] = True
+    if not predict_task_complete:
+        fingerprint["predict_task_complete"] = False
     if causal_single_cache:
         fingerprint["causal_single_cache"] = True
     if partial_history:
