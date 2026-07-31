@@ -488,6 +488,15 @@ def configure_google_genai_environment(
     project: str | None,
     location: str | None,
 ) -> None:
+    # Some models are served only by the Gemini Developer API and 404 on every
+    # Vertex region -- gemini-robotics-er-2-preview is one. When an API key is
+    # present, route to the developer endpoint instead of Vertex. project and
+    # location are meaningless there, so leave them unset.
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if api_key:
+        os.environ[GOOGLE_GENAI_VERTEX_ENV_VAR] = "False"
+        os.environ["GOOGLE_API_KEY"] = api_key
+        return
     os.environ[GOOGLE_GENAI_VERTEX_ENV_VAR] = "True"
     if project:
         os.environ["GOOGLE_CLOUD_PROJECT"] = project

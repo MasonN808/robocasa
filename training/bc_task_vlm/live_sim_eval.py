@@ -956,11 +956,33 @@ class GeminiPolicy:
                 data=path.read_bytes(),
                 mime_type=_GEMINI_MIME_BY_SUFFIX.get(path.suffix.lower(), "image/jpeg"),
             ))
-        parts.append(types.Part.from_text(text=_message_text(messages[-1])))
+        # build_messages() appends a trailing assistant turn to preserve the
+        # training-example shape, and live-sim builds it with target_text="",
+        # so messages[-1] is an EMPTY assistant turn -- not the prompt. Taking
+        # it sent Gemini nothing but tool declarations, and because the tool
+        # config forces a call (mode=ANY), the model still emitted plausible
+        # calls with zero task context instead of failing loudly. Always read
+        # the last user turn.
+        user_message = next(
+            (m for m in reversed(messages) if m.get("role") == "user"), None
+        )
+        if user_message is None:
+            raise ValueError("No user message to send to Gemini.")
+        prompt_text = _message_text(user_message)
+        if not prompt_text.strip():
+            raise ValueError("Refusing to query Gemini with an empty prompt.")
+        parts.append(types.Part.from_text(text=prompt_text))
         declarations = [
             types.FunctionDeclaration(**item)
             for item in build_vertex_function_declarations(
-                feature["allowed_tool_specs"], include_agent_param=True
+                feature["allowed_tool_specs"],
+                # Under the partial contract the scheduler fixes the caller, so
+                # the tools take no "agent" argument and the parsed call is not
+                # stripped of one. Advertising the parameter anyway made Gemini
+                # emit it on every call, which then failed validation -- the
+                # agent relaunched the same rejected proposal until its
+                # rejection budget drained, scoring 0 for harness reasons.
+                include_agent_param=bool(feature.get("predict_agent", True)),
             )
         ]
         config_kwargs: dict[str, Any] = {
@@ -974,6 +996,20 @@ class GeminiPolicy:
         if self.thinking_budget >= 0:
             config_kwargs["thinking_config"] = types.ThinkingConfig(
                 thinking_budget=self.thinking_budget
+            )
+        import os as _os
+
+        if _os.environ.get("LIVESIM_DEBUG_PAYLOAD"):
+            img_bytes = sum(
+                len(getattr(getattr(p, "inline_data", None), "data", b"") or b"")
+                for p in parts
+            )
+            print(
+                f"[payload] images={len(feature['image_paths'])} "
+                f"image_bytes={img_bytes/1e6:.2f}MB "
+                f"prompt_chars={len(prompt_text)} "
+                f"tools={len(declarations)}",
+                flush=True,
             )
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
@@ -1042,7 +1078,7 @@ def run_trajectory(
         task_metadata.allowed_tool_specs,
         include_get_image=train_get_image,
         include_task_complete=bool(
-            getattr(args, "predict_task_complete", True)
+            getattr(args, "predict_task_complete", False)
         ),
     )
     tool_schemas = build_tool_schemas(
@@ -2042,6 +2078,9 @@ def _generate_once(
         "trajectory_id": str(trajectory.get("trajectory_id") or ""),
         "step_index": step_index,
         "agent_id": partial_caller or agent_hint or "",
+        # Policies that rebuild tool declarations from allowed_tool_specs need
+        # to know whether the "agent" argument is part of this contract.
+        "predict_agent": not partial,
         "target_payload": None,
         "target_tool_call": None,
         "target_text": "",
