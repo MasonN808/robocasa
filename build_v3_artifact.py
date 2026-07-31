@@ -33,7 +33,15 @@ def collect() -> list[dict]:
     for s_tag, s_name in SOURCES:
         for o_tag, o_name in OBS:
             for r_tag, r_name in REASON:
-                cell = f"{s_tag}-{o_tag}-{r_tag}"
+                # Centralized cells are sourced only from the "-notc" runs. The
+                # earlier centralized models were trained with a task_complete
+                # tool that partial never had, so their terminations and their
+                # sample counts were not comparable to anything else here.
+                # Those runs still exist on disk but are deliberately not read;
+                # a centralized cell renders "pending" until its
+                # no-task_complete replacement lands.
+                suffix = "-notc" if o_tag == "cent" else ""
+                cell = f"{s_tag}-{o_tag}-{r_tag}{suffix}"
                 for sp_tag, sp_name in SPLITS:
                     off = _load(
                         RUNS / f"offsim_qwen3vl-8b-v3-{cell}__{sp_tag}"
@@ -71,7 +79,6 @@ def collect() -> list[dict]:
                             # live-sim
                             "fsm": live and live.get("fsm_goal_rate"),
                             "native": live and live.get("native_success_rate"),
-                            "declared": live and live.get("declared_complete_rate"),
                             "harness_err": live and live.get("harness_error_rate"),
                             "n_traj": live and live.get("num_trajectories"),
                             "terminations": live and live.get("terminations"),
@@ -204,7 +211,6 @@ HTML_BODY = """
 <script>
 const METRICS=[
  {k:"fsm",label:"Live-sim task success (FSM)",note:"Closed-loop: fraction of 75 rollouts where the task spec's symbolic goal was satisfied. The bar that matters most.",pct:1},
- {k:"declared",label:"Live-sim: declared complete",note:"How often the model emitted task_complete. Compare against actual success above — over-declaring ends episodes early and forfeits remaining budget. Only centralized cells can do this; partial has no task_complete tool.",pct:1},
  {k:"judged_overall",label:"Judged overall (off-sim)",note:"Action exact-match + LLM-judged communication, over all steps.",pct:1},
  {k:"comm_judged",label:"Judged communication (off-sim)",note:"Paraphrase-tolerant judge score on communicate steps only.",pct:1},
  {k:"act_exact",label:"Action exact-match (off-sim)",note:"Physical steps only, exact call match.",pct:1},
@@ -269,17 +275,12 @@ function draw(){
 }
 function caveat(){
   const c=$("caveat");
-  if(M==="declared"){
-    c.innerHTML="<b>Only centralized cells appear here.</b> Partial-observability models are never given a "+
-      "<code>task_complete</code> tool, so they cannot end an episode voluntarily — their runs end only on goal "+
-      "satisfaction, budget exhaustion, or repeated illegal proposals. Compare each centralized bar against its "+
-      "live-sim success above: where declared &gt; success, the model stopped early and forfeited remaining budget.";
-  } else if(M==="act_exact"||M==="act_tool"||M==="valid"){
+  if(M==="act_exact"||M==="act_tool"||M==="valid"){
     c.innerHTML="<b>Centralized and partial evaluate different step populations.</b> Under "+
-      "<code>--predict-acting-agent</code>, <code>get_image</code> calls and a synthetic <code>task_complete</code> "+
-      "become prediction targets, so centralized cells score over ~2.4× more samples (e.g. 2771 vs 1152 on the same "+
-      "split) — and <code>get_image</code> is an easier prediction than a physical action. Treat centralized-vs-partial "+
-      "gaps on these off-sim metrics as inflated until recomputed over the shared step set.";
+      "<code>--predict-acting-agent</code> the centralized cells score every <code>get_image</code> call as a "+
+      "prediction target, so they are graded over substantially more samples than partial — and <code>get_image</code> "+
+      "is an easier prediction than a physical action. Treat centralized-vs-partial gaps on these off-sim metrics as "+
+      "inflated until recomputed over the shared step set. (task_complete is no longer trained or scored anywhere.)";
   } else if(M==="fsm"){
     c.innerHTML="<b>This is the metric to trust for capability.</b> It measures whether the task was actually "+
       "completed in simulation, not whether the next token matched a demonstration. Cells can score ~0.98 on off-sim "+
@@ -291,7 +292,7 @@ function caveat(){
   }
 }
 const COLS=[["source","source"],["obs","observability"],["reasoning","reasoning"],["split","split"],
- ["fsm","live fsm"],["declared","live declared"],["judged_overall","judged all"],["comm_judged","judged comm"],
+ ["fsm","live fsm"],["judged_overall","judged all"],["comm_judged","judged comm"],
  ["act_exact","act exact"],["act_tool","act tool"],["valid","valid"],["comm_raw","raw comm"],
  ["n_samples","n samp"],["n_traj","n traj"]];
 function table(){
@@ -303,7 +304,7 @@ function table(){
   ROWS.forEach(r=>{const row=document.createElement("tr");
     COLS.forEach(([k])=>{const td=document.createElement("td");
       const v=r[k];
-      td.textContent=(v==null)?"—":(typeof v==="number"&&v<=1&&["fsm","declared","judged_overall","comm_judged","act_exact","act_tool","valid","comm_raw"].includes(k))?(v*100).toFixed(1):v;
+      td.textContent=(v==null)?"—":(typeof v==="number"&&v<=1&&["fsm","judged_overall","comm_judged","act_exact","act_tool","valid","comm_raw"].includes(k))?(v*100).toFixed(1):v;
       row.appendChild(td);});
     tb.appendChild(row);});
   t.appendChild(tb);

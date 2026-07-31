@@ -811,7 +811,6 @@ def run_hf_backend(
                         metadata=metadata,
                         sft_format=args.sft_format,
                         predict_agent=args.predict_acting_agent,
-        predict_task_complete=args.predict_task_complete,
                     )
                     truncated = False
                     if attention_mask is not None and args.max_length is not None:
@@ -885,7 +884,6 @@ def run_vllm_backend(
                     metadata=sample.metadata,
                     sft_format=args.sft_format,
                     predict_agent=args.predict_acting_agent,
-        predict_task_complete=args.predict_task_complete,
                 )
                 record["generation_info"] = {
                     "backend": "vllm",
@@ -909,7 +907,6 @@ def run_vllm_backend(
             metadata=sample.metadata,
             sft_format=args.sft_format,
             predict_agent=args.predict_acting_agent,
-        predict_task_complete=args.predict_task_complete,
         )
         record["generation_info"] = {
             "backend": "vllm",
@@ -1076,7 +1073,6 @@ def run_gemini_backend(
                     metadata=sample.metadata,
                     sft_format=args.sft_format,
                     predict_agent=args.predict_acting_agent,
-        predict_task_complete=args.predict_task_complete,
                 )
                 cost = observed_cost(usage_metadata)
                 record["generation_info"] = {

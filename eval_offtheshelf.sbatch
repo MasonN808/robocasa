@@ -25,6 +25,14 @@
 # partial score here may reflect prompt-format unfamiliarity rather than a
 # limit on the model's reasoning.
 #
+# Off-sim passes --native-tools: an untrained model emits real function-call
+# parts, not the JSON-in-text dialect the fine-tuned cells were supervised on.
+# Without it Gemini returns empty text and every sample scores 0 -- a harness
+# artifact, not a capability result. Live-sim needs no such flag because its
+# GeminiPolicy is native-function-calling by construction. The parsed call is
+# scored identically either way, but note in any writeup that the baseline was
+# met in its own dialect while the tuned cells were met in theirs.
+#
 # A GPU is requested even though the policy is a hosted API, because live-sim
 # renders MuJoCo through EGL. Off-sim does not need it but shares the script.
 #
@@ -102,6 +110,7 @@ if [[ "${MODE}" == "offsim" ]]; then
       "${obs_off_args[@]}" \
       --sft-format tool_call \
       --no-forced-json \
+      --native-tools \
       --image-resolution 512 \
       --manifest "${manifest_dir}/eval_manifest_${split}.json" \
       --dataset-root "${dataset_root}" \
