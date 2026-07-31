@@ -598,8 +598,23 @@ def build_raw_google_genai_client(
         ) from exc
 
     configure_google_genai_environment(project=project, location=location)
-    validate_google_auth(project)
-    http_options_kwargs: dict[str, Any] = {"api_version": "v1"}
+    # ADC is the Vertex credential. In API-key mode it is irrelevant, and
+    # requiring it would reject a perfectly good developer-endpoint client.
+    if os.environ.get(GOOGLE_GENAI_VERTEX_ENV_VAR) != "False":
+        validate_google_auth(project)
+    # Preview models are only served on v1beta -- gemini-robotics-er-2-preview
+    # 404s on v1 with the very key that lists it. Vertex keeps v1, which is
+    # what every existing run used.
+    default_api_version = (
+        "v1beta"
+        if os.environ.get(GOOGLE_GENAI_VERTEX_ENV_VAR) == "False"
+        else "v1"
+    )
+    http_options_kwargs: dict[str, Any] = {
+        "api_version": os.environ.get(
+            "GOOGLE_GENAI_API_VERSION", default_api_version
+        )
+    }
     if timeout_sec is not None:
         # HttpOptions.timeout is in milliseconds.
         http_options_kwargs["timeout"] = int(timeout_sec) * 1000

@@ -56,6 +56,29 @@ export GOOGLE_CLOUD_PROJECT=access-cis260215-538827
 # Regional Vertex endpoints 404 here; global is required (EXPERIMENT.md s8).
 export GOOGLE_CLOUD_LOCATION=global
 
+# USE_API_KEY=1 routes to the Gemini Developer API instead of Vertex. Required
+# for gemini-robotics-er-*: those models 404 on every Vertex region tested even
+# with valid ADC, so the developer endpoint is the only way to reach them.
+# Deliberately opt-in -- exporting a key unconditionally would silently move
+# every other model off Vertex too, and the Flash baselines were run there.
+if [[ "${USE_API_KEY:-0}" == "1" ]]; then
+  key_file=/work/umass/shlomo_umass/dbenhamougol_umass/vertex_env/.env
+  [[ -f "${key_file}" ]] || { echo "USE_API_KEY=1 but ${key_file} is missing" >&2; exit 1; }
+  # shellcheck disable=SC1090
+  set -a; . "${key_file}"; set +a
+  : "${GEMINI_API_KEY:?no GEMINI_API_KEY in ${key_file}}"
+  export GEMINI_API_KEY
+  unset GOOGLE_APPLICATION_CREDENTIALS GOOGLE_CLOUD_PROJECT GOOGLE_CLOUD_LOCATION
+fi
+
+# In key mode there is no project/location to pass; the developer endpoint
+# ignores both and set -u would trip on the unset vars.
+if [[ "${USE_API_KEY:-0}" == "1" ]]; then
+  auth_args=()
+else
+  auth_args=(--project "${GOOGLE_CLOUD_PROJECT}" --location "${GOOGLE_CLOUD_LOCATION}")
+fi
+
 case "${EVAL_SOURCE}" in
   exp52)
     manifest_dir=training/bc_task_vlm/eval_manifests/exp52
@@ -105,8 +128,7 @@ if [[ "${MODE}" == "offsim" ]]; then
     "${PYTHON_BIN}" -m training.bc_task_vlm.eval_standalone \
       --backend gemini \
       --model "${MODEL}" \
-      --project "${GOOGLE_CLOUD_PROJECT}" \
-      --location "${GOOGLE_CLOUD_LOCATION}" \
+      ${auth_args[@]+"${auth_args[@]}"} \
       "${obs_off_args[@]}" \
       --sft-format tool_call \
       --no-forced-json \
@@ -123,8 +145,7 @@ else
   exec "${PYTHON_BIN}" -m training.bc_task_vlm.live_sim_eval \
     --backend gemini \
     --model "${MODEL}" \
-    --project "${GOOGLE_CLOUD_PROJECT}" \
-    --location "${GOOGLE_CLOUD_LOCATION}" \
+    ${auth_args[@]+"${auth_args[@]}"} \
     "${obs_live_args[@]}" \
     --sft-format tool_call \
     --no-forced-json \
