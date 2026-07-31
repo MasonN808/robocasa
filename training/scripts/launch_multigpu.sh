@@ -130,9 +130,20 @@ else
   echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
   echo "SLURM_STEP_GPUS=${SLURM_STEP_GPUS:-<unset>}"
   echo "SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-<unset>}"
+  # accelerate defaults the rendezvous port to 29500, so two jobs sharing a
+  # node collide with "EADDRINUSE ... port: 29500" (job 239918 died this way
+  # when a sibling 4-GPU job landed on the same host). Derive a per-job port
+  # from SLURM_JOB_ID so concurrent jobs cannot pick the same one; keep the
+  # default outside SLURM.
+  main_port="${MASTER_PORT:-29500}"
+  if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    main_port=$(( 20000 + SLURM_JOB_ID % 20000 ))
+  fi
+  echo "MAIN_PROCESS_PORT=${main_port}"
   "${python_bin}" -m accelerate.commands.launch \
     --config_file training/bc_task_vlm/accelerate_multigpu.yaml \
     --num_processes "${NUM_PROCESSES}" \
+    --main_process_port "${main_port}" \
     -m training.bc_task_vlm.main \
     "$@"
 fi
