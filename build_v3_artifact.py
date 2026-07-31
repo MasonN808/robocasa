@@ -301,6 +301,7 @@ function draw(){
   $("mtitle").textContent=m.label; $("mnote").textContent=m.note;
   const host=$("chart"); host.innerHTML="";
   let max=0; ROWS.forEach(r=>{if(r.split===S&&r[M]!=null&&r[M]>max)max=r[M];});
+  BASE.forEach(b=>{if(b.split===S&&b[M]!=null&&b[M]>max)max=b[M];});
   max=Math.max(max*1.1,0.05);
   ["verbalized_sampling","structured_random"].forEach(src=>{
     const g=document.createElement("div"); g.className="grp";
@@ -320,18 +321,17 @@ function draw(){
       });
       // Untrained reference for this same source/observability/split. Drawn
       // muted and outlined so it reads as a floor, not a fifth cell.
-      const bs=BASE.find(b=>b.source===src&&b.obs===obs&&b.split===S);
-      if(bs&&bs[M]!=null){
+      BASE.filter(b=>b.source===src&&b.obs===obs&&b.split===S&&b[M]!=null).forEach(bs=>{
         const row=document.createElement("div"); row.className="row";
         const lab=document.createElement("div"); lab.className="rlab base";
-        lab.textContent=bs.model+" (untrained)";
+        lab.textContent=bs.model;
         const tr=document.createElement("div"); tr.className="track";
         const fl=document.createElement("div"); fl.className="fill base";
         fl.style.width=Math.max(2,bs[M]/max*100)+"%"; tr.appendChild(fl);
         const val=document.createElement("div"); val.className="val base";
         val.textContent=fmt(bs[M]);
         row.appendChild(lab);row.appendChild(tr);row.appendChild(val); g.appendChild(row);
-      }
+      });
       if(pair[0]&&pair[1]&&pair[0][M]!=null&&pair[1][M]!=null){
         const d=pair[1][M]-pair[0][M];
         const w=document.createElement("div"); w.className="delta";

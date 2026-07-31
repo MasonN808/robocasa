@@ -938,6 +938,30 @@ class GeminiPolicy:
         self.max_output_tokens = args.max_output_tokens
         self.thinking_budget = args.thinking_budget
         self.max_retries = args.max_retries
+        # Hard ceiling per SDK call; defaults to 2x the request timeout so
+        # a normal slow response is never cut short.
+        self.hard_timeout = float(
+            getattr(args, "generate_hard_timeout", 0)
+            or 2.0 * float(getattr(args, "request_timeout", 180.0) or 180.0)
+        )
+
+    def _call_with_deadline(self, fn):
+        """Runs one SDK call under a hard wall-clock bound.
+
+        The SDK's own timeout is advisory here: it retries internally, so a
+        stuck connection never surfaces as an error. This turns that into a
+        TimeoutError the retry loop above can act on.
+        """
+
+        deadline = float(getattr(self, "hard_timeout", 0) or 0)
+        if deadline <= 0:
+            return fn()
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            return pool.submit(fn).result(timeout=deadline)
+        finally:
+            # Do not join a thread that may still be blocked in ssl.read.
+            pool.shutdown(wait=False)
 
     def generate(self, feature: dict[str, Any]) -> str:
         from google.genai import types
@@ -1014,10 +1038,19 @@ class GeminiPolicy:
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=parts,
-                    config=types.GenerateContentConfig(**config_kwargs),
+                # --request-timeout reaches httpx, but google-genai wraps each
+                # request in its own tenacity retry, so a wedged connection
+                # retries instead of failing: one request was observed blocked
+                # in ssl.read for 78 minutes under a 180s timeout, silently
+                # eating the job's walltime and truncating the cell. Bound it
+                # ourselves. The orphaned thread is leaked deliberately -- it
+                # is bounded by max_retries and cannot be cancelled.
+                response = self._call_with_deadline(
+                    lambda: self.client.models.generate_content(
+                        model=self.model,
+                        contents=parts,
+                        config=types.GenerateContentConfig(**config_kwargs),
+                    )
                 )
                 for candidate in getattr(response, "candidates", None) or []:
                     content = getattr(candidate, "content", None)
@@ -2312,6 +2345,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--location", default=None)
     parser.add_argument("--request-timeout", type=float, default=180.0)
     parser.add_argument("--max-retries", type=int, default=3)
+    parser.add_argument(
+        "--generate-hard-timeout", type=float, default=0.0,
+        help="Hard per-call wall-clock bound in seconds (0 = 2x --request-timeout). "
+             "Guards against google-genai retrying a wedged connection forever.",
+    )
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-output-tokens", type=int, default=256)
     parser.add_argument("--thinking-budget", type=int, default=0)
