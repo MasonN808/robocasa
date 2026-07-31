@@ -239,14 +239,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--predict-task-complete",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
-            "With --predict-acting-agent, supervise the synthetic task_complete "
-            "tool and terminal example (default). Pass "
-            "--no-predict-task-complete to drop it, which makes a centralized "
-            "run structurally comparable to partial-observability: partial "
-            "never offers task_complete, so keeping it gives centralized an "
-            "extra way to end an episode that it over-uses."
+            "OFF by default. task_complete is deliberately excluded so that a "
+            "centralized run stays structurally comparable to partial "
+            "observability, which never offers it (the caller is the actor). "
+            "When it was enabled, centralized cells over-used it: they "
+            "declared completion at 0.27-0.45 while succeeding at 0.05-0.40, "
+            "and every premature declaration ends the episode and forfeits the "
+            "remaining step budget. Pass --predict-task-complete only to "
+            "reproduce those earlier runs."
         ),
     )
     parser.add_argument(

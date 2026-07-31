@@ -121,7 +121,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--predict-task-complete",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "Match the flag the adapter was trained with. "
             "--no-predict-task-complete drops task_complete from the tool set "
@@ -373,6 +373,7 @@ def load_eval_samples(
     max_samples: int | None,
     example_build_workers: int,
     predict_agent: bool = False,
+    predict_task_complete: bool = False,
     train_get_image: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
@@ -399,6 +400,7 @@ def load_eval_samples(
         show_progress=True,
         progress_description="Building eval examples",
         predict_agent=predict_agent,
+        predict_task_complete=predict_task_complete,
         train_get_image=train_get_image,
         causal_single_cache=causal_single_cache,
         partial_history=partial_history,

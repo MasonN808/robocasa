@@ -42,7 +42,7 @@ def augment_tool_specs_for_agent_prediction(
     allowed_tool_specs: dict[str, dict[str, Any]],
     *,
     include_get_image: bool = False,
-    include_task_complete: bool = True,
+    include_task_complete: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Returns the task's tool specs, optionally plus synthetic tools.
 

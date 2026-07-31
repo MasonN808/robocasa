@@ -2230,7 +2230,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--predict-task-complete",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "Match the adapter's training flag. --no-predict-task-complete "
             "removes task_complete from the tool set, so a centralized rollout "
