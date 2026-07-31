@@ -87,14 +87,66 @@ def collect() -> list[dict]:
     return rows
 
 
-def render(rows: list[dict]) -> str:
+BASELINES = [("gemini-3-flash-preview", "Gemini 3 Flash")]
+
+
+def collect_baselines() -> list[dict]:
+    """Off-the-shelf models run through the same manifests, splits and tools.
+
+    These are not cells of the matrix -- nothing was trained -- so they are
+    carried separately and drawn as a reference line rather than compared
+    head-to-head. One caveat travels with every number here: an untrained
+    model is met in its own dialect (native function calls) while the tuned
+    cells are met in theirs (JSON in text), because forcing an untrained
+    model into the trained dialect scores 0 for format reasons alone.
+    """
+
+    out = []
+    for model_id, model_label in BASELINES:
+        tag = model_id.replace(".", "-").lower()
+        for s_tag, s_name in SOURCES:
+            for o_tag, o_name in OBS:
+                for sp_tag, sp_name in SPLITS:
+                    stem = f"ots-{tag}-{o_tag}-{s_tag}__{sp_tag}"
+                    off = _load(
+                        RUNS / f"offsim_{stem}" / "structured_eval_metrics.json"
+                    )
+                    live = _load(RUNS / f"livesim_{stem}" / "live_sim_metrics.json")
+                    out.append(
+                        {
+                            "model": model_label,
+                            "source": s_name,
+                            "obs": o_name,
+                            "split": sp_name,
+                            "act_exact": off and off.get(
+                                "structured_eval_action_exact_call_accuracy"),
+                            "act_tool": off and off.get(
+                                "structured_eval_action_tool_name_accuracy"),
+                            "valid": off and off.get(
+                                "structured_eval_tool_call_valid_rate"),
+                            "comm_raw": off and off.get(
+                                "structured_eval_comm_exact_call_accuracy"),
+                            "n_samples": off and off.get(
+                                "structured_eval_num_samples"),
+                            "fsm": live and live.get("fsm_goal_rate"),
+                            "n_traj": live and live.get("num_trajectories"),
+                            "judged_overall": None,
+                            "comm_judged": None,
+                            "reasoning": "untrained",
+                        }
+                    )
+    return out
+
+
+def render(rows: list[dict], base: list[dict]) -> str:
     done_off = sum(1 for r in rows if r["act_exact"] is not None)
     done_live = sum(1 for r in rows if r["fsm"] is not None)
     done_jud = sum(1 for r in rows if r["judged_overall"] is not None)
     data = json.dumps(rows)
     return (
         HTML_HEAD
-        + f"<script>const ROWS={data};const PROG={{off:{done_off},live:{done_live},jud:{done_jud},total:{len(rows)}}};</script>"
+        + f"<script>const ROWS={data};const BASE={json.dumps(base)};"
+        + f"const PROG={{off:{done_off},live:{done_live},jud:{done_jud},total:{len(rows)}}};</script>"
         + HTML_BODY
     )
 
@@ -152,6 +204,9 @@ HTML_HEAD = """<title>v3 matrix — off-sim &amp; live-sim</title>
   .track{flex:1;height:13px;background:var(--soft);border-radius:4px;overflow:hidden}
   .fill{height:100%;border-radius:4px 0 0 4px}
   .fill.a{background:var(--a)}.fill.b{background:var(--b)}
+  /* untrained reference: a floor to clear, not another cell */
+  .fill.base{background:repeating-linear-gradient(45deg,var(--line2),var(--line2) 3px,transparent 3px,transparent 6px);border:1px solid var(--line2)}
+  .rlab.base,.val.base{color:var(--ink3);font-style:italic}
   .val{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;width:56px;text-align:right;flex:none}
   .val.pend{color:var(--ink3)}
   .delta{display:flex;justify-content:flex-end;margin-top:2px}
@@ -260,6 +315,20 @@ function draw(){
         const val=document.createElement("div"); val.className="val"+(v==null?" pend":""); val.textContent=v==null?"pending":fmt(v);
         row.appendChild(lab);row.appendChild(tr);row.appendChild(val); g.appendChild(row);
       });
+      // Untrained reference for this same source/observability/split. Drawn
+      // muted and outlined so it reads as a floor, not a fifth cell.
+      const bs=BASE.find(b=>b.source===src&&b.obs===obs&&b.split===S);
+      if(bs&&bs[M]!=null){
+        const row=document.createElement("div"); row.className="row";
+        const lab=document.createElement("div"); lab.className="rlab base";
+        lab.textContent=bs.model+" (untrained)";
+        const tr=document.createElement("div"); tr.className="track";
+        const fl=document.createElement("div"); fl.className="fill base";
+        fl.style.width=Math.max(2,bs[M]/max*100)+"%"; tr.appendChild(fl);
+        const val=document.createElement("div"); val.className="val base";
+        val.textContent=fmt(bs[M]);
+        row.appendChild(lab);row.appendChild(tr);row.appendChild(val); g.appendChild(row);
+      }
       if(pair[0]&&pair[1]&&pair[0][M]!=null&&pair[1][M]!=null){
         const d=pair[1][M]-pair[0][M];
         const w=document.createElement("div"); w.className="delta";
@@ -280,7 +349,10 @@ function caveat(){
       "<code>--predict-acting-agent</code> the centralized cells score every <code>get_image</code> call as a "+
       "prediction target, so they are graded over substantially more samples than partial — and <code>get_image</code> "+
       "is an easier prediction than a physical action. Treat centralized-vs-partial gaps on these off-sim metrics as "+
-      "inflated until recomputed over the shared step set. (task_complete is no longer trained or scored anywhere.)";
+      "inflated until recomputed over the shared step set. (task_complete is no longer trained or scored anywhere.)"+
+      "<br><br><b>The untrained reference is met in its own dialect.</b> Gemini answers with native function calls; "+
+      "the tuned cells answer with JSON in text, as trained. Forcing an untrained model into the trained dialect "+
+      "scores 0 for format reasons alone, so this is the fair reading — but it is not a dialect-controlled comparison.";
   } else if(M==="fsm"){
     c.innerHTML="<b>This is the metric to trust for capability.</b> It measures whether the task was actually "+
       "completed in simulation, not whether the next token matched a demonstration. Cells can score ~0.98 on off-sim "+
@@ -321,7 +393,8 @@ def main() -> None:
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
     rows = collect()
-    args.out.write_text(render(rows), encoding="utf-8")
+    base = collect_baselines()
+    args.out.write_text(render(rows, base), encoding="utf-8")
     off = sum(1 for r in rows if r["act_exact"] is not None)
     live = sum(1 for r in rows if r["fsm"] is not None)
     jud = sum(1 for r in rows if r["judged_overall"] is not None)
