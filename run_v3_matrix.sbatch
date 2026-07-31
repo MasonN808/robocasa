@@ -77,14 +77,23 @@ if [[ "${REASONING}" == "1" ]]; then
   reason_tag=reason
 fi
 
-# structured_random's batch composition (high share of no-image
-# communicate/give_space steps) crashes DDP with
-# ddp_find_unused_parameters=True + gradient checkpointing
-# ("Expected to mark a variable ready only once"). Disabling checkpointing is
-# the fix that actually worked; non-reentrant checkpointing was not enough.
+# DDP "Expected to mark a variable ready only once" fires whenever
+# ddp_find_unused_parameters=True (hardcoded in _build_training_arguments)
+# meets gradient checkpointing on a config where some batches don't exercise
+# every LoRA param. Observed for:
+#   - structured_random, with and without reasoning (v1/v1.5, 2026-07-29)
+#   - v3 + reasoning on verbalized_sampling (job 239494, 2026-07-30)
+# but NOT for v1.5 reasoning without v3 (job 231038 completed), nor v3
+# without reasoning (the original v3 run completed). So the trigger is the
+# source OR the reasoning+v3 combination -- disable checkpointing for both.
+# Non-reentrant checkpointing was tried and did NOT fix it.
+#
+# Dropping checkpointing raises activation memory, so those cells also halve
+# per-device batch and double grad-accum, holding effective batch at 64.
 ckpt_args=()
-if [[ "${SOURCE}" == "structured_random" ]]; then
+if [[ "${SOURCE}" == "structured_random" || "${REASONING}" == "1" ]]; then
   ckpt_args=(--no-gradient-checkpointing)
+  NO_CKPT=1
 fi
 
 run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}"
@@ -93,8 +102,14 @@ export WANDB_RUN_NAME="${run_name}"
 
 # --- 4 GPUs, effective batch 64 (== the 8-GPU config's 8x8x1) ---
 export NUM_PROCESSES=4
-export PER_DEVICE_BATCH_SIZE=8
-export GRAD_ACCUM=2
+if [[ "${NO_CKPT:-0}" == "1" ]]; then
+  # no checkpointing -> more activation memory, so trade batch for accum
+  export PER_DEVICE_BATCH_SIZE=4
+  export GRAD_ACCUM=4
+else
+  export PER_DEVICE_BATCH_SIZE=8
+  export GRAD_ACCUM=2
+fi
 export ATTN_IMPLEMENTATION=flash_attention_2
 export IMAGE_RESOLUTION=512
 export MAX_LENGTH=8192
