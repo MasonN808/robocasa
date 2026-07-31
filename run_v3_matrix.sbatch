@@ -101,15 +101,15 @@ export OUTPUT_DIR="training/bc_task_vlm/runs/${run_name}"
 export WANDB_RUN_NAME="${run_name}"
 
 # --- 4 GPUs, effective batch 64 (== the 8-GPU config's 8x8x1) ---
+# Without checkpointing every activation is retained, and v3 samples carry
+# extra get_image frames, so per-device batch has to come all the way down to
+# 2: batch 4 OOM'd on a 178GB B200 (job 239629 -- 173GB in use, tried to
+# allocate another 8.18GB). accum 8 keeps the effective batch at 64.
 export NUM_PROCESSES=4
-if [[ "${NO_CKPT:-0}" == "1" ]]; then
-  # no checkpointing -> more activation memory, so trade batch for accum
-  export PER_DEVICE_BATCH_SIZE=4
-  export GRAD_ACCUM=4
-else
-  export PER_DEVICE_BATCH_SIZE=8
-  export GRAD_ACCUM=2
-fi
+export PER_DEVICE_BATCH_SIZE=2
+export GRAD_ACCUM=8
+# Recommended by the OOM message itself; costs nothing when memory is ample.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export ATTN_IMPLEMENTATION=flash_attention_2
 export IMAGE_RESOLUTION=512
 export MAX_LENGTH=8192
