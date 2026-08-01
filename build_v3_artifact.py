@@ -115,6 +115,7 @@ def collect_baselines() -> list[dict]:
                         RUNS / f"offsim_{stem}" / "structured_eval_metrics.json"
                     )
                     live = _load(RUNS / f"livesim_{stem}" / "live_sim_metrics.json")
+                    jud = _load(RUNS / f"offsim_{stem}" / "comm_judge_metrics.json")
                     out.append(
                         {
                             "model": model_label,
@@ -133,8 +134,9 @@ def collect_baselines() -> list[dict]:
                                 "structured_eval_num_samples"),
                             "fsm": live and live.get("fsm_goal_rate"),
                             "n_traj": live and live.get("num_trajectories"),
-                            "judged_overall": None,
-                            "comm_judged": None,
+                            "judged_overall": jud and jud.get(
+                                "judged_exact_call_accuracy"),
+                            "comm_judged": jud and jud.get("comm_judged_match_rate"),
                             "reasoning": "untrained",
                         }
                     )
