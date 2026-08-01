@@ -938,11 +938,13 @@ class GeminiPolicy:
         self.max_output_tokens = args.max_output_tokens
         self.thinking_budget = args.thinking_budget
         self.max_retries = args.max_retries
-        # Hard ceiling per SDK call; defaults to 2x the request timeout so
-        # a normal slow response is never cut short.
+        # Hard ceiling per SDK call. Healthy calls return in seconds -- whole
+        # trajectories finish in 23-72s -- so 90s is ~20x headroom while
+        # capping a wedged connection at 90s instead of the 360s a 2x-of-
+        # request-timeout default cost. Wedges here are intermittent and hit
+        # arbitrary tasks, so the cost per occurrence is what matters.
         self.hard_timeout = float(
-            getattr(args, "generate_hard_timeout", 0)
-            or 2.0 * float(getattr(args, "request_timeout", 180.0) or 180.0)
+            getattr(args, "generate_hard_timeout", 0) or 90.0
         )
 
     def _call_with_deadline(self, fn):
@@ -2347,7 +2349,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument(
         "--generate-hard-timeout", type=float, default=0.0,
-        help="Hard per-call wall-clock bound in seconds (0 = 2x --request-timeout). "
+        help="Hard per-call wall-clock bound in seconds (0 = 90s). "
              "Guards against google-genai retrying a wedged connection forever.",
     )
     parser.add_argument("--temperature", type=float, default=0.0)
