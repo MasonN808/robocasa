@@ -63,6 +63,17 @@ def format_allowed_tool_block(
     lines: list[str] = []
     for tool_name, tool_spec in allowed_tool_specs.items():
         tool_args = ", ".join(tool_spec.get("tool_args", ())) or "no args"
+        # The place_* family declares one required arg plus a tool_arg_any_of
+        # group. The runtime validator enforces that group, but this block used
+        # to drop it, so the prompt advertised place_on_object(object_id) while
+        # the runtime rejected any call lacking support_object_id. Models with
+        # demonstrations to imitate never noticed (expert targets carry the
+        # second argument); untrained models obeyed the signature and were
+        # rejected on ~4% of steps.
+        for arg_group in tool_spec.get("tool_arg_any_of", ()) or ():
+            group = [a for a in arg_group if a]
+            if group:
+                tool_args = f"{tool_args}, one of ({' | '.join(group)})"
         description = tool_spec.get("description", "").strip()
         line = f"- {tool_name}({tool_args}): {description}"
         allowed_values = _format_allowed_values(tool_spec)

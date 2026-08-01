@@ -343,3 +343,36 @@ def validate_single_step_payload(
             }
         ]
     }
+
+
+def normalize_give_space_fixtures(
+    allowed_tool_specs: dict[str, dict],
+) -> dict[str, dict]:
+    """Lets an agent yield at any fixture it is allowed to navigate to.
+
+    The per-task give_space allowlist is generated from fixtures the expert
+    happened to yield at, not from a simulator constraint -- SimToolExecutor
+    .give_space only requires the fixture to exist and then steps >=1.5m away.
+    When a reachable fixture is missing from that list, two agents contending
+    there have no legal way to resolve it: observed on 7 tasks, including
+    hot_dog_setup, whose unyieldable `counter` is a pick_up source both agents
+    need and which scored 0/120.
+
+    Widening only adds legal moves, so no existing expert trajectory is
+    invalidated.
+    """
+
+    nav = allowed_tool_specs.get("navigate_to_fixture") or {}
+    give = allowed_tool_specs.get("give_space")
+    if not give:
+        return allowed_tool_specs
+    reachable = list(nav.get("allowed_fixture_ids") or [])
+    if not reachable:
+        return allowed_tool_specs
+    current = list(give.get("allowed_fixture_ids") or [])
+    merged = list(dict.fromkeys([*current, *reachable]))
+    if merged == current:
+        return allowed_tool_specs
+    updated = dict(allowed_tool_specs)
+    updated["give_space"] = {**give, "allowed_fixture_ids": merged}
+    return updated
