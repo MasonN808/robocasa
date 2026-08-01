@@ -107,7 +107,7 @@ exec "${PYTHON_BIN}" -m training.bc_task_vlm.live_sim_eval \
   --no-forced-json \
   --manifest "${manifest_dir}/eval_manifest_${SPLIT}.json" \
   --dataset-root "${dataset_root}" \
-  --output-dir "training/bc_task_vlm/eval_runs/livesim_${run_name}__${SPLIT}" \
+  --output-dir "training/bc_task_vlm/eval_runs/livesim_${run_name}__${SPLIT}${OUT_SUFFIX:-}" \
   --success-criterion fsm \
   --step-budget-factor 2.0 \
   --gl-backend egl \

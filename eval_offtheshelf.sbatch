@@ -137,10 +137,17 @@ if [[ "${MODE}" == "offsim" ]]; then
       --manifest "${manifest_dir}/eval_manifest_${split}.json" \
       --dataset-root "${dataset_root}" \
       --output-dir "training/bc_task_vlm/eval_runs/offsim_ots-${model_tag}-${obs_tag}-${src_tag}__${split}" \
-      --resume
+      --resume ${TASKS_ARG}
   done
 else
   : "${SPLIT:?Set SPLIT for livesim}"
+  # TASKS_FILE restricts the run to a task subset (SLURM --export is comma
+  # delimited, so a path is passed rather than a comma list). OUT_SUFFIX keeps
+  # a re-run from resuming into an already-complete output dir.
+  TASKS_ARG=""
+  if [[ -n "${TASKS_FILE:-}" ]]; then
+    TASKS_ARG="--tasks $(paste -sd, "${TASKS_FILE}")"
+  fi
   echo "=== live-sim ${MODEL} on ${src_tag}/${SPLIT} ==="
   exec "${PYTHON_BIN}" -m training.bc_task_vlm.live_sim_eval \
     --backend gemini \
@@ -151,11 +158,11 @@ else
     --no-forced-json \
     --manifest "${manifest_dir}/eval_manifest_${SPLIT}.json" \
     --dataset-root "${dataset_root}" \
-    --output-dir "training/bc_task_vlm/eval_runs/livesim_ots-${model_tag}-${obs_tag}-${src_tag}__${SPLIT}" \
+    --output-dir "training/bc_task_vlm/eval_runs/livesim_ots-${model_tag}-${obs_tag}-${src_tag}__${SPLIT}${OUT_SUFFIX:-}" \
     --success-criterion fsm \
     --step-budget-factor 2.0 \
     --gl-backend egl \
-    --resume
+    --resume ${TASKS_ARG}
 fi
 
 echo "Done."
