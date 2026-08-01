@@ -34,6 +34,7 @@ import shutil
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -930,9 +931,11 @@ class GeminiPolicy:
 
         load_dotenv_file()
         location = args.location or os.environ.get("GOOGLE_CLOUD_LOCATION") or "global"
-        self.client = build_raw_google_genai_client(
-            args.project, location, timeout_sec=args.request_timeout
-        )
+        # Kept so the client can be rebuilt after a wedged connection: httpx
+        # pools connections, so once one hangs every retry on that pool hangs
+        # too, and a timeout alone just re-wedges at the next call.
+        self._client_args = (args.project, location, args.request_timeout)
+        self.client = self._build_client()
         self.model = args.model
         self.temperature = args.temperature
         self.max_output_tokens = args.max_output_tokens
@@ -945,6 +948,16 @@ class GeminiPolicy:
         # arbitrary tasks, so the cost per occurrence is what matters.
         self.hard_timeout = float(
             getattr(args, "generate_hard_timeout", 0) or 90.0
+        )
+
+    def _build_client(self):
+        from data_generation.task_level.runtime.client import (
+            build_raw_google_genai_client,
+        )
+
+        project, location, timeout_sec = self._client_args
+        return build_raw_google_genai_client(
+            project, location, timeout_sec=timeout_sec
         )
 
     def _call_with_deadline(self, fn):
@@ -1067,6 +1080,15 @@ class GeminiPolicy:
                 raise ValueError("Gemini response contained no function call")
             except Exception as exc:
                 last_error = exc
+                if isinstance(exc, FuturesTimeoutError):
+                    # The abandoned request still owns its pooled connection,
+                    # so retrying on the same client wedges again immediately.
+                    # Observed: a job sat 37min at 0 trajectories, every retry
+                    # timing out. A fresh client gets a fresh pool.
+                    try:
+                        self.client = self._build_client()
+                    except Exception:  # noqa: BLE001 -- keep the original error
+                        pass
                 if attempt < self.max_retries:
                     time.sleep(min(2 ** (attempt - 1), 8))
         assert last_error is not None
