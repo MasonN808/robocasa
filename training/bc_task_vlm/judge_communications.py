@@ -149,10 +149,20 @@ def process_run(run_dir: Path, client, args: argparse.Namespace) -> None:
         for r in comm_records
     }
     done: dict[str, dict[str, Any]] = {}
+    corrupt_lines = 0
     if judge_path.exists():
         for line in judge_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
-                verdict = json.loads(line)
+                # This cache is append-only, and two judge processes pointed at
+                # the same run dir interleave their appends into torn lines.
+                # A damaged line only costs one cached verdict -- it is re-judged
+                # below -- so skip it rather than aborting the whole run, which
+                # previously made a single bad byte permanently unresumable.
+                try:
+                    verdict = json.loads(line)
+                except json.JSONDecodeError:
+                    corrupt_lines += 1
+                    continue
                 # Error verdicts are retried on resume rather than treated as
                 # permanent judgements; empty target_args marks verdicts from
                 # the pre-fix judge that compared vacuous payloads.
@@ -172,6 +182,11 @@ def process_run(run_dir: Path, client, args: argparse.Namespace) -> None:
                 done[sample_id] = verdict
 
     pending = [r for r in comm_records if r["sample_id"] not in done]
+    if corrupt_lines:
+        print(
+            f"[{run_dir.name}] skipped {corrupt_lines} corrupt cache line(s); "
+            "those steps are re-judged"
+        )
     print(f"[{run_dir.name}] {len(comm_records)} comm steps, {len(pending)} to judge")
     if pending:
         with judge_path.open("a", encoding="utf-8") as handle:
