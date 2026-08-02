@@ -159,7 +159,8 @@
         "fixture_id"
       ],
       "allowed_fixture_ids": [
-        "dining_table"
+        "dining_table",
+        "stove"
       ]
     }
   },

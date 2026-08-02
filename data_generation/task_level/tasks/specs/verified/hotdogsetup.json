@@ -192,7 +192,8 @@
       "allowed_fixture_ids": [
         "dining_table",
         "fridge",
-        "cabinet"
+        "cabinet",
+        "counter"
       ]
     }
   },

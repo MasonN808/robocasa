@@ -131,6 +131,19 @@
         "cab",
         "counter"
       ]
+    },
+    "open_hinged_part": {
+      "description": "Open a hinged door, lid, or articulated head on a fixture.",
+      "tool_args": [
+        "target_id",
+        "part_id"
+      ],
+      "allowed_target_ids": [
+        "cab"
+      ],
+      "allowed_part_ids": [
+        "hinged"
+      ]
     }
   },
   "task_goal": "Pick the condiments from the counter and place them in the cabinet.",

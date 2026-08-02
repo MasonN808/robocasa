@@ -152,7 +152,8 @@
       ],
       "allowed_fixture_ids": [
         "cab",
-        "dining_table"
+        "dining_table",
+        "sink"
       ]
     }
   },

@@ -141,7 +141,8 @@
         "fixture_id"
       ],
       "allowed_fixture_ids": [
-        "counter"
+        "counter",
+        "fridge"
       ]
     }
   },

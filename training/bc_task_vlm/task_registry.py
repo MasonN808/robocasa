@@ -41,6 +41,12 @@ def _build_task_metadata_registry() -> dict[str, TaskMetadata]:
             dataset_name=dataset_name,
             composite_task=task_spec.composite_task,
             task_goal=task_spec.task_goal,
+            # The spec files now carry the FULLY RESOLVED tool set
+            # (materialize_task_specs.py), so the evaluator and the generator
+            # read the same field. Previously this took the raw declared spec
+            # and missed every runtime injection -- notably open_hinged_part,
+            # which produced "Tool open_hinged_part is not allowed here" and
+            # KeyError: 'hinged' on tasks whose experts legitimately used it.
             allowed_tool_specs=deepcopy(task_spec.allowed_tool_specs),
         )
     return registry

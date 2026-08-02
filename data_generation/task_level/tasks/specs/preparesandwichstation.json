@@ -104,6 +104,9 @@
         "object_id",
         "source_id"
       ],
+      "optional_tool_args": [
+        "source_site_id"
+      ],
       "allowed_object_ids": [
         "ingredient_bowl",
         "baguette"
@@ -114,10 +117,23 @@
       ]
     },
     "place_next_to": {
-      "description": "Place an object adjacent to a reference object or nearby fixture on the same support surface.",
+      "description": "Place an object adjacent to a reference object or nearby fixture on the same support surface. Use reference_object_id only for movable objects and reference_fixture_id only for fixtures.",
       "tool_args": [
-        "object_id",
-        "reference_fixture_id"
+        "object_id"
+      ],
+      "tool_arg_any_of": [
+        [
+          "reference_id",
+          "reference_object_id",
+          "reference_fixture_id"
+        ]
+      ],
+      "optional_tool_args": [
+        "reference_id",
+        "reference_object_id",
+        "reference_fixture_id",
+        "target_site_id",
+        "relative_position"
       ],
       "allowed_object_ids": [
         "ingredient_bowl",
@@ -135,6 +151,19 @@
       "allowed_fixture_ids": [
         "ingredient_source_fixture",
         "staging_surface"
+      ]
+    },
+    "open_hinged_part": {
+      "description": "Open a hinged door, lid, or articulated head on a fixture.",
+      "tool_args": [
+        "target_id",
+        "part_id"
+      ],
+      "allowed_target_ids": [
+        "ingredient_source_fixture"
+      ],
+      "allowed_part_ids": [
+        "door"
       ]
     }
   },

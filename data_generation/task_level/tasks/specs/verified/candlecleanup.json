@@ -144,6 +144,19 @@
         "cab",
         "dining_table"
       ]
+    },
+    "open_hinged_part": {
+      "description": "Open a hinged door, lid, or articulated head on a fixture.",
+      "tool_args": [
+        "target_id",
+        "part_id"
+      ],
+      "allowed_target_ids": [
+        "cab"
+      ],
+      "allowed_part_ids": [
+        "hinged"
+      ]
     }
   },
   "task_goal": "Pick the two decorations from the dining table and place them in the open cabinet, then close the cabinet.",

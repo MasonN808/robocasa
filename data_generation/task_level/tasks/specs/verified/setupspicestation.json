@@ -153,6 +153,19 @@
         "stove",
         "counter_stove"
       ]
+    },
+    "open_hinged_part": {
+      "description": "Open a hinged door, lid, or articulated head on a fixture.",
+      "tool_args": [
+        "target_id",
+        "part_id"
+      ],
+      "allowed_target_ids": [
+        "cabinet"
+      ],
+      "allowed_part_ids": [
+        "hinged"
+      ]
     }
   },
   "task_goal": "Collect the spice, bottle, and shaker from the cabinet and place them next to the stove.",

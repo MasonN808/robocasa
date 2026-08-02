@@ -52,7 +52,6 @@ from training.bc_task_vlm.schema_utils import (
     TASK_COMPLETE_TOOL_NAME,
     augment_tool_specs_for_agent_prediction,
     compact_json_dumps,
-    normalize_give_space_fixtures,
     apply_eval_fixture_aliases,
 )
 from training.bc_task_vlm.task_registry import AGENT_IDS, get_task_metadata
@@ -1151,7 +1150,7 @@ def run_trajectory(
         == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED
     )
     tool_specs = augment_tool_specs_for_agent_prediction(
-        normalize_give_space_fixtures(task_metadata.allowed_tool_specs),
+        task_metadata.allowed_tool_specs,
         include_get_image=train_get_image,
         include_task_complete=bool(
             getattr(args, "predict_task_complete", False)
@@ -1511,9 +1510,7 @@ def run_trajectory_partial(
     task_metadata = get_task_metadata(task_name)
     # Partial v3 supervises get_image with a FIXED caller, so the tool set gains
     # get_image but never task_complete or the agent argument.
-    tool_specs = augment_tool_specs_with_get_image(
-        normalize_give_space_fixtures(task_metadata.allowed_tool_specs)
-    )
+    tool_specs = augment_tool_specs_with_get_image(task_metadata.allowed_tool_specs)
     tool_schemas = build_tool_schemas(
         agent_ids=AGENT_IDS,
         allowed_tool_specs=tool_specs,

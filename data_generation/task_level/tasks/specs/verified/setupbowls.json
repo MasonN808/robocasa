@@ -151,6 +151,19 @@
         "cabinet",
         "dining_counter"
       ]
+    },
+    "open_hinged_part": {
+      "description": "Open a hinged door, lid, or articulated head on a fixture.",
+      "tool_args": [
+        "target_id",
+        "part_id"
+      ],
+      "allowed_target_ids": [
+        "cabinet"
+      ],
+      "allowed_part_ids": [
+        "hinged"
+      ]
     }
   },
   "task_goal": "Pick up the bowls from the cabinet and place each bowl in front of a stool on the dining counter.",
@@ -269,7 +282,9 @@
         "resolver": "unique_fixture_type",
         "fixture_type": "dining_counter",
         "anchor_fixture_symbol": "stool1",
-        "preferred_fixture_types": ["dining_counter"]
+        "preferred_fixture_types": [
+          "dining_counter"
+        ]
       },
       "stool1": {
         "entity_type": "fixture",
