@@ -1,4 +1,4 @@
 arrange_bread_bowl
-prepare_cheese_station
-dessert_assembly
 hot_dog_setup
+prepare_cheese_station
+prepare_sausage_cheese

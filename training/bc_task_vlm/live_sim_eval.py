@@ -485,6 +485,13 @@ def _canonical_symbolic_initial_state(*, task_spec, trajectory: dict[str, Any]):
             return symbol_map.get(value, value)
         return value
 
+    # The SAME symbol map must be applied to the trajectory's steps, not only
+    # to initial_state. original_trajectory.json (what both training and
+    # live-sim read) may name fixtures by role -- hot_dog_setup uses
+    # `sausage_source_fixture`, `serving_surface`, `bun_source_fixture` -- and
+    # leaving those unrewritten made every step referencing them illegal, since
+    # the task's allowlist is expressed in canonical names.
+    trajectory["steps"] = rewrite(trajectory.get("steps") or [])
     return rewrite(initial_state)
 
 

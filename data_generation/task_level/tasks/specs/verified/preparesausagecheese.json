@@ -57,7 +57,7 @@
       "fridge": {
         "fixture_type": "fridge",
         "parts": {
-          "hinged": {
+          "door": {
             "part_type": "hinged_part",
             "state": "closed"
           }
@@ -102,7 +102,7 @@
         "fridge"
       ],
       "allowed_part_ids": [
-        "hinged"
+        "door"
       ]
     },
     "close_hinged_part": {
@@ -189,7 +189,7 @@
       "tool": "pick_up_object",
       "source_id": "fridge",
       "fixture_id": "fridge",
-      "part_id": "hinged",
+      "part_id": "door",
       "required_state": "open",
       "message": "The fridge must be open to retrieve ingredients."
     }
@@ -294,7 +294,7 @@
         "tool": "open_hinged_part",
         "args": {
           "target_id": "fridge",
-          "part_id": "hinged"
+          "part_id": "door"
         },
         "reasoning": "Opening the fridge to access the ingredients."
       },

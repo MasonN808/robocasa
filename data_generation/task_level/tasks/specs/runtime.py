@@ -186,9 +186,15 @@ class SpecDrivenTaskValidator(FiniteStateTaskValidator):
                     continue
                 if step["args"].get("source_id") != condition["source_id"]:
                     continue
-                actual_state = runtime_state.fixtures[condition["fixture_id"]]["parts"][
-                    condition["part_id"]
-                ]["state"]
+                # Unguarded chained indexing turned a missing part into a bare
+                # KeyError that surfaced as an uninterpretable rejection reason
+                # (40 of them on prepare_cheese_station). A part absent from
+                # runtime state simply has not been opened yet.
+                actual_state = (
+                    ((runtime_state.fixtures.get(condition["fixture_id"]) or {})
+                     .get("parts") or {})
+                    .get(condition["part_id"]) or {}
+                ).get("state")
                 if actual_state != condition["required_state"]:
                     raise TaskPreconditionSemanticValidationError(
                         condition["message"],
@@ -208,9 +214,15 @@ class SpecDrivenTaskValidator(FiniteStateTaskValidator):
                 if isinstance(arg_name, str) and arg_value is not None:
                     if step["args"].get(arg_name) != arg_value:
                         continue
-                actual_state = runtime_state.fixtures[condition["fixture_id"]]["parts"][
-                    condition["part_id"]
-                ]["state"]
+                # Unguarded chained indexing turned a missing part into a bare
+                # KeyError that surfaced as an uninterpretable rejection reason
+                # (40 of them on prepare_cheese_station). A part absent from
+                # runtime state simply has not been opened yet.
+                actual_state = (
+                    ((runtime_state.fixtures.get(condition["fixture_id"]) or {})
+                     .get("parts") or {})
+                    .get(condition["part_id"]) or {}
+                ).get("state")
                 if actual_state != condition["required_state"]:
                     raise TaskPreconditionSemanticValidationError(
                         condition["message"],

@@ -53,7 +53,7 @@
       "fridge": {
         "fixture_type": "fridge",
         "parts": {
-          "hinged": {
+          "door": {
             "part_type": "hinged_part",
             "state": "open"
           }
@@ -63,7 +63,7 @@
       "cabinet": {
         "fixture_type": "cabinet",
         "parts": {
-          "hinged": {
+          "door": {
             "part_type": "hinged_part",
             "state": "open"
           }
@@ -144,7 +144,8 @@
         "grater"
       ],
       "allowed_reference_object_ids": [
-        "lettuce"
+        "lettuce",
+        "lettuce_bowl"
       ]
     },
     "give_space": {
@@ -169,7 +170,7 @@
         "fridge"
       ],
       "allowed_part_ids": [
-        "hinged"
+        "door"
       ]
     }
   },
@@ -188,7 +189,7 @@
       "tool": "pick_up_object",
       "source_id": "fridge",
       "fixture_id": "fridge",
-      "part_id": "hinged",
+      "part_id": "door",
       "required_state": "open"
     },
     {
@@ -196,7 +197,7 @@
       "tool": "pick_up_object",
       "source_id": "cabinet",
       "fixture_id": "cabinet",
-      "part_id": "hinged",
+      "part_id": "door",
       "required_state": "open"
     }
   ],

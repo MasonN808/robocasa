@@ -245,7 +245,8 @@
       "counter_1": "bun_source_fixture",
       "fridge_1": "sausage_source_fixture",
       "cabinet_1": "condiment_source_fixture",
-      "dining_table_1": "serving_surface"
+      "dining_table_1": "serving_surface",
+      "dining_dining_group": "dining_table"
     },
     "symbols": {
       "bun": {
