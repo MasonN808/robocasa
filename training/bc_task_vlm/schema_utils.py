@@ -376,3 +376,45 @@ def normalize_give_space_fixtures(
     updated = dict(allowed_tool_specs)
     updated["give_space"] = {**give, "allowed_fixture_ids": merged}
     return updated
+
+
+# Eval-only leniency. The benchmark names the same fixture `cab` in some tasks
+# and `cabinet` in others, so a model that saw one spelling emits it where only
+# the other is legal. Approved alias set is deliberately just this pair --
+# counter/dining_counter/kitchen_counter are NOT aliased, since those may be
+# genuinely distinct fixtures. Applied when validating a model's proposal in
+# live-sim; training data and prompts are untouched.
+_EVAL_FIXTURE_ALIASES = {"cab": "cabinet", "cabinet": "cab"}
+
+
+def apply_eval_fixture_aliases(
+    parsed_call: dict,
+    allowed_tool_specs: dict[str, dict],
+) -> dict:
+    """Rewrites cab<->cabinet in a proposed call when only the alias is legal.
+
+    Returns the call unchanged unless the emitted value is disallowed AND its
+    alias is allowed, so this can never turn a legal call into an illegal one.
+    """
+
+    if not parsed_call:
+        return parsed_call
+    spec = (allowed_tool_specs or {}).get(parsed_call.get("name"))
+    if not spec:
+        return parsed_call
+    args = dict(parsed_call.get("arguments") or {})
+    changed = False
+    for key, value in list(args.items()):
+        alias = _EVAL_FIXTURE_ALIASES.get(value) if isinstance(value, str) else None
+        if alias is None:
+            continue
+        for spec_key, allowed in spec.items():
+            if not spec_key.startswith("allowed_") or not isinstance(allowed, list):
+                continue
+            if value not in allowed and alias in allowed:
+                args[key] = alias
+                changed = True
+                break
+    if not changed:
+        return parsed_call
+    return {**parsed_call, "arguments": args}

@@ -53,6 +53,7 @@ from training.bc_task_vlm.schema_utils import (
     augment_tool_specs_for_agent_prediction,
     compact_json_dumps,
     normalize_give_space_fixtures,
+    apply_eval_fixture_aliases,
 )
 from training.bc_task_vlm.task_registry import AGENT_IDS, get_task_metadata
 from training.bc_task_vlm.tool_calling import (
@@ -2170,6 +2171,8 @@ def _generate_once(
     try:
         decoded = policy.generate(feature)
         parsed = parse_first_qwen_tool_call(decoded)
+        # eval-only cab<->cabinet leniency; never makes a legal call illegal
+        parsed = apply_eval_fixture_aliases(parsed, tool_specs)
         if partial:
             # Caller identity is fixed by the scheduler; the model never names
             # an acting agent under the distributed contract.
@@ -2428,7 +2431,15 @@ def parse_args() -> argparse.Namespace:
     partial.add_argument(
         "--rejection-mode",
         choices=(REJECTION_MODE_SILENT_RETRY, REJECTION_MODE_REPORT_FAILED),
-        default=REJECTION_MODE_SILENT_RETRY,
+        # report-failed by default: with silent-retry the agent's history is
+        # unchanged after a rejection, so at temperature 0 it re-emits the
+        # identical call. Measured adaptation after a rejection: 8.0% when
+        # silent vs 100% once FAILED: is shown (untrained 9.4% -> 94.1%), and
+        # 28-32% of every trajectory's budget went to re-emitting known-failed
+        # calls. Trained models never saw FAILED: in training, so they are
+        # mildly OOD on it; that is the accepted cost of not wasting a third
+        # of the budget.
+        default=REJECTION_MODE_REPORT_FAILED,
         help="silent-retry: a rejected call leaves state untouched and the agent "
         "sleeps until the next world event, then retries (no distribution "
         "shift). report-failed: append a FAILED: line the model never saw in "
