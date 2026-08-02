@@ -58,6 +58,10 @@ t=sorted(m["trajectory_ids_by_task"])
 print(",".join(t[i] for i in range(len(t)) if i % ${NSHARDS} == ${SHARD}))
 PY
 )
+# TASKS may be set explicitly to re-check a subset.
+# TASKS_SUBSET_FILE re-checks a subset. A file, not a comma list: SLURM
+# --export is itself comma-delimited and would split the list.
+if [[ -n "${TASKS_SUBSET_FILE:-}" ]]; then TASKS="$(paste -sd, "${TASKS_SUBSET_FILE}")"; fi
 echo "=== shard ${SHARD}/${NSHARDS}: ${TASKS}"
 
 exec "${PYTHON_BIN}" -m training.bc_task_vlm.live_sim_eval \
@@ -70,7 +74,7 @@ exec "${PYTHON_BIN}" -m training.bc_task_vlm.live_sim_eval \
   --no-forced-json \
   --manifest "${MANIFEST}" \
   --dataset-root "${DATA_ROOT}" \
-  --output-dir "training/bc_task_vlm/eval_runs/oraclegate__shard${SHARD}" \
+  --output-dir "training/bc_task_vlm/eval_runs/oraclegate${OUT_TAG:-}__shard${SHARD}" \
   --success-criterion fsm \
   --step-budget-factor 2.0 \
   --gl-backend egl \

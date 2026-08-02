@@ -1523,13 +1523,20 @@ def run_trajectory_partial(
     # a per-agent scheduler asks a specific agent what it wants to do. Split the
     # expert steps into per-agent queues so "agent A's next expert action" is
     # well defined regardless of the order the scheduler picks agents in.
-    expert_queues: dict[str, list[dict[str, Any]]] = {aid: [] for aid in AGENT_IDS}
+    # ORDER-PRESERVING REPLAY. Splitting the joint expert plan into per-agent
+    # queues let the scheduler interleave it differently from how it was
+    # written, which invalidates plans that depend on their own ordering. In
+    # arrange_bread_bowl/traj_000009 agent_1 picked up the bowl and carried it
+    # to dining_counter before agent_0 could place bread into it, so a correct
+    # plan was rejected for "missing navigation". Non-model policies now follow
+    # the recorded joint order exactly; only model policies are scheduled.
+    expert_sequence: list[dict[str, Any]] = []
     if not is_model_policy:
         for raw in trajectory["steps"]:
             if raw.get("tool") == "get_image":
                 continue
-            if raw.get("agent") in expert_queues:
-                expert_queues[raw["agent"]].append(
+            if raw.get("agent") in agents:
+                expert_sequence.append(
                     {"agent": raw["agent"], "tool": raw["tool"],
                      "args": deepcopy(raw.get("args", {}))}
                 )
@@ -1554,10 +1561,9 @@ def run_trajectory_partial(
         """One decision for one agent, using only that agent's private state."""
 
         if not is_model_policy:
-            queue = expert_queues[agent.agent_id]
-            if not queue:
+            if not expert_sequence or expert_sequence[0]["agent"] != agent.agent_id:
                 return {"exhausted": True}, None
-            return queue.pop(0), None
+            return expert_sequence.pop(0), None
         image_paths, view_names = agent.take_observation()
         render_dir = frames_dir or Path(args.output_dir) / "_tmp_views"
         proposal = _generate_once(
@@ -1579,17 +1585,29 @@ def run_trajectory_partial(
         return proposal, tuple(view_names) if view_names else None
 
     while turn_index < step_budget:
-        if all(a.ready_at == float("inf") for a in agents.values()):
-            termination = "policy_exhausted"
-            break
-        clock = min(a.ready_at for a in agents.values())
-        ready = sorted(
-            (a for a in agents.values()
-             if a.ready_at <= clock and a.ready_at != float("inf")),
-            key=lambda a: a.agent_id,
-        )
-        if not ready:
-            break
+        if not is_model_policy:
+            # Replay follows the recorded joint order; the timing scheduler is
+            # bypassed entirely so the plan cannot be re-interleaved.
+            if not expert_sequence:
+                termination = "policy_exhausted"
+                break
+            actor = agents[expert_sequence[0]["agent"]]
+            if actor.ready_at == float("inf"):
+                actor.ready_at = clock
+            clock = max(clock, actor.ready_at)
+            ready = [actor]
+        else:
+            if all(a.ready_at == float("inf") for a in agents.values()):
+                termination = "policy_exhausted"
+                break
+            clock = min(a.ready_at for a in agents.values())
+            ready = sorted(
+                (a for a in agents.values()
+                 if a.ready_at <= clock and a.ready_at != float("inf")),
+                key=lambda a: a.agent_id,
+            )
+            if not ready:
+                break
         if len(ready) > 1:
             simultaneous_cycles += 1
 
@@ -1687,7 +1705,7 @@ def run_trajectory_partial(
                 if not is_model_policy and not record.get("escalated"):
                     # Silent retry leaves state untouched, so an expert step
                     # consumed by a rejected proposal must go back on the queue.
-                    expert_queues[agent.agent_id].insert(0, proposal)
+                    expert_sequence.insert(0, proposal)
                 if record.get("escalated"):
                     escalations += 1
                 else:
