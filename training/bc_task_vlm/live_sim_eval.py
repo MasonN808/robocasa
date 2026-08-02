@@ -232,6 +232,7 @@ def _check_pruned_organize_condiments_success(
 # Partial-observability runtime: per-agent private state + concurrent scheduler
 # ---------------------------------------------------------------------------
 
+WAIT_TOOL_NAME = "wait_for_signal"
 REJECTION_MODE_SILENT_RETRY = "silent-retry"
 REJECTION_MODE_REPORT_FAILED = "report-failed"
 RESOURCE_LOCKS_NONE = "none"
@@ -329,11 +330,27 @@ class AgentRuntime:
         self.active_s = 0.0
         self.last_proposal_key: str | None = None
         self.repeated_proposals = 0
+        # wait_for_signal state. `waiting_for` records the DECLARED intent
+        # ({"from","about"}); the harness never checks `about` against message
+        # content -- any delivered message wakes the agent and the model decides
+        # whether it was the one it needed. That is deliberate: a harness that
+        # guaranteed relevance would leave nothing to learn and nothing to
+        # measure, whereas this makes comprehension an observable decision.
+        self.waiting_for: dict[str, Any] | None = None
+        self.consecutive_waits = 0
 
     def deliver(self, step: dict[str, Any]) -> None:
         """Appends to this agent's private history (own act or delivered msg)."""
 
         self.private_history.append(deepcopy(step))
+        # ANY inbound message from another agent wakes a waiter. Relevance is
+        # the model's judgement, not the environment's.
+        if (
+            self.waiting_for is not None
+            and step.get("tool") == "communicate"
+            and step.get("agent") != self.agent_id
+        ):
+            self.waiting_for = None
 
     def take_observation(self) -> tuple[list[str], list[str]]:
         """Consume-once: hand over the pending observation and clear it."""
@@ -1554,6 +1571,10 @@ def run_trajectory_partial(
     max_rejected = int(step_budget * float(getattr(args, "rejection_budget_ratio", 1.0)))
     termination = "budget_exhausted"
     simultaneous_cycles = 0
+    mutual_wait_deadlocks = 0
+    waits_issued = 0
+    wait_caps = 0
+    max_consecutive_waits = int(getattr(args, 'max_consecutive_waits', 3))
     escalations = 0
     silent_resolutions = 0
 
@@ -1600,14 +1621,31 @@ def run_trajectory_partial(
             if all(a.ready_at == float("inf") for a in agents.values()):
                 termination = "policy_exhausted"
                 break
+            # A waiting agent is not polled. If EVERY agent is waiting nobody
+            # can ever send the message that would wake them, so break the
+            # deadlock rather than hanging: wake all, and record it -- a hang
+            # is operationally far worse than budget exhaustion.
+            if agents and all(a.waiting_for is not None for a in agents.values()):
+                mutual_wait_deadlocks += 1
+                for a in agents.values():
+                    a.waiting_for = None
+                    a.consecutive_waits = 0
             clock = min(a.ready_at for a in agents.values())
             ready = sorted(
                 (a for a in agents.values()
-                 if a.ready_at <= clock and a.ready_at != float("inf")),
+                 if a.ready_at <= clock and a.ready_at != float("inf")
+                 and a.waiting_for is None),
                 key=lambda a: a.agent_id,
             )
             if not ready:
-                break
+                # everyone runnable is blocked on a signal; advance the clock
+                waiting = [a for a in agents.values() if a.waiting_for is not None]
+                if not waiting:
+                    break
+                clock = max(clock, min(a.ready_at for a in waiting))
+                for a in waiting:
+                    a.waiting_for = None
+                continue
         if len(ready) > 1:
             simultaneous_cycles += 1
 
@@ -1662,6 +1700,41 @@ def run_trajectory_partial(
             if key == agent.last_proposal_key:
                 agent.repeated_proposals += 1
             agent.last_proposal_key = key
+
+            # wait_for_signal is a scheduling primitive, not a sim action: it
+            # blocks the agent instead of touching the world. `about` is
+            # recorded but never checked -- any inbound message wakes the agent
+            # (see AgentRuntime.deliver) and judging relevance is the model's
+            # job. The first wait is free; later consecutive waits consume
+            # budget so a wait->irrelevant-message->wait livelock is bounded
+            # and visible rather than an unbounded stall.
+            if proposal.get("tool") == WAIT_TOOL_NAME and "error" not in proposal:
+                wait_args = proposal.get("args") or {}
+                agent.consecutive_waits += 1
+                agent.waiting_for = {
+                    "from": wait_args.get("from"),
+                    "about": wait_args.get("about"),
+                    "declared_at": turn_index,
+                }
+                record["legal"] = True
+                record["executed"] = True
+                record["waited_for"] = deepcopy(agent.waiting_for)
+                record["consecutive_waits"] = agent.consecutive_waits
+                waits_issued += 1
+                if agent.consecutive_waits > max_consecutive_waits:
+                    # Treat as unproductive: stop blocking and make it cost a turn.
+                    agent.waiting_for = None
+                    agent.consecutive_waits = 0
+                    record["wait_capped"] = True
+                    wait_caps += 1
+                    turn_index += 1
+                agent.deliver({"agent": agent.agent_id, "tool": WAIT_TOOL_NAME,
+                               "args": deepcopy(wait_args)})
+                agent.ready_at = clock + _tool_duration(WAIT_TOOL_NAME, multiplier)
+                records.append(record)
+                continue
+            if proposal.get("tool") != WAIT_TOOL_NAME:
+                agent.consecutive_waits = 0
 
             if proposal.get("error") or proposal.get("_rejected"):
                 pass  # counted below
@@ -1906,6 +1979,9 @@ def run_trajectory_partial(
         "partial_goal_fraction": mirror.partial_goal_fraction(),
         "makespan": round(makespan, 3),
         "simultaneous_cycles": simultaneous_cycles,
+        "waits_issued": waits_issued,
+        "wait_caps": wait_caps,
+        "mutual_wait_deadlocks": mutual_wait_deadlocks,
         "resource_conflicts": len(conflicts),
         "conflict_details": conflicts,
         "silent_resolutions": silent_resolutions,
@@ -2392,6 +2468,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project", default=None)
     parser.add_argument("--location", default=None)
     parser.add_argument("--request-timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--max-consecutive-waits", type=int, default=3,
+        help="Consecutive wait_for_signal calls before the wait is capped "
+             "and charged a turn. Bounds a wait->irrelevant-message->wait livelock.",
+    )
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument(
         "--generate-hard-timeout", type=float, default=0.0,
