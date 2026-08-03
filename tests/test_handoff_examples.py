@@ -25,6 +25,7 @@ The scenarios, in plain terms:
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from data_generation.task_level.tasks.shared.errors import (
@@ -212,6 +213,57 @@ class HandoffExampleTests(unittest.TestCase):
             do("agent_0", "place_on_surface", object_id="bowl", support_id="counter"),
             do("agent_1", "pick_up_object", object_id="bowl", source_id="counter"),
         ], "an unguarded cross-agent handoff must be rejected")
+
+
+class InsertionExampleTests(unittest.TestCase):
+    """Phase-2 insertion must produce trajectories the FSM accepts.
+
+    The case that broke it: a wait whose holder is still using the thing
+    afterwards. Dropping the release straight after the wait produced exactly
+    the promise scenario 5 rejects -- the release said "done" while the holder
+    went on to use it twice more. The release has to land after the holder's
+    LAST use and before the waiter needs it. This was 36 points of validity on
+    real data (60% -> 96%), from one misplaced line.
+    """
+
+    def test_release_lands_after_the_holder_finishes(self):
+        import random
+
+        from insert_waits import insert
+
+        fixtures = {"counter": {"fixture_type": "counter"},
+                    "cabinet": {"fixture_type": "cabinet"}}
+        objects = {"plate", "cup"}
+        # agent_1 waits on the cabinet; agent_0 keeps using it afterwards
+        steps = _numbered([
+            say("agent_0", "agent_1", "I am going to the cabinet."),
+            say("agent_1", "agent_0", "I need it after you."),
+            do("agent_0", "navigate_to_fixture", fixture_id="cabinet"),
+            wait("agent_1", "agent_0", "cabinet"),
+            do("agent_0", "pick_up_object", object_id="plate", source_id="cabinet"),
+            do("agent_0", "give_space", fixture_id="cabinet"),
+            do("agent_1", "navigate_to_fixture", fixture_id="cabinet"),
+        ])
+        out, _ = insert(steps, fixtures, objects, random.Random(0))
+
+        wait_at = next(i for i, s in enumerate(out)
+                       if s["tool"] == "wait_for_signal")
+        release_at = next(
+            i for i, s in enumerate(out)
+            if s["tool"] == "communicate" and s["agent"] == "agent_0"
+            and "cabinet" in str((s.get("args") or {}).get("message", "")).lower()
+            and i > wait_at
+        )
+        # messages mention the fixture too; only real actions count as use
+        last_use = max(i for i, s in enumerate(out)
+                       if s["agent"] == "agent_0"
+                       and s["tool"] not in ("communicate", "wait_for_signal")
+                       and "cabinet" in json.dumps(s.get("args") or {}))
+        self.assertGreater(
+            release_at, last_use,
+            "the release must come after the holder's last use, not straight "
+            "after the wait -- otherwise it is a promise, not a release",
+        )
 
 
 if __name__ == "__main__":

@@ -131,31 +131,57 @@ def insert(steps, fixtures, objects, rng):
             held[resource] = (actor, index)
 
     # The model's own waits often carry a degenerate release -- a message whose
-    # entire text is the id, which discharges nothing. Give those a real one
-    # rather than leaving the trajectory invalid.
-    repaired: list[dict] = []
+    # entire text is the id, which discharges nothing. Give those a real one.
+    # It must go after the holder's LAST use of the thing, not straight after
+    # the wait: dropping it next to the wait produces exactly the promise the
+    # rule exists to reject, because the holder is still using it.
+    def _uses(step, resource):
+        if step.get("tool") in SOCIAL_TOOL_NAMES or step.get("tool") in OBSERVATION_TOOL_NAMES:
+            return False
+        if step.get("tool") in ("give_space",):
+            return str((step.get("args") or {}).get("fixture_id")) == resource
+        return any(str(v) == resource for v in (step.get("args") or {}).values())
+
+    pending: dict[int, dict] = {}
     for index, step in enumerate(out):
-        repaired.append(step)
         if step.get("tool") != "wait_for_signal":
             continue
         args = step.get("args") or {}
         about, holder = str(args.get("about")), args.get("from")
         needle = about.casefold()
+        waiter_next = next(
+            (j for j in range(index + 1, len(out))
+             if out[j]["agent"] == step["agent"] and _uses(out[j], about)),
+            len(out),
+        )
         if any(
-            s.get("tool") == "communicate"
-            and s.get("agent") == holder
+            s.get("tool") == "communicate" and s.get("agent") == holder
             and (s.get("args") or {}).get("to") == step["agent"]
             and needle in str((s.get("args") or {}).get("message", "")).casefold()
             and str((s.get("args") or {}).get("message", "")).casefold()
                  .replace(needle, "").strip(" .,;:!")
-            for s in out[index + 1 :]
+            for s in out[index + 1 : waiter_next]
         ):
             continue
-        repaired.append({"agent": holder, "tool": "communicate",
-                         "args": {"to": step["agent"],
-                                  "message": rng.choice(FREES).format(x=about)},
-                         "reasoning": f"I am done with {about}."})
+        # after the holder finishes with it, and before the waiter needs it
+        last_use = max(
+            (j for j in range(index + 1, waiter_next)
+             if out[j]["agent"] == holder and _uses(out[j], about)),
+            default=index,
+        )
+        pending[last_use] = {
+            "agent": holder, "tool": "communicate",
+            "args": {"to": step["agent"],
+                     "message": rng.choice(FREES).format(x=about)},
+            "reasoning": f"I am done with {about}.",
+        }
         inserted += 1
+
+    repaired: list[dict] = []
+    for index, step in enumerate(out):
+        repaired.append(step)
+        if index in pending:
+            repaired.append(pending[index])
 
     for number, step in enumerate(repaired):
         step["step"] = number
