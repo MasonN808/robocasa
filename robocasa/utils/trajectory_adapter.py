@@ -580,6 +580,15 @@ class TrajectoryAdapter:
                 )
             if parts:
                 resolved_fixture_state["parts"] = parts
+            # parent_fixture names a sibling fixture, so it has to travel through the
+            # same alias path as the keys. Left raw it becomes a dangling symbolic id
+            # that every concrete-id lookup misses silently.
+            parent_fixture = fixture_state.get("parent_fixture")
+            if isinstance(parent_fixture, str):
+                resolved_fixture_state["parent_fixture"] = self._resolve_fixture_id(
+                    parent_fixture,
+                    requested_fixture_state=fixture_context.get(parent_fixture),
+                )
             resolved_fixtures[resolved_fixture_id] = resolved_fixture_state
 
         for requested_fixture_id, machine_cfg in machine_state.items():
