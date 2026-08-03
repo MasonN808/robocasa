@@ -36,3 +36,32 @@ PLACE_LOCATION_ARG_NAMES = (
     "receptacle_id",
     "support_object_id",
 )
+
+# Args that name a thing whose state one agent can change under another.
+DEPENDENCY_ARG_NAMES = (
+    "object_id",
+    "source_id",
+    "support_object_id",
+    "reference_object_id",
+    "receptacle_id",
+)
+# A release or announcement has to say something. Requiring only that the id
+# appear verbatim is satisfied by a message that is literally just the id --
+# observed in generated data, and it teaches the model that a bare token
+# discharges an obligation.
+MIN_SIGNAL_MESSAGE_WORDS = 4
+
+# Fixtures only one agent can work at, whatever they are handling: either a
+# single opening that must be approached head-on (mirrors _REQUIRE_FRONT_TYPES
+# in the sim executor), or a footprint too small for two robots. Everything
+# else -- counters, islands, dining tables -- is roomy enough to share, so two
+# agents there only conflict if they touch the SAME object.
+EXCLUSIVE_FIXTURE_TYPES = frozenset({
+    "cab", "cabinet", "cabinet_single_door", "cabinet_double_door",
+    "cabinet_with_door", "drawer", "top_drawer",
+    "fridge", "microwave", "oven", "dishwasher", "stove", "sink",
+    "toaster", "toaster_oven", "coffee_machine", "blender", "stand_mixer",
+    "electric_kettle",
+})
+# Args naming a fixture the acting agent must be standing at.
+FIXTURE_ARG_NAMES = ("fixture_id", "source_id", "support_id", "target_id")

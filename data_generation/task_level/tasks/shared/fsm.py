@@ -16,6 +16,10 @@ from .constants import (
     INTERACTION_TOOL_NAMES,
     NAVIGATION_TOOL_NAMES,
     OBSERVATION_TOOL_NAMES,
+    DEPENDENCY_ARG_NAMES,
+    EXCLUSIVE_FIXTURE_TYPES,
+    FIXTURE_ARG_NAMES,
+    MIN_SIGNAL_MESSAGE_WORDS,
     SOCIAL_TOOL_NAMES,
     WAIT_TOOL_NAMES,
     OPEN_PART_TOOL_NAMES,
@@ -144,6 +148,7 @@ class FiniteStateTaskValidator:
 
         agents = self._normalize_agents(candidate.get("agents"))
         steps = self._normalize_steps(candidate.get("steps"))
+        self._validate_dependency_waits(steps)
         runtime_state = self._build_runtime_state(agents)
         first_action_seen = False
         goal_state_satisfied = self.is_goal_state_satisfied(runtime_state)
@@ -404,6 +409,92 @@ class FiniteStateTaskValidator:
             return exc
         return exc.with_step(step)
 
+    def _validate_dependency_waits(
+        self,
+        steps: Sequence[dict[str, Any]],
+    ) -> None:
+        """Requires a wait wherever the two agents contend for the same resource.
+
+        Validating only the waits that happen to be present leaves the real gap
+        open: a plan can omit the wait and still pass, because a missing wait
+        has no symbolic effect. Ordered replay hides that -- the recorded
+        sequence supplies the ordering -- but the concurrent scheduler may
+        re-interleave, and the dependent action then runs against a world the
+        other agent is still changing. A demo that only works under a lucky
+        interleaving is not a correct demo.
+
+        Two things count as contention, and nothing else does:
+          * the same OBJECT, wherever it sits; and
+          * the same EXCLUSIVE fixture, whatever each agent is handling there.
+        A roomy counter shared by two agents working on different objects is
+        fine, which is why fixture type decides rather than fixture identity.
+        """
+
+        fixtures = self.initial_state.get("fixtures") or {}
+        objects = set(self.initial_state.get("objects") or {})
+
+        def _exclusive(fixture_id: str) -> bool:
+            state = fixtures.get(fixture_id)
+            if not isinstance(state, dict):
+                return False
+            return (
+                str(state.get("fixture_type", "")).lower()
+                in EXCLUSIVE_FIXTURE_TYPES
+            )
+
+        held: dict[str, tuple[str, int]] = {}
+        violations: list[str] = []
+        for index, step in enumerate(steps):
+            tool = step["tool"]
+            if tool in SOCIAL_TOOL_NAMES or tool in OBSERVATION_TOOL_NAMES:
+                continue
+            actor = step["agent"]
+            args = step.get("args") or {}
+
+            contested: list[str] = []
+            for name in DEPENDENCY_ARG_NAMES:
+                value = args.get(name)
+                if isinstance(value, str) and value in objects:
+                    contested.append(value)
+            for name in FIXTURE_ARG_NAMES:
+                value = args.get(name)
+                if isinstance(value, str) and value in fixtures and _exclusive(value):
+                    contested.append(value)
+
+            for resource in contested:
+                holder, held_at = held.get(resource, (None, -1))
+                if holder is None or holder == actor:
+                    continue
+                if any(
+                    earlier["tool"] in WAIT_TOOL_NAMES
+                    and earlier["agent"] == actor
+                    and str((earlier.get("args") or {}).get("about")) == resource
+                    and (earlier.get("args") or {}).get("from") == holder
+                    for earlier in steps[held_at + 1 : index]
+                ):
+                    continue
+                kind = "object" if resource in objects else "exclusive fixture"
+                violations.append(
+                    f"  step {step['step']} ({tool}): {actor} uses {resource!r}, "
+                    f"the same {kind} {holder} used at step "
+                    f"{steps[held_at]['step']}; {actor} must call "
+                    f"wait_for_signal(from={holder!r}, about={resource!r}) "
+                    f"before that step, and {holder} must announce and release it."
+                )
+            for resource in contested:
+                held[resource] = (actor, index)
+
+        # Report EVERY missing wait at once. Surfacing one at a time makes the
+        # repair loop oscillate: the model fixes the single error it was shown
+        # and re-breaks the one it was not, forever.
+        if violations:
+            raise WaitSignalSemanticValidationError(
+                f"{len(violations)} unguarded conflict(s) between the agents. "
+                f"Every one of these needs its own wait_for_signal:\n"
+                + "\n".join(violations),
+                details={"violation_count": len(violations)},
+            )
+
     def _validate_wait_step(
         self,
         step: dict[str, Any],
@@ -472,7 +563,11 @@ class FiniteStateTaskValidator:
                 continue
             if earlier_args.get("to") != from_agent:
                 continue
-            if needle in str(earlier_args.get("message", "")).casefold():
+            message = str(earlier_args.get("message", ""))
+            if (
+                needle in message.casefold()
+                and len(message.split()) >= MIN_SIGNAL_MESSAGE_WORDS
+            ):
                 break
         else:
             raise WaitSignalSemanticValidationError(
@@ -487,20 +582,39 @@ class FiniteStateTaskValidator:
                 },
             )
 
+        # The partner has to actually let the resource go before saying so.
+        # Matching on the message alone accepts a promise -- "I will give you
+        # space at the counter" -- and the waiter then resumes while the
+        # partner is still standing there. For a fixture the releasing act is
+        # give_space; for an object it is the partner's last use of it.
+        acted = False
         for later in steps[step_index + 1 :]:
-            if later["tool"] != "communicate":
-                continue
-            later_args = later.get("args") or {}
             if later["agent"] != from_agent:
                 continue
-            if later_args.get("to") != step["agent"]:
+            tool = later["tool"]
+            later_args = later.get("args") or {}
+            if tool == "communicate":
+                message = str(later_args.get("message", ""))
+                if (
+                    acted
+                    and later_args.get("to") == step["agent"]
+                    and needle in message.casefold()
+                    and len(message.split()) >= MIN_SIGNAL_MESSAGE_WORDS
+                ):
+                    return
                 continue
-            if needle in str(later_args.get("message", "")).casefold():
-                return
+            if tool in SOCIAL_TOOL_NAMES or tool in OBSERVATION_TOOL_NAMES:
+                continue
+            if tool in GIVE_SPACE_TOOL_NAMES:
+                if later_args.get("fixture_id") == about:
+                    acted = True
+                continue
+            if any(str(value) == about for value in later_args.values()):
+                acted = True
         raise WaitSignalSemanticValidationError(
             f"wait_for_signal at step {step['step']} is never released: "
             f"{from_agent} sends no later message to {step['agent']} naming "
-            f"{about!r}.",
+            f"{about!r} after actually finishing with it.",
             details={
                 "agent": step["agent"],
                 "from": from_agent,

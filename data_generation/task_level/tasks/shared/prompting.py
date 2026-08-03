@@ -162,6 +162,28 @@ def _build_fsm_prompt_rules(
             "if an agent is woken by a message that is not about what it was waiting for, it "
             "must call wait_for_signal again rather than proceed."
         )
+        prompt_rules.append(
+            "This is required, not optional. Two things count as a conflict: (a) both agents "
+            "use the SAME object, wherever it is; (b) both agents work at the same TIGHT "
+            "fixture -- a cabinet, drawer, fridge, oven, stove, sink, or a countertop "
+            "appliance -- even on different objects, because only one robot fits there. Two "
+            "agents at a roomy counter, island, or dining table working on DIFFERENT objects "
+            "is fine and needs nothing. On a conflict the second agent must call "
+            "wait_for_signal about that object or fixture before its step. Saying 'I will "
+            "wait' in a message is not waiting; the wait_for_signal call itself must be there."
+        )
+        prompt_rules.append(
+            "A release must come after the other agent has actually let go, never before. "
+            "For a shared object that means after its last use of the object; for a tight "
+            "fixture it means after it has called give_space there. 'I will give you space' "
+            "sent before leaving is a promise, not a release, and the waiting agent would "
+            "resume while the fixture is still occupied."
+        )
+        prompt_rules.append(
+            "Announcement and release messages must be real sentences of at least four words "
+            "that say what is happening with the thing named. A message consisting of just the "
+            "id, such as 'bowl', is not a valid announcement or release."
+        )
     if allowed_tool_names & INTERACTION_TOOL_NAMES:
         prompt_rules.append(
             "Interaction tools (press_button, press_lever, set_rotary_control) require the agent to be at the target fixture. Navigate to the fixture first."

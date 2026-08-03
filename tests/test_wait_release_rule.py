@@ -73,6 +73,18 @@ def _wait(step, agent="agent_0", frm="agent_1", about="bowl"):
     }
 
 
+def _act(step, agent="agent_1", about="bowl"):
+    """The releasing action: the partner's last use of the contested thing."""
+
+    return {
+        "step": step,
+        "agent": agent,
+        "tool": "place_on_surface",
+        "args": {"object_id": about, "support_id": "counter"},
+        "reasoning": "I am done with it.",
+    }
+
+
 def _release(step, agent="agent_1", to="agent_0", about="bowl"):
     return _msg(step, agent, to, f"I am done with {about}, it is yours.")
 
@@ -94,7 +106,7 @@ class WaitRuleTest(unittest.TestCase):
     # --- the shape that should pass -------------------------------------
 
     def test_announced_and_released_is_accepted(self):
-        steps = [_announce(0), _wait(1), _release(2)]
+        steps = [_announce(0), _wait(1), _act(2), _release(3)]
         try:
             self._run(steps)
         except WaitSignalSemanticValidationError:  # pragma: no cover
@@ -117,7 +129,9 @@ class WaitRuleTest(unittest.TestCase):
 
     def test_fixture_id_is_a_valid_about(self):
         steps = [_announce(0, about="counter"), _wait(1, about="counter"),
-                 _release(2, about="counter")]
+                 {"step": 2, "agent": "agent_1", "tool": "give_space",
+                  "args": {"fixture_id": "counter"}, "reasoning": "Yielding."},
+                 _release(3, about="counter")]
         try:
             self._run(steps)
         except WaitSignalSemanticValidationError:  # pragma: no cover
