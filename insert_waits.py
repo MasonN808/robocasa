@@ -101,8 +101,17 @@ def _guarded(steps, upto, actor, resource, holder, since):
 
 
 def insert(steps, fixtures, objects, rng):
-    """Returns (new_steps, inserted_count)."""
+    """Returns (new_steps, inserted_count).
 
+    Model-written waits are discarded first. Placement is decidable from the
+    plan, so a generated wait is at best redundant and at worst a deadlock: in
+    arrangetea/000000 agent_0 waited on the tray it was itself using, and in
+    condimentcollection/000009 agent_1 waited on a condiment it never needs.
+    Nobody releases a resource they do not hold, so those block until the
+    deadlock breaker fires. Deriving every wait here keeps one source of truth.
+    """
+
+    steps = [s for s in steps if s.get("tool") != "wait_for_signal"]
     held: dict[str, tuple[str, int]] = {}
     out: list[dict] = []
     inserted = 0
@@ -177,11 +186,22 @@ def insert(steps, fixtures, objects, rng):
         }
         inserted += 1
 
+    # The FSM forbids work after the goal is reached, so a release must not
+    # land beyond the last productive step; put it immediately before instead.
+    last_productive = max(
+        (i for i, s in enumerate(out)
+         if s["tool"] not in SOCIAL_TOOL_NAMES
+         and s["tool"] not in OBSERVATION_TOOL_NAMES),
+        default=len(out) - 1,
+    )
     repaired: list[dict] = []
     for index, step in enumerate(out):
+        if index == last_productive:
+            for at in sorted(k for k in pending if k >= last_productive):
+                repaired.append(pending.pop(at))
         repaired.append(step)
         if index in pending:
-            repaired.append(pending[index])
+            repaired.append(pending.pop(index))
 
     for number, step in enumerate(repaired):
         step["step"] = number

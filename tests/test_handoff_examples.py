@@ -266,5 +266,67 @@ class InsertionExampleTests(unittest.TestCase):
         )
 
 
+    def test_model_written_waits_are_discarded(self):
+        """A wait on something its holder never holds must not survive.
+
+        arrangetea/000000: agent_0 waited on the tray it was itself using.
+        Nobody releases a resource they do not hold, so it blocks until the
+        deadlock breaker fires. Placement is derivable, so phase 2 owns it and
+        generated waits are dropped rather than repaired.
+        """
+
+        import random
+
+        from insert_waits import insert
+
+        steps = _numbered([
+            say("agent_0", "agent_1", "I will put the bread in the bowl."),
+            say("agent_1", "agent_0", "Understood."),
+            do("agent_0", "pick_up_object", object_id="bread", source_id="counter"),
+            # nonsense: agent_0 waits on the bowl it is using itself
+            wait("agent_0", "agent_1", "bowl"),
+            do("agent_0", "place_on_surface", object_id="bread", support_id="bowl"),
+        ])
+        out, _ = insert(steps, {"counter": {"fixture_type": "counter"}},
+                        {"bowl", "bread"}, random.Random(0))
+        spurious = [
+            s for s in out
+            if s["tool"] == "wait_for_signal"
+            and s["agent"] == "agent_0"
+            and (s.get("args") or {}).get("about") == "bowl"
+        ]
+        self.assertEqual(spurious, [], "a wait whose holder never holds the "
+                                       "thing must be discarded, not kept")
+
+    def test_nothing_is_inserted_after_the_last_action(self):
+        """The FSM forbids work once the goal is reached.
+
+        servemealjuice/000008 failed because a release landed past the final
+        productive step, so a valid plan became post-goal work.
+        """
+
+        import random
+
+        from insert_waits import insert
+
+        steps = _numbered([
+            say("agent_0", "agent_1", "Starting on the bowl."),
+            say("agent_1", "agent_0", "Understood."),
+            do("agent_0", "pick_up_object", object_id="bowl", source_id="counter"),
+            do("agent_0", "place_on_surface", object_id="bowl", support_id="counter"),
+            do("agent_1", "pick_up_object", object_id="bowl", source_id="counter"),
+        ])
+        out, _ = insert(steps, {"counter": {"fixture_type": "counter"}},
+                        {"bowl"}, random.Random(0))
+        last_action = max(
+            i for i, s in enumerate(out)
+            if s["tool"] not in ("communicate", "wait_for_signal")
+        )
+        self.assertEqual(
+            last_action, len(out) - 1,
+            "no step may be inserted after the final productive action",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
