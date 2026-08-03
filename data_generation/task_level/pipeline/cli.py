@@ -82,6 +82,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Generation client to use for LLM-backed phases.",
     )
     parser.add_argument(
+        "--sampling",
+        type=str,
+        default=None,
+        help=(
+            "Trajectory sampling strategy passed to the raw generation CLI "
+            "(base, high_temperature, random, random_number, structured_random, "
+            "verbalized). Omit to take that CLI's own default."
+        ),
+    )
+    parser.add_argument(
         "--max-retries",
         type=int,
         default=5,
@@ -1124,6 +1134,7 @@ def _run_phase3(
         project=args.project,
         location=args.location or "global",
         sdk=args.sdk,
+        sampling=args.sampling,
         dry_run=args.dry_run,
         progress_callback=_progress,
         heartbeat_callback=_heartbeat,

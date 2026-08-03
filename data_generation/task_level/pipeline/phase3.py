@@ -128,6 +128,7 @@ def _run_one_task(
     generation_timeout_sec: int | None,
     spec_dir: Path,
     dry_run: bool,
+    sampling: str | None = None,
 ) -> Phase3TaskResult:
     spec_payload = _load_json_object(spec_path)
     task_name = str((spec_payload or {}).get("composite_task") or spec_path.stem)
@@ -157,6 +158,8 @@ def _run_one_task(
             "--thinking-level",
             "low",
         ]
+        if sampling:
+            command.extend(["--sampling", sampling])
         if model:
             command.extend(["--model", model])
         if sdk:
@@ -280,6 +283,7 @@ def run_phase3(
     heartbeat_callback: Any = None,
     heartbeat_interval_sec: float = _DEFAULT_HEARTBEAT_INTERVAL_SEC,
     generation_timeout_sec: int | None = 300,
+    sampling: str | None = None,
 ) -> list[Phase3TaskResult]:
     """Generate raw trajectories for the given TaskSpec files."""
 
@@ -308,6 +312,7 @@ def run_phase3(
                 generation_timeout_sec=generation_timeout_sec,
                 spec_dir=spec_dir,
                 dry_run=dry_run,
+                sampling=sampling,
             )
             results.append(result)
             if progress_callback is not None:
@@ -333,6 +338,7 @@ def run_phase3(
                     generation_timeout_sec=generation_timeout_sec,
                     spec_dir=spec_dir,
                     dry_run=dry_run,
+                    sampling=sampling,
                 ): index
                 for index, spec_path in enumerate(spec_paths)
             }
