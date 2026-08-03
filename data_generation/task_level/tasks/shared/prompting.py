@@ -120,10 +120,10 @@ def _build_fsm_prompt_rules(
         )
     if allowed_tool_names & GIVE_SPACE_TOOL_NAMES:
         prompt_rules.append(
-            "Use give_space only at the fixture where that agent is already positioned, after the agents communicate that another agent is about to navigate there, so the yielding agent clears the space before the other agent arrives."
+            "Use give_space at the fixture where that agent is already standing, never after navigating there just to yield. The trigger is that the other agent is about to work at that fixture OR at a fixture paired with it by `parent_fixture`; in both cases the agents communicate first, then the standing agent yields before the other arrives."
         )
         prompt_rules.append(
-            "A fixture with a `parent_fixture` in initial_state shares one workspace with that parent, whether it is a cabinet above a counter or an appliance resting on it. If one agent is at either, the other must not navigate into the paired side until the first gives_space from where it stands."
+            "A fixture with a `parent_fixture` in initial_state shares one workspace with that parent, whether it is a cabinet above a counter or an appliance resting on it. If one agent is at either, the other must not navigate into the paired side until the first gives_space from where it stands. When BOTH agents start in that shared workspace, this still applies: before either agent uses one side, the agent that is not about to act must give_space first, at whichever fixture it is standing."
         )
         prompt_rules.append(
             "Do not use give_space while holding an object unless there is no legal way to finish the current placement first."
@@ -358,8 +358,9 @@ Important rules:
 - Simulate both agents: {agent_id_list_text}.
 - Keep track of what object each agent is holding and where the agent's location is at all times.
 - Keep track of all agent's locations which can only be at fixture locations. Be sure that the agent is not "teleporting" across the environment to complete tasks; the agent should navigate first via a tool call.
-- If agent_A plans to navigate to or use a fixture where agent_B is already positioned, have the agents communicate first about that upcoming navigation, then have agent_B execute give_space(fixture_id) at that fixture before agent_A arrives so they avoid a location conflict. Do not navigate to a fixture only to call give_space; give_space is only for an agent already there.
+- If agent_A plans to navigate to or use a fixture where agent_B is already positioned, OR a fixture paired with agent_B's fixture by `parent_fixture`, have the agents communicate first about that upcoming action, then have agent_B execute give_space(fixture_id) at the fixture it is standing at, before agent_A acts, so they avoid a location conflict. Do not navigate to a fixture only to call give_space; give_space is only for an agent already there.
 - Some fixtures stand on or above another fixture and share its floor space. When a fixture in initial_state.fixtures has a `parent_fixture`, treat that fixture and its parent as ONE shared workspace: if one agent is at either of them, the other agent must not navigate to or use the other until the first agent explicitly gives_space from where it is standing. This applies to cabinets and drawers above a counter and equally to appliances resting on one (toaster oven, coffee machine, and similar).
+- This shared-workspace rule applies from step 0, including when BOTH agents start in the same shared workspace. Check the initial agent positions: if both agents begin at the parent fixture (or one at the parent and one at the child), the agent that is not about to act must give_space at the fixture where it stands, before the acting agent navigates to or uses either side. Standing at the parent counter blocks the appliance resting on it, even though they have different fixture ids.
 - Prefer finishing a held-object placement before calling give_space. Do not give_space while holding an item unless there is no legal alternative.
 - In the initial steps, the agents must coordinate through communication tool calls before any task action. Both agents must communicate during this time.
 - Throughout the trajectory, both agents should actively communicate with each other to communicate intentions, plans, and needs, not just in the initial steps.
