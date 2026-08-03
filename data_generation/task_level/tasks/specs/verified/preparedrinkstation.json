@@ -58,7 +58,8 @@
             "state": "open"
           }
         },
-        "controls": {}
+        "controls": {},
+        "parent_fixture": "counter"
       },
       "dining_counter": {
         "fixture_type": "dining_counter",

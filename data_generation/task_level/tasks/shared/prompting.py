@@ -123,7 +123,7 @@ def _build_fsm_prompt_rules(
             "Use give_space only at the fixture where that agent is already positioned, after the agents communicate that another agent is about to navigate there, so the yielding agent clears the space before the other agent arrives."
         )
         prompt_rules.append(
-            "Treat cabinet/drawer and its supporting counter as one shared workspace. If one agent is at either side of that workspace, the other agent must not navigate into the paired side until the first agent explicitly gives_space from that workspace."
+            "A fixture with a `parent_fixture` in initial_state shares one workspace with that parent, whether it is a cabinet above a counter or an appliance resting on it. If one agent is at either, the other must not navigate into the paired side until the first gives_space from where it stands."
         )
         prompt_rules.append(
             "Do not use give_space while holding an object unless there is no legal way to finish the current placement first."
@@ -359,7 +359,7 @@ Important rules:
 - Keep track of what object each agent is holding and where the agent's location is at all times.
 - Keep track of all agent's locations which can only be at fixture locations. Be sure that the agent is not "teleporting" across the environment to complete tasks; the agent should navigate first via a tool call.
 - If agent_A plans to navigate to or use a fixture where agent_B is already positioned, have the agents communicate first about that upcoming navigation, then have agent_B execute give_space(fixture_id) at that fixture before agent_A arrives so they avoid a location conflict. Do not navigate to a fixture only to call give_space; give_space is only for an agent already there.
-- Treat cabinet/drawer fixtures and their supporting counters as one shared workspace. If one agent is at the cabinet side or counter side, the other agent must not navigate into the other side until the first agent explicitly gives_space from that workspace.
+- Some fixtures stand on or above another fixture and share its floor space. When a fixture in initial_state.fixtures has a `parent_fixture`, treat that fixture and its parent as ONE shared workspace: if one agent is at either of them, the other agent must not navigate to or use the other until the first agent explicitly gives_space from where it is standing. This applies to cabinets and drawers above a counter and equally to appliances resting on one (toaster oven, coffee machine, and similar).
 - Prefer finishing a held-object placement before calling give_space. Do not give_space while holding an item unless there is no legal alternative.
 - In the initial steps, the agents must coordinate through communication tool calls before any task action. Both agents must communicate during this time.
 - Throughout the trajectory, both agents should actively communicate with each other to communicate intentions, plans, and needs, not just in the initial steps.

@@ -62,7 +62,8 @@
             "state": "closed"
           }
         },
-        "controls": {}
+        "controls": {},
+        "parent_fixture": "counter"
       },
       "counter": {
         "fixture_type": "counter",

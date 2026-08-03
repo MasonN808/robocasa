@@ -58,7 +58,8 @@
             "state": "open"
           }
         },
-        "controls": {}
+        "controls": {},
+        "parent_fixture": "counter"
       },
       "fridge": {
         "fixture_type": "fridge",

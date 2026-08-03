@@ -1162,28 +1162,6 @@ def _fixtures_share_workspace(
     ):
         return True
 
-    # A countertop appliance stands ON a counter, so an agent at that counter is
-    # inside the appliance's working area and must yield before a teammate can
-    # reach it. Without this, no give_space is injected and the simulator ends up
-    # silently teleporting the blocker out of the way -- which is not a move any
-    # policy chose, and hides the coordination the task is meant to require.
-    #
-    # Deliberately NOT gated on the workspace cluster: this pass runs in the
-    # SYMBOLIC namespace ("counter", "toaster_oven"), where cluster ids are just
-    # the names themselves and never match. Over-firing is bounded because only
-    # 4 of 53 task specs contain a countertop appliance at all.
-    appliance = {
-        "toaster_oven",
-        "toaster",
-        "coffee_machine",
-        "blender",
-        "stand_mixer",
-        "electric_kettle",
-    }
-    if (pair_types[0] in counterlike and pair_types[1] in appliance) or (
-        pair_types[1] in counterlike and pair_types[0] in appliance
-    ):
-        return True
     return False
 
 

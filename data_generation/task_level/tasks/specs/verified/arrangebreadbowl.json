@@ -53,7 +53,8 @@
             "part_type": "hinged_part",
             "state": "closed"
           }
-        }
+        },
+        "parent_fixture": "counter"
       },
       "counter": {
         "fixture_type": "counter"

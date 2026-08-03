@@ -53,7 +53,8 @@
       "cabinet": {
         "fixture_type": "cabinet",
         "parts": {},
-        "controls": {}
+        "controls": {},
+        "parent_fixture": "counter"
       },
       "counter": {
         "fixture_type": "counter",

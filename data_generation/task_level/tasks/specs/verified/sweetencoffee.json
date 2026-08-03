@@ -53,7 +53,8 @@
       "coffee_machine": {
         "fixture_type": "coffee_machine",
         "parts": {},
-        "controls": {}
+        "controls": {},
+        "parent_fixture": "counter"
       },
       "counter": {
         "fixture_type": "counter",
