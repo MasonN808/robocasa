@@ -1624,10 +1624,26 @@ def run_trajectory_partial(
     escalations = 0
     silent_resolutions = 0
 
+    # Concurrent replay lets each agent advance its own stream under the timing
+    # scheduler, the regime a model actually meets at eval. It is only sound
+    # when cross-agent ordering is explicit (wait_for_signal); with implicit
+    # ordering the scheduler re-interleaves and breaks correct plans, which is
+    # why ordered replay is the default.
+    concurrent_replay = bool(getattr(args, "concurrent_expert_replay", False))
+    expert_queues: dict[str, list[dict[str, Any]]] = {}
+    if concurrent_replay:
+        for entry in expert_sequence:
+            expert_queues.setdefault(entry["agent"], []).append(entry)
+
     def _propose(agent: AgentRuntime) -> tuple[dict[str, Any], tuple[str, ...] | None]:
         """One decision for one agent, using only that agent's private state."""
 
         if not is_model_policy:
+            if concurrent_replay:
+                queue = expert_queues.get(agent.agent_id) or []
+                if not queue:
+                    return {"exhausted": True}, None
+                return queue.pop(0), None
             if not expert_sequence or expert_sequence[0]["agent"] != agent.agent_id:
                 return {"exhausted": True}, None
             return expert_sequence.pop(0), None
@@ -1652,7 +1668,7 @@ def run_trajectory_partial(
         return proposal, tuple(view_names) if view_names else None
 
     while turn_index < step_budget:
-        if not is_model_policy:
+        if not is_model_policy and not concurrent_replay:
             # Replay follows the recorded joint order; the timing scheduler is
             # bypassed entirely so the plan cannot be re-interleaved.
             if not expert_sequence:
@@ -1664,6 +1680,9 @@ def run_trajectory_partial(
             clock = max(clock, actor.ready_at)
             ready = [actor]
         else:
+            if concurrent_replay and not any(expert_queues.values()):
+                termination = "policy_exhausted"
+                break
             if all(a.ready_at == float("inf") for a in agents.values()):
                 termination = "policy_exhausted"
                 break
@@ -1826,7 +1845,12 @@ def run_trajectory_partial(
                 if not is_model_policy and not record.get("escalated"):
                     # Silent retry leaves state untouched, so an expert step
                     # consumed by a rejected proposal must go back on the queue.
-                    expert_sequence.insert(0, proposal)
+                    if concurrent_replay:
+                        expert_queues.setdefault(
+                            proposal["agent"], []
+                        ).insert(0, proposal)
+                    else:
+                        expert_sequence.insert(0, proposal)
                 if record.get("escalated"):
                     escalations += 1
                 else:
@@ -2599,6 +2623,16 @@ def parse_args() -> argparse.Namespace:
         help="Rejected proposals get their own allowance, sized as this "
         "multiple of the step budget, instead of consuming the budget meant "
         "for productive work.",
+    )
+    partial.add_argument(
+        "--concurrent-expert-replay",
+        action="store_true",
+        help=(
+            "Replay expert trajectories through the timing scheduler instead of "
+            "in recorded joint order, so each agent advances its own stream. "
+            "Only sound when cross-agent ordering is explicit (wait_for_signal); "
+            "with implicit ordering the scheduler re-interleaves correct plans."
+        ),
     )
     partial.add_argument(
         "--success-criterion",
