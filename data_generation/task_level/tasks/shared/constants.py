@@ -19,6 +19,11 @@ OBSERVATION_TOOL_NAMES = frozenset(
         "get_image",
     }
 )
+WAIT_TOOL_NAMES = frozenset({"wait_for_signal"})
+# Steps that carry no symbolic effect: they neither move an agent nor change any
+# object, so they are exempt from the observation bracketing every real action
+# needs. `communicate` was handled by name before `wait_for_signal` joined it.
+SOCIAL_TOOL_NAMES = frozenset({"communicate"}) | WAIT_TOOL_NAMES
 GIVE_SPACE_TOOL_NAMES = frozenset({"give_space"})
 OPEN_PART_TOOL_NAMES = frozenset({"open_hinged_part", "open_sliding_part"})
 CLOSE_PART_TOOL_NAMES = frozenset({"close_hinged_part", "close_sliding_part"})

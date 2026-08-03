@@ -10,6 +10,7 @@ from .constants import (
     ACQUIRE_TOOL_NAMES,
     CLOSE_PART_TOOL_NAMES,
     GIVE_SPACE_TOOL_NAMES,
+    WAIT_TOOL_NAMES,
     INTERACTION_TOOL_NAMES,
     OPEN_PART_TOOL_NAMES,
     RELEASE_TOOL_NAMES,
@@ -133,6 +134,25 @@ def _build_fsm_prompt_rules(
             "Before that agent can interact there again (pick up, place, open, close, or use a control), "
             "it must navigate_to_fixture first. Similarly, the arriving agent must give_space in turn "
             "before the original agent can navigate back."
+        )
+    if allowed_tool_names & WAIT_TOOL_NAMES:
+        prompt_rules.append(
+            "When an agent cannot legally proceed until the other agent finishes something, "
+            "it must wait_for_signal(from, about) instead of acting early or idling. Use it "
+            "whenever the next action depends on an object the other agent is still using, or "
+            "on space the other agent still occupies. Set args.about to the exact symbolic id "
+            "of the thing being waited on."
+        )
+        prompt_rules.append(
+            "Every wait_for_signal must be released: the agent named in args.from must later "
+            "send that waiter a communicate whose message contains the args.about id spelled "
+            "exactly, character for character. Write the release as soon as that agent is "
+            "genuinely finished with the thing. A wait with no matching release is invalid."
+        )
+        prompt_rules.append(
+            "Waking is not the same as being released. Any message wakes a waiting agent, so "
+            "if an agent is woken by a message that is not about what it was waiting for, it "
+            "must call wait_for_signal again rather than proceed."
         )
     if allowed_tool_names & INTERACTION_TOOL_NAMES:
         prompt_rules.append(

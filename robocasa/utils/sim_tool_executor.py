@@ -6408,6 +6408,29 @@ class SimToolExecutor(
             {"robot_idx": robot_idx},
         )
 
+    def wait_for_signal(
+        self,
+        about: str,
+        robot_idx: int = 0,
+        **kwargs,
+    ) -> ToolResult:
+        """Record a blocking wait; a no-op for the physics.
+
+        Blocking is a scheduling concern and this replay path is already
+        ordered, so there is nothing to suspend here -- the live-sim harness is
+        what actually parks the agent. ``from`` arrives via kwargs because it is
+        a Python keyword.
+        """
+        return ToolResult(
+            "wait_for_signal",
+            True,
+            {
+                "robot_idx": robot_idx,
+                "from": kwargs.get("from"),
+                "about": about,
+            },
+        )
+
     # ------------------------------------------------------------------
     # Generic dispatch
     # ------------------------------------------------------------------

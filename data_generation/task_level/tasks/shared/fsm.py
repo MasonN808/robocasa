@@ -16,6 +16,8 @@ from .constants import (
     INTERACTION_TOOL_NAMES,
     NAVIGATION_TOOL_NAMES,
     OBSERVATION_TOOL_NAMES,
+    SOCIAL_TOOL_NAMES,
+    WAIT_TOOL_NAMES,
     OPEN_PART_TOOL_NAMES,
     PLACE_LOCATION_ARG_NAMES,
     RELEASE_TOOL_NAMES,
@@ -28,6 +30,7 @@ from .errors import (
     NavigationSemanticValidationError,
     ObjectStateSemanticValidationError,
     ObservationSequenceSemanticValidationError,
+    WaitSignalSemanticValidationError,
     PlacementDestinationSemanticValidationError,
     PostGoalActionSemanticValidationError,
     TaskPreconditionSemanticValidationError,
@@ -170,6 +173,10 @@ class FiniteStateTaskValidator:
                             "goal_satisfied_at_step": goal_satisfied_at_step,
                         },
                     )
+
+                if step["tool"] in WAIT_TOOL_NAMES:
+                    self._validate_wait_step(step, steps, expected_index)
+                    continue
 
                 if step["tool"] == "communicate":
                     self._validate_communicate_step(step)
@@ -397,6 +404,66 @@ class FiniteStateTaskValidator:
             return exc
         return exc.with_step(step)
 
+    def _validate_wait_step(
+        self,
+        step: dict[str, Any],
+        steps: Sequence[dict[str, Any]],
+        step_index: int,
+    ) -> None:
+        """Validates a wait and proves the partner later releases it.
+
+        The runtime harness deliberately wakes a waiter on ANY message, which is
+        what makes relevance the model's judgement call at inference. Validation
+        is the opposite: a demonstration is only usable if the partner really
+        does report the awaited thing, so the release must name `about`
+        verbatim. Without this a trajectory that deadlocks in live-sim would
+        still pass here, since a wait has no symbolic effect to contradict.
+        """
+
+        tool_args = step["args"]
+        from_agent = tool_args.get("from")
+        about = tool_args.get("about")
+        if from_agent not in self._agent_id_set or from_agent == step["agent"]:
+            raise WaitSignalSemanticValidationError(
+                "wait_for_signal requires from to reference the other agent.",
+                details={"agent": step["agent"], "from": from_agent},
+            )
+        if not isinstance(about, str) or not about.strip():
+            raise WaitSignalSemanticValidationError(
+                "wait_for_signal requires a non-empty about in args.",
+                details={"agent": step["agent"], "from": from_agent},
+            )
+        if set(tool_args) != {"from", "about"}:
+            raise WaitSignalSemanticValidationError(
+                "wait_for_signal args may only contain from and about.",
+                details={"arg_names": sorted(tool_args)},
+            )
+
+        about = about.strip()
+        step["args"] = {"from": from_agent, "about": about}
+        needle = about.casefold()
+        for later in steps[step_index + 1 :]:
+            if later["tool"] != "communicate":
+                continue
+            later_args = later.get("args") or {}
+            if later["agent"] != from_agent:
+                continue
+            if later_args.get("to") != step["agent"]:
+                continue
+            if needle in str(later_args.get("message", "")).casefold():
+                return
+        raise WaitSignalSemanticValidationError(
+            f"wait_for_signal at step {step['step']} is never released: "
+            f"{from_agent} sends no later message to {step['agent']} naming "
+            f"{about!r}.",
+            details={
+                "agent": step["agent"],
+                "from": from_agent,
+                "about": about,
+                "step": step["step"],
+            },
+        )
+
     def _validate_communicate_step(self, step: dict[str, Any]) -> None:
         """Validates the shared synthetic communication tool."""
 
@@ -433,7 +500,7 @@ class FiniteStateTaskValidator:
         """Requires each non-communication action to be bracketed by observation steps."""
 
         step = steps[step_index]
-        if step["tool"] == "communicate" or step["tool"] in OBSERVATION_TOOL_NAMES:
+        if step["tool"] in SOCIAL_TOOL_NAMES or step["tool"] in OBSERVATION_TOOL_NAMES:
             return
 
         if (

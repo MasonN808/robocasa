@@ -110,6 +110,10 @@ class CommunicationStepSemanticValidationError(TaskSemanticValidationError):
     """Raised when a communicate step uses invalid symbolic arguments."""
 
 
+class WaitSignalSemanticValidationError(TaskSemanticValidationError):
+    """Raised when a wait_for_signal step is malformed or never released."""
+
+
 class ObservationSequenceSemanticValidationError(TaskSemanticValidationError):
     """Raised when required observation bracketing is missing."""
 

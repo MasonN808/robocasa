@@ -167,6 +167,13 @@ SIM_TOOL_SPECS: list[dict[str, Any]] = [
         "wait",
         "Pause and observe while another robot completes its step.",
     ),
+    _build_tool_spec(
+        "wait_for_signal",
+        "Block until the named robot sends a message. Any message wakes you, so "
+        "call this again if what arrives is not what you were waiting for.",
+        "from",
+        "about",
+    ),
 ]
 
 SIM_TOOL_SPEC_BY_NAME = {spec["name"]: spec for spec in SIM_TOOL_SPECS}

@@ -100,6 +100,13 @@
         "message"
       ]
     },
+    "wait_for_signal": {
+      "description": "Pause until the other agent sends you a message. Use this when you cannot proceed until they report something. args.about names what you are waiting to hear about, for your partner's benefit and for the record; the environment does NOT check it. ANY message from args.from wakes you, so if the message you receive is not the one you needed, call wait_for_signal again.",
+      "tool_args": [
+        "from",
+        "about"
+      ]
+    },
     "navigate_to_fixture": {
       "description": "Move the robot base to the working pose of a fixture.",
       "tool_args": [
