@@ -235,7 +235,7 @@
       "tool": "place_next_to",
       "args": {
         "object_id": "cheese",
-        "reference_object_id": "lettuce"
+        "reference_object_id": "salad_bowl"
       },
       "machine_path": [
         "cheese_station",
@@ -248,7 +248,7 @@
       "tool": "place_next_to",
       "args": {
         "object_id": "grater",
-        "reference_object_id": "lettuce"
+        "reference_object_id": "salad_bowl"
       },
       "machine_path": [
         "cheese_station",
