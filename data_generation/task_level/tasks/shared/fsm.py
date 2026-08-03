@@ -520,14 +520,22 @@ class FiniteStateTaskValidator:
         steps: Sequence[dict[str, Any]],
         step_index: int,
     ) -> None:
-        """Validates a wait and proves the partner later releases it.
+        """Checks one wait against two invariants.
 
-        The runtime harness deliberately wakes a waiter on ANY message, which is
-        what makes relevance the model's judgement call at inference. Validation
-        is the opposite: a demonstration is only usable if the partner really
-        does report the awaited thing, so the release must name `about`
-        verbatim. Without this a trajectory that deadlocks in live-sim would
-        still pass here, since a wait has no symbolic effect to contradict.
+        1. it names the other agent and a thing that exists;
+        2. the partner later tells the waiter, by name, that it is done -- and
+           really is done, meaning it never touches that thing again.
+
+        Invariant 2 replaced a rule about when the "releasing action" had to
+        occur relative to the wait. That rule was wrong twice: it rejected
+        ordinary handoffs where the partner had finished beforehand, which is
+        the normal case. "Never touches it again" says the same thing without
+        needing to reason about ordering, and it still rejects a promise --
+        "I will give you space" followed by the partner using it anyway.
+
+        The announcement is deliberately NOT checked for the id. Its job is to
+        make the wait visible, since under partial observability the partner
+        cannot see it; identifying the thing is the release's job.
         """
 
         tool_args = step["args"]
@@ -551,106 +559,59 @@ class FiniteStateTaskValidator:
 
         about = about.strip()
         step["args"] = {"from": from_agent, "about": about}
-        needle = about.casefold()
-
-        # `about` has to name something that exists. Left free-form the model
-        # coins milestone names ('cabinet_items_moved') that nothing can ever
-        # release, and the failure surfaces later as a confusing "never
-        # released" instead of the real mistake.
-        known_ids = set(self.initial_state.get("objects") or {}) | set(
+        known = set(self.initial_state.get("objects") or {}) | set(
             self.initial_state.get("fixtures") or {}
         )
-        if known_ids and about not in known_ids:
+        if known and about not in known:
             raise WaitSignalSemanticValidationError(
                 f"wait_for_signal about={about!r} is not a symbolic id in this "
                 f"task; it must name a declared object or fixture.",
-                details={
-                    "agent": step["agent"],
-                    "about": about,
-                    "known_ids": sorted(known_ids),
-                    "step": step["step"],
-                },
+                details={"agent": step["agent"], "about": about,
+                         "known_ids": sorted(known), "step": step["step"]},
             )
 
-        # The announcement is what puts the partner under an obligation, so it
-        # must be as precise as the release it demands.
-        for earlier in steps[:step_index]:
-            if earlier["tool"] != "communicate":
+        needle = about.casefold()
+        for offset, later in enumerate(steps[step_index + 1 :], start=step_index + 1):
+            if later["agent"] != from_agent or later["tool"] != "communicate":
                 continue
-            earlier_args = earlier.get("args") or {}
-            if earlier["agent"] != step["agent"]:
-                continue
-            if earlier_args.get("to") != from_agent:
-                continue
-            message = str(earlier_args.get("message", ""))
-            if (
-                needle in message.casefold()
-                and len(message.split()) >= MIN_SIGNAL_MESSAGE_WORDS
-            ):
-                break
-        else:
-            raise WaitSignalSemanticValidationError(
-                f"wait_for_signal at step {step['step']} is not announced: "
-                f"{step['agent']} sends no earlier message to {from_agent} "
-                f"naming {about!r}.",
-                details={
-                    "agent": step["agent"],
-                    "from": from_agent,
-                    "about": about,
-                    "step": step["step"],
-                },
-            )
-
-        # The partner has to actually let the resource go before saying so.
-        # Matching on the message alone accepts a promise -- "I will give you
-        # space at the counter" -- and the waiter then resumes while the
-        # partner is still standing there. For a fixture the releasing act is
-        # give_space; for an object it is the partner's last use of it.
-        # A handoff normally means the partner ALREADY finished with the thing
-        # before the waiter blocked -- that is why the waiter may proceed. Only
-        # a partner still holding it at the moment of the wait has to act again
-        # (leave the fixture, put the object down) before its release counts.
-        acted = any(
-            earlier["agent"] == from_agent
-            and earlier["tool"] not in SOCIAL_TOOL_NAMES
-            and earlier["tool"] not in OBSERVATION_TOOL_NAMES
-            and any(str(value) == about for value in (earlier.get("args") or {}).values())
-            for earlier in steps[:step_index]
-        )
-        for later in steps[step_index + 1 :]:
-            if later["agent"] != from_agent:
-                continue
-            tool = later["tool"]
             later_args = later.get("args") or {}
-            if tool == "communicate":
-                message = str(later_args.get("message", ""))
-                if (
-                    acted
-                    and later_args.get("to") == step["agent"]
-                    and needle in message.casefold()
-                    and len(message.split()) >= MIN_SIGNAL_MESSAGE_WORDS
-                ):
-                    return
+            if later_args.get("to") != step["agent"]:
                 continue
-            if tool in SOCIAL_TOOL_NAMES or tool in OBSERVATION_TOOL_NAMES:
+            message = str(later_args.get("message", ""))
+            if needle not in message.casefold():
                 continue
-            if tool in GIVE_SPACE_TOOL_NAMES:
-                if later_args.get("fixture_id") == about:
-                    acted = True
+            # A message that is nothing but the id discharges no obligation;
+            # generated data contained a release whose whole text was "bowl".
+            if not message.casefold().replace(needle, "").strip(" .,;:!"):
                 continue
-            if any(str(value) == about for value in later_args.values()):
-                acted = True
+            if self._uses_again(steps[offset + 1 :], from_agent, about):
+                continue
+            return
+
         raise WaitSignalSemanticValidationError(
             f"wait_for_signal at step {step['step']} is never released: "
-            f"{from_agent} sends no later message to {step['agent']} naming "
-            f"{about!r} after actually finishing with it.",
-            details={
-                "agent": step["agent"],
-                "from": from_agent,
-                "about": about,
-                "step": step["step"],
-            },
+            f"{from_agent} never tells {step['agent']} it is done with "
+            f"{about!r} and then leaves it alone.",
+            details={"agent": step["agent"], "from": from_agent,
+                     "about": about, "step": step["step"]},
         )
+
+    def _uses_again(
+        self,
+        remaining: Sequence[dict[str, Any]],
+        agent: str,
+        resource: str,
+    ) -> bool:
+        """True if `agent` touches `resource` again -- so it was not done."""
+
+        for step in remaining:
+            if step["agent"] != agent:
+                continue
+            if step["tool"] in SOCIAL_TOOL_NAMES or step["tool"] in OBSERVATION_TOOL_NAMES:
+                continue
+            if any(str(value) == resource for value in (step.get("args") or {}).values()):
+                return True
+        return False
 
     def _validate_communicate_step(self, step: dict[str, Any]) -> None:
         """Validates the shared synthetic communication tool."""
