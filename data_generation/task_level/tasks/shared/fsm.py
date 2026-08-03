@@ -442,6 +442,51 @@ class FiniteStateTaskValidator:
         about = about.strip()
         step["args"] = {"from": from_agent, "about": about}
         needle = about.casefold()
+
+        # `about` has to name something that exists. Left free-form the model
+        # coins milestone names ('cabinet_items_moved') that nothing can ever
+        # release, and the failure surfaces later as a confusing "never
+        # released" instead of the real mistake.
+        known_ids = set(self.initial_state.get("objects") or {}) | set(
+            self.initial_state.get("fixtures") or {}
+        )
+        if known_ids and about not in known_ids:
+            raise WaitSignalSemanticValidationError(
+                f"wait_for_signal about={about!r} is not a symbolic id in this "
+                f"task; it must name a declared object or fixture.",
+                details={
+                    "agent": step["agent"],
+                    "about": about,
+                    "known_ids": sorted(known_ids),
+                    "step": step["step"],
+                },
+            )
+
+        # The announcement is what puts the partner under an obligation, so it
+        # must be as precise as the release it demands.
+        for earlier in steps[:step_index]:
+            if earlier["tool"] != "communicate":
+                continue
+            earlier_args = earlier.get("args") or {}
+            if earlier["agent"] != step["agent"]:
+                continue
+            if earlier_args.get("to") != from_agent:
+                continue
+            if needle in str(earlier_args.get("message", "")).casefold():
+                break
+        else:
+            raise WaitSignalSemanticValidationError(
+                f"wait_for_signal at step {step['step']} is not announced: "
+                f"{step['agent']} sends no earlier message to {from_agent} "
+                f"naming {about!r}.",
+                details={
+                    "agent": step["agent"],
+                    "from": from_agent,
+                    "about": about,
+                    "step": step["step"],
+                },
+            )
+
         for later in steps[step_index + 1 :]:
             if later["tool"] != "communicate":
                 continue

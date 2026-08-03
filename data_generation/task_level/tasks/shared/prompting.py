@@ -140,8 +140,16 @@ def _build_fsm_prompt_rules(
             "When an agent cannot legally proceed until the other agent finishes something, "
             "it must wait_for_signal(from, about) instead of acting early or idling. Use it "
             "whenever the next action depends on an object the other agent is still using, or "
-            "on space the other agent still occupies. Set args.about to the exact symbolic id "
-            "of the thing being waited on."
+            "on space the other agent still occupies. args.about must be one of the symbolic "
+            "object or fixture ids listed in the initial task state, spelled exactly. Never "
+            "invent a name for an event or milestone: wait on the thing itself, not on the "
+            "step you want done to it."
+        )
+        prompt_rules.append(
+            "Every wait_for_signal must be announced first: before the wait, the waiting agent "
+            "sends the agent named in args.from a communicate whose message contains the "
+            "args.about id spelled exactly, saying it is waiting on that thing. This is what "
+            "puts the other agent under an obligation."
         )
         prompt_rules.append(
             "Every wait_for_signal must be released: the agent named in args.from must later "

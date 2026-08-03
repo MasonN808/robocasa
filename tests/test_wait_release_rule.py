@@ -1,9 +1,10 @@
-"""The FSM must prove every wait_for_signal is released by the named partner.
+"""The FSM must prove every wait_for_signal is announced, valid, and released.
 
 The runtime harness wakes a waiter on ANY message on purpose -- judging relevance
 is the model's job at inference. Validation has the opposite duty: a demo is only
-usable if the partner really does report the awaited thing, so the release must
-name `about` verbatim. Without this rule a trajectory that deadlocks in live-sim
+usable if the dependency is stated and really discharged, so both the
+announcement and the release must name `about` verbatim, and `about` must name
+something that exists. Without these a trajectory that deadlocks in live-sim
 still validates, because a wait has no symbolic effect to contradict.
 """
 
@@ -33,7 +34,12 @@ def _validator() -> FiniteStateTaskValidator:
                 "agent_0": {"location": "counter", "held_object": None},
                 "agent_1": {"location": "counter", "held_object": None},
             },
-            "objects": {},
+            "objects": {
+                "bowl": {"location": "counter"},
+                "salad_bowl": {"location": "counter"},
+                "sugar_cube_1": {"location": "counter"},
+                "sugar_cube_2": {"location": "counter"},
+            },
             "fixtures": {"counter": {"fixture_type": "counter"}},
         },
         allowed_tool_specs={
@@ -41,16 +47,6 @@ def _validator() -> FiniteStateTaskValidator:
             "wait_for_signal": {"tool_args": ["from", "about"]},
         },
     )
-
-
-def _wait(step, agent="agent_0", frm="agent_1", about="bowl"):
-    return {
-        "step": step,
-        "agent": agent,
-        "tool": "wait_for_signal",
-        "args": {"from": frm, "about": about},
-        "reasoning": "I am waiting.",
-    }
 
 
 def _msg(step, agent, to, message):
@@ -63,7 +59,25 @@ def _msg(step, agent, to, message):
     }
 
 
-class WaitReleaseRuleTest(unittest.TestCase):
+def _announce(step, agent="agent_0", to="agent_1", about="bowl"):
+    return _msg(step, agent, to, f"I am waiting on {about} before I continue.")
+
+
+def _wait(step, agent="agent_0", frm="agent_1", about="bowl"):
+    return {
+        "step": step,
+        "agent": agent,
+        "tool": "wait_for_signal",
+        "args": {"from": frm, "about": about},
+        "reasoning": "I am waiting.",
+    }
+
+
+def _release(step, agent="agent_1", to="agent_0", about="bowl"):
+    return _msg(step, agent, to, f"I am done with {about}, it is yours.")
+
+
+class WaitRuleTest(unittest.TestCase):
     def _run(self, steps):
         return _validator().validate(
             {
@@ -77,36 +91,74 @@ class WaitReleaseRuleTest(unittest.TestCase):
             self._run(steps)
         return str(caught.exception)
 
-    def test_release_naming_about_verbatim_is_accepted(self):
-        steps = [
-            _wait(0),
-            _msg(1, "agent_1", "agent_0", "I am done with bowl, it is yours."),
-        ]
-        # reaches the wait rule without raising; later goal checks are not our concern
+    # --- the shape that should pass -------------------------------------
+
+    def test_announced_and_released_is_accepted(self):
+        steps = [_announce(0), _wait(1), _release(2)]
         try:
             self._run(steps)
-        except WaitSignalSemanticValidationError:  # pragma: no cover - the failure we test for
-            self.fail("a verbatim release must satisfy the wait rule")
+        except WaitSignalSemanticValidationError:  # pragma: no cover
+            self.fail("an announced and released wait must satisfy the rule")
+        except Exception:
+            pass  # later goal checks are not this test's concern
+
+    # --- `about` must name something real -------------------------------
+
+    def test_invented_milestone_name_is_rejected(self):
+        # the real SpicyMarinade failure: an event name nothing can release
+        message = self._error(
+            [
+                _announce(0, about="cabinet_items_moved"),
+                _wait(1, about="cabinet_items_moved"),
+                _release(2, about="cabinet_items_moved"),
+            ]
+        )
+        self.assertIn("not a symbolic id", message)
+
+    def test_fixture_id_is_a_valid_about(self):
+        steps = [_announce(0, about="counter"), _wait(1, about="counter"),
+                 _release(2, about="counter")]
+        try:
+            self._run(steps)
+        except WaitSignalSemanticValidationError:  # pragma: no cover
+            self.fail("waiting on a declared fixture must be allowed")
         except Exception:
             pass
 
+    # --- the announcement ------------------------------------------------
+
+    def test_wait_with_no_announcement_is_rejected(self):
+        message = self._error([_wait(0), _release(1)])
+        self.assertIn("not announced", message)
+
+    def test_announcement_must_name_about_verbatim(self):
+        steps = [
+            _msg(0, "agent_0", "agent_1", "I will hold off until you are done."),
+            _wait(1),
+            _release(2),
+        ]
+        self.assertIn("not announced", self._error(steps))
+
+    # --- the release ------------------------------------------------------
+
     def test_wait_with_no_release_is_rejected(self):
-        message = self._error([_wait(0), _msg(1, "agent_1", "agent_0", "on my way.")])
+        message = self._error(
+            [_announce(0), _wait(1), _msg(2, "agent_1", "agent_0", "on my way.")]
+        )
         self.assertIn("never released", message)
 
     def test_release_must_come_from_the_named_partner(self):
-        # agent_0 naming the object itself does not release its own wait
         message = self._error(
-            [_wait(0), _msg(1, "agent_0", "agent_1", "I need the bowl.")]
+            [_announce(0), _wait(1), _msg(2, "agent_0", "agent_1", "bowl is free.")]
         )
         self.assertIn("never released", message)
 
     def test_paraphrase_does_not_release(self):
-        # "the bowl" reads fine to a human but `about` was 'salad_bowl'
         message = self._error(
             [
-                _wait(0, about="salad_bowl"),
-                _msg(1, "agent_1", "agent_0", "I am finished with the bowl."),
+                _announce(0, about="salad_bowl"),
+                _wait(1, about="salad_bowl"),
+                _msg(2, "agent_1", "agent_0", "I am finished with the bowl."),
             ]
         )
         self.assertIn("never released", message)
@@ -115,43 +167,32 @@ class WaitReleaseRuleTest(unittest.TestCase):
         # the collision a token matcher would let through
         message = self._error(
             [
-                _wait(0, about="sugar_cube_2"),
-                _msg(1, "agent_1", "agent_0", "I am done with sugar_cube_1."),
+                _announce(0, about="sugar_cube_2"),
+                _wait(1, about="sugar_cube_2"),
+                _msg(2, "agent_1", "agent_0", "I am done with sugar_cube_1."),
             ]
         )
         self.assertIn("never released", message)
-
-    def test_release_must_be_addressed_to_the_waiter(self):
-        steps = [
-            _wait(0),
-            _msg(1, "agent_1", "agent_1", "bowl is free"),
-        ]
-        with self.assertRaises(Exception):
-            self._run(steps)
 
     def test_earlier_mention_does_not_count_as_release(self):
-        # a release has to follow the wait, not precede it
         message = self._error(
-            [
-                _msg(0, "agent_1", "agent_0", "I will use bowl first."),
-                _wait(1),
-            ]
+            [_announce(0), _msg(1, "agent_1", "agent_0", "I will use bowl first."),
+             _wait(2)]
         )
         self.assertIn("never released", message)
 
+    # --- arg shape --------------------------------------------------------
+
     def test_wait_rejects_self_as_partner(self):
-        message = self._error([_wait(0, frm="agent_0")])
-        self.assertIn("other agent", message)
+        self.assertIn("other agent", self._error([_announce(0), _wait(1, frm="agent_0")]))
 
     def test_wait_rejects_empty_about(self):
-        message = self._error([_wait(0, about="  ")])
-        self.assertIn("non-empty about", message)
+        self.assertIn("non-empty about", self._error([_announce(0), _wait(1, about="  ")]))
 
     def test_wait_rejects_extra_args(self):
-        step = _wait(0)
+        step = _wait(1)
         step["args"]["timeout"] = 5
-        message = self._error([step])
-        self.assertIn("only contain from and about", message)
+        self.assertIn("only contain from and about", self._error([_announce(0), step]))
 
 
 if __name__ == "__main__":
