@@ -504,7 +504,35 @@ def _canonical_symbolic_initial_state(*, task_spec, trajectory: dict[str, Any]):
     # (spec `lettuce_bowl` vs scene `salad_bowl`); that is a spec/data naming
     # defect to reconcile, not a reason to skip the rewrite.
     trajectory["steps"] = rewrite(trajectory.get("steps") or [])
+    # The TrajectoryAdapter is built from the ORIGINAL trajectory, so its alias
+    # map keys on the pre-canonical names (bun_source_fixture). Rewriting steps
+    # in place afterwards leaves the adapter unable to resolve the new names,
+    # which is why a pickup worked only when a navigate happened to bind the
+    # fixture first (6/6 with a prior navigate passed, 4/4 without failed).
+    # Stash the map so callers can register the canonical aliases too.
+    trajectory["_canonical_symbol_map"] = dict(symbol_map)
     return rewrite(initial_state)
+
+
+def _register_canonical_fixture_aliases(adapter, trajectory: dict[str, Any]) -> None:
+    """Teaches the adapter the canonical names the steps were rewritten to.
+
+    Without this, `counter` (canonical) has no alias while `bun_source_fixture`
+    (original) does, and the executor raises
+    `Unknown support fixture/site 'counter'` unless some earlier navigate
+    happened to bind it.
+    """
+
+    symbol_map = trajectory.get("_canonical_symbol_map") or {}
+    aliases = getattr(adapter, "_fixture_aliases", None)
+    if not symbol_map or aliases is None:
+        return
+    for original, canonical in symbol_map.items():
+        if canonical in aliases:
+            continue
+        concrete = aliases.get(original)
+        if concrete:
+            aliases[canonical] = concrete
 
 
 class FsmMirror:
@@ -1185,6 +1213,7 @@ def run_trajectory(
     # trajectory's symbolic state and normalizes legacy symbols to the current
     # verified task spec inside FsmMirror.
     mirror = FsmMirror(composite_task=composite_task, trajectory=trajectory)
+    _register_canonical_fixture_aliases(adapter, trajectory)
     if frames_dir is not None:
         session.executor.save_scene_frames(str(frames_dir), prefix="step_-001")
 
@@ -1537,6 +1566,7 @@ def run_trajectory_partial(
     )
     adapter, adapted = session.start_trajectory(trajectory)
     mirror = FsmMirror(composite_task=composite_task, trajectory=trajectory)
+    _register_canonical_fixture_aliases(adapter, trajectory)
     if frames_dir is not None:
         session.executor.save_scene_frames(str(frames_dir), prefix="step_-001")
 
