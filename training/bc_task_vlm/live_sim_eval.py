@@ -491,6 +491,18 @@ def _canonical_symbolic_initial_state(*, task_spec, trajectory: dict[str, Any]):
     # `sausage_source_fixture`, `serving_surface`, `bun_source_fixture` -- and
     # leaving those unrewritten made every step referencing them illegal, since
     # the task's allowlist is expressed in canonical names.
+    # Apply the SAME symbol map to the trajectory's steps, not only to
+    # initial_state. original_trajectory.json (read by BOTH training and
+    # live-sim) may name entities in a vocabulary the task allowlist does not
+    # use -- hot_dog_setup says `bun` and `bun_source_fixture` where the spec
+    # says `hotdog_bun` and `counter` -- and leaving steps unrewritten made
+    # every such step illegal.
+    #
+    # Caveat worth knowing: this assumes the spec name is also resolvable in
+    # the simulator. Where it is not, the call becomes legal-but-unexecutable
+    # rather than rejected. prepare_cheese_station is the one known case
+    # (spec `lettuce_bowl` vs scene `salad_bowl`); that is a spec/data naming
+    # defect to reconcile, not a reason to skip the rewrite.
     trajectory["steps"] = rewrite(trajectory.get("steps") or [])
     return rewrite(initial_state)
 
