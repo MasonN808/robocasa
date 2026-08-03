@@ -38,13 +38,13 @@
       },
       "lettuce": {
         "object_type": "lettuce",
-        "location": "lettuce_bowl"
+        "location": "salad_bowl"
       },
       "grater": {
         "object_type": "cheese_grater",
         "location": "cabinet"
       },
-      "lettuce_bowl": {
+      "salad_bowl": {
         "object_type": "bowl",
         "location": "counter"
       }
@@ -145,7 +145,7 @@
       ],
       "allowed_reference_object_ids": [
         "lettuce",
-        "lettuce_bowl"
+        "salad_bowl"
       ]
     },
     "give_space": {
@@ -292,7 +292,7 @@
         "resolver": "unique_fixture_type",
         "fixture_type": "counter"
       },
-      "lettuce_bowl": {
+      "salad_bowl": {
         "entity_type": "object",
         "resolver": "object_by_type",
         "object_type": "bowl"
