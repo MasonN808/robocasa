@@ -479,6 +479,13 @@ class FiniteStateTaskValidator:
             actor = step["agent"]
             args = step.get("args") or {}
 
+            # give_space is the actor LEAVING. Recording it as a use would
+            # renew the hold and reset the window, so the wait that already
+            # guarded this handoff would stop counting.
+            if tool in GIVE_SPACE_TOOL_NAMES:
+                held.pop(str(args.get("fixture_id")), None)
+                continue
+
             contested: list[str] = []
             for name in DEPENDENCY_ARG_NAMES:
                 value = args.get(name)
@@ -584,7 +591,21 @@ class FiniteStateTaskValidator:
             # generated data contained a release whose whole text was "bowl".
             if not message.casefold().replace(needle, "").strip(" .,;:!"):
                 continue
-            if self._uses_again(steps[offset + 1 :], from_agent, about):
+            # The partner must leave it alone until the waiter has had its
+            # turn -- not forever. Two agents may legitimately use one fixture
+            # in alternation, each handing it back when done.
+            handed_back = next(
+                (
+                    later_index
+                    for later_index, s2 in enumerate(steps[offset + 1 :], offset + 1)
+                    if s2["agent"] == step["agent"]
+                    and s2["tool"] not in SOCIAL_TOOL_NAMES
+                    and s2["tool"] not in OBSERVATION_TOOL_NAMES
+                    and any(str(v) == about for v in (s2.get("args") or {}).values())
+                ),
+                len(steps),
+            )
+            if self._uses_again(steps[offset + 1 : handed_back], from_agent, about):
                 continue
             return
 
