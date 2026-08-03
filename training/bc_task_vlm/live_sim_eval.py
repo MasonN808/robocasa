@@ -1776,7 +1776,9 @@ def run_trajectory_partial(
                     turn_index += 1
                 agent.deliver({"agent": agent.agent_id, "tool": WAIT_TOOL_NAME,
                                "args": deepcopy(wait_args)})
-                agent.ready_at = clock + _tool_duration(WAIT_TOOL_NAME, multiplier)
+                agent.ready_at = clock + _tool_duration(
+                    WAIT_TOOL_NAME, sim_steps=None, multiplier=multiplier
+                )
                 records.append(record)
                 continue
             if proposal.get("tool") != WAIT_TOOL_NAME:
