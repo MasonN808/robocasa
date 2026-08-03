@@ -136,53 +136,34 @@ def _build_fsm_prompt_rules(
             "before the original agent can navigate back."
         )
     if allowed_tool_names & WAIT_TOOL_NAMES:
+        # One protocol stated once, as a recipe. This replaced five overlapping
+        # prose rules that stated the trigger twice and buried the definition of
+        # a conflict last.
         prompt_rules.append(
-            "When an agent cannot legally proceed until the other agent finishes something, "
-            "it must wait_for_signal(from, about) instead of acting early or idling. Use it "
-            "whenever the next action depends on an object the other agent is still using, or "
-            "on space the other agent still occupies. args.about must be one of the symbolic "
-            "object or fixture ids listed in the initial task state, spelled exactly. Never "
-            "invent a name for an event or milestone: wait on the thing itself, not on the "
-            "step you want done to it."
+            "SHARING PROTOCOL. The two agents act at the same time, so whenever they "
+            "need the same thing they must hand it over explicitly. A conflict is "
+            "exactly one of:\n"
+            "  (a) both agents use the SAME object, anywhere;\n"
+            "  (b) both agents work at the same TIGHT fixture (cabinet, drawer, "
+            "fridge, oven, stove, sink, or a countertop appliance), even on "
+            "different objects, because only one robot fits there.\n"
+            "Two agents at a roomy counter, island, or dining table using DIFFERENT "
+            "objects is NOT a conflict and needs nothing.\n"
+            "For every conflict, write these four steps in this order, using the "
+            "exact symbolic id X of the thing (never an invented event name):\n"
+            "  1. the second agent sends a message naming X, saying it is waiting;\n"
+            "  2. the second agent calls wait_for_signal(from=<first agent>, about=X);\n"
+            "  3. the first agent finishes with X -- its last use of the object, or "
+            "give_space at the fixture;\n"
+            "  4. only THEN the first agent sends a message naming X saying it is "
+            "done, in a full sentence of at least four words.\n"
+            "All four are required. Saying 'I will wait' without step 2 is not "
+            "waiting, and sending step 4 before step 3 is a promise, not a release."
         )
         prompt_rules.append(
-            "Every wait_for_signal must be announced first: before the wait, the waiting agent "
-            "sends the agent named in args.from a communicate whose message contains the "
-            "args.about id spelled exactly, saying it is waiting on that thing. This is what "
-            "puts the other agent under an obligation."
-        )
-        prompt_rules.append(
-            "Every wait_for_signal must be released: the agent named in args.from must later "
-            "send that waiter a communicate whose message contains the args.about id spelled "
-            "exactly, character for character. Write the release as soon as that agent is "
-            "genuinely finished with the thing. A wait with no matching release is invalid."
-        )
-        prompt_rules.append(
-            "Waking is not the same as being released. Any message wakes a waiting agent, so "
-            "if an agent is woken by a message that is not about what it was waiting for, it "
-            "must call wait_for_signal again rather than proceed."
-        )
-        prompt_rules.append(
-            "This is required, not optional. Two things count as a conflict: (a) both agents "
-            "use the SAME object, wherever it is; (b) both agents work at the same TIGHT "
-            "fixture -- a cabinet, drawer, fridge, oven, stove, sink, or a countertop "
-            "appliance -- even on different objects, because only one robot fits there. Two "
-            "agents at a roomy counter, island, or dining table working on DIFFERENT objects "
-            "is fine and needs nothing. On a conflict the second agent must call "
-            "wait_for_signal about that object or fixture before its step. Saying 'I will "
-            "wait' in a message is not waiting; the wait_for_signal call itself must be there."
-        )
-        prompt_rules.append(
-            "A release must come after the other agent has actually let go, never before. "
-            "For a shared object that means after its last use of the object; for a tight "
-            "fixture it means after it has called give_space there. 'I will give you space' "
-            "sent before leaving is a promise, not a release, and the waiting agent would "
-            "resume while the fixture is still occupied."
-        )
-        prompt_rules.append(
-            "Announcement and release messages must be real sentences of at least four words "
-            "that say what is happening with the thing named. A message consisting of just the "
-            "id, such as 'bowl', is not a valid announcement or release."
+            "Any message wakes a waiting agent, so if an agent is woken by a message "
+            "that is not about what it was waiting for, it must call wait_for_signal "
+            "again rather than proceed."
         )
     if allowed_tool_names & INTERACTION_TOOL_NAMES:
         prompt_rules.append(

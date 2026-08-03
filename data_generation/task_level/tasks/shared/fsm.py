@@ -148,7 +148,7 @@ class FiniteStateTaskValidator:
 
         agents = self._normalize_agents(candidate.get("agents"))
         steps = self._normalize_steps(candidate.get("steps"))
-        self._validate_dependency_waits(steps)
+        self._validate_wait_protocol(steps)
         runtime_state = self._build_runtime_state(agents)
         first_action_seen = False
         goal_state_satisfied = self.is_goal_state_satisfied(runtime_state)
@@ -409,11 +409,39 @@ class FiniteStateTaskValidator:
             return exc
         return exc.with_step(step)
 
+    def _validate_wait_protocol(self, steps: Sequence[dict[str, Any]]) -> None:
+        """Reports every wait-protocol problem in one error.
+
+        Missing waits and undischarged waits are opposite ends of one contract,
+        and surfacing them one at a time makes the repair loop oscillate: the
+        model adds the wait it was told about, which creates an unreleased
+        wait, so the next attempt removes it again. Observed across all eight
+        retries of a single trajectory. Reporting both together is what lets a
+        single regeneration satisfy the whole contract.
+        """
+
+        problems = list(self._validate_dependency_waits(steps))
+        for index, step in enumerate(steps):
+            if step["tool"] not in WAIT_TOOL_NAMES:
+                continue
+            try:
+                self._validate_wait_step(step, steps, index)
+            except WaitSignalSemanticValidationError as exc:
+                problems.append(f"  {exc.args[0]}")
+        if not problems:
+            return
+        raise WaitSignalSemanticValidationError(
+            f"{len(problems)} problem(s) with the wait protocol. Fix ALL of "
+            f"them together in the next attempt -- fixing one at a time will "
+            f"just break another:\n" + "\n".join(problems),
+            details={"problem_count": len(problems)},
+        )
+
     def _validate_dependency_waits(
         self,
         steps: Sequence[dict[str, Any]],
-    ) -> None:
-        """Requires a wait wherever the two agents contend for the same resource.
+    ) -> list[str]:
+        """Collects every unguarded contention between the agents.
 
         Validating only the waits that happen to be present leaves the real gap
         open: a plan can omit the wait and still pass, because a missing wait
@@ -484,16 +512,7 @@ class FiniteStateTaskValidator:
             for resource in contested:
                 held[resource] = (actor, index)
 
-        # Report EVERY missing wait at once. Surfacing one at a time makes the
-        # repair loop oscillate: the model fixes the single error it was shown
-        # and re-breaks the one it was not, forever.
-        if violations:
-            raise WaitSignalSemanticValidationError(
-                f"{len(violations)} unguarded conflict(s) between the agents. "
-                f"Every one of these needs its own wait_for_signal:\n"
-                + "\n".join(violations),
-                details={"violation_count": len(violations)},
-            )
+        return violations
 
     def _validate_wait_step(
         self,
