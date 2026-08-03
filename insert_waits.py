@@ -130,9 +130,36 @@ def insert(steps, fixtures, objects, rng):
         for resource in _contested(step, fixtures, objects):
             held[resource] = (actor, index)
 
-    for number, step in enumerate(out):
+    # The model's own waits often carry a degenerate release -- a message whose
+    # entire text is the id, which discharges nothing. Give those a real one
+    # rather than leaving the trajectory invalid.
+    repaired: list[dict] = []
+    for index, step in enumerate(out):
+        repaired.append(step)
+        if step.get("tool") != "wait_for_signal":
+            continue
+        args = step.get("args") or {}
+        about, holder = str(args.get("about")), args.get("from")
+        needle = about.casefold()
+        if any(
+            s.get("tool") == "communicate"
+            and s.get("agent") == holder
+            and (s.get("args") or {}).get("to") == step["agent"]
+            and needle in str((s.get("args") or {}).get("message", "")).casefold()
+            and str((s.get("args") or {}).get("message", "")).casefold()
+                 .replace(needle, "").strip(" .,;:!")
+            for s in out[index + 1 :]
+        ):
+            continue
+        repaired.append({"agent": holder, "tool": "communicate",
+                         "args": {"to": step["agent"],
+                                  "message": rng.choice(FREES).format(x=about)},
+                         "reasoning": f"I am done with {about}."})
+        inserted += 1
+
+    for number, step in enumerate(repaired):
         step["step"] = number
-    return out, inserted
+    return repaired, inserted
 
 
 def deadlocks(steps) -> bool:
