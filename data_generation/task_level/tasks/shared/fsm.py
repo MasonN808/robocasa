@@ -606,7 +606,17 @@ class FiniteStateTaskValidator:
         # space at the counter" -- and the waiter then resumes while the
         # partner is still standing there. For a fixture the releasing act is
         # give_space; for an object it is the partner's last use of it.
-        acted = False
+        # A handoff normally means the partner ALREADY finished with the thing
+        # before the waiter blocked -- that is why the waiter may proceed. Only
+        # a partner still holding it at the moment of the wait has to act again
+        # (leave the fixture, put the object down) before its release counts.
+        acted = any(
+            earlier["agent"] == from_agent
+            and earlier["tool"] not in SOCIAL_TOOL_NAMES
+            and earlier["tool"] not in OBSERVATION_TOOL_NAMES
+            and any(str(value) == about for value in (earlier.get("args") or {}).values())
+            for earlier in steps[:step_index]
+        )
         for later in steps[step_index + 1 :]:
             if later["agent"] != from_agent:
                 continue
