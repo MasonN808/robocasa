@@ -5396,16 +5396,8 @@ class SimToolExecutor(
             ref_pos_override=ref_pos_override,
             require_front=require_front,
         )
-        if placed:
+        if placed or not require_front:
             return placed
-        # Clearing teammates is worth trying whenever placement FAILED, not only
-        # for front-approach fixtures. TOASTER_OVEN is a countertop appliance and
-        # so not in _REQUIRE_FRONT_TYPES, which made require_front False and
-        # skipped this path entirely -- yet the blocker is real: the toaster oven
-        # sits on the counter both agents start at, so the teammate is inside the
-        # destination's clearance radius. arrange_bread_bowl failed in exactly
-        # the 3/10 trajectories where both agents start at `counter`, and passed
-        # in all 7 where they start apart.
         if not self._clear_fixture_blockers(robot_idx, fixture_id):
             return placed
         return self.runner._move_robot_near_fixture(
