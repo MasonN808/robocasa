@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import mimetypes
 import shutil
@@ -294,6 +295,16 @@ def _sim_clock(session: "SimSession") -> float | None:
         return None
 
 
+# Schedule-robustness probe. Because the executor teleports, measured sim-steps
+# are ~0 and the floors below ARE the duration model -- so --duration-multiplier
+# cannot perturb a schedule, and a null result from varying it means nothing.
+# Jitter scales each completed call instead, which is the only knob that changes
+# who wins a race. Off by default; a run that sets it is asking whether the
+# plans survive a different interleaving, not measuring their quality.
+_DURATION_JITTER = 0.0
+_DURATION_RNG: random.Random | None = None
+
+
 def _tool_duration(
     tool_name: str, *, sim_steps: float | None, multiplier: float
 ) -> float:
@@ -313,7 +324,12 @@ def _tool_duration(
     else:
         floor = 2.0
     measured = 0.0 if not sim_steps else float(sim_steps) * multiplier
-    return max(floor, measured)
+    duration = max(floor, measured)
+    if _DURATION_JITTER and _DURATION_RNG is not None:
+        duration *= _DURATION_RNG.uniform(
+            max(0.05, 1.0 - _DURATION_JITTER), 1.0 + _DURATION_JITTER
+        )
+    return duration
 
 
 class AgentRuntime:
@@ -1587,6 +1603,21 @@ def run_trajectory_partial(
     rejection_mode = getattr(args, "rejection_mode", REJECTION_MODE_SILENT_RETRY)
     max_silent = int(getattr(args, "max_silent_retries", 3))
     multiplier = float(getattr(args, "duration_multiplier", 1.0))
+    global _DURATION_JITTER, _DURATION_RNG
+    _DURATION_JITTER = float(getattr(args, "duration_jitter", 0.0))
+    # Per trajectory, so the same trajectory gets the same perturbed schedule
+    # regardless of which shard or order it ran in.
+    # sha256, not hash(): str hashing is salted per process, so hash() would
+    # make a "reproducible" seed differ between runs.
+    _DURATION_RNG = (
+        random.Random(
+            hashlib.sha256(
+                f"{int(getattr(args, 'duration_jitter_seed', 0))}|"
+                f"{composite_task}|{trajectory.get('trajectory_id', '')}".encode()
+            ).hexdigest()
+        )
+        if _DURATION_JITTER else None
+    )
 
     agents = {aid: AgentRuntime(aid) for aid in AGENT_IDS}
     is_model_policy = _uses_model_generation(policy)
@@ -2640,6 +2671,20 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Scales measured executor sim-steps into virtual-clock duration.",
+    )
+    partial.add_argument(
+        "--duration-jitter",
+        type=float,
+        default=0.0,
+        help="Randomly scale each call's duration by 1+-J. The only knob that "
+             "actually changes the interleaving, since the executor teleports "
+             "and measured sim-steps never reach the floors.",
+    )
+    partial.add_argument(
+        "--duration-jitter-seed",
+        type=int,
+        default=0,
+        help="Seed for --duration-jitter, so a perturbed schedule is reproducible.",
     )
     partial.add_argument(
         "--rejection-mode",
