@@ -1703,7 +1703,18 @@ def run_trajectory_partial(
                 key=lambda a: a.agent_id,
             )
             if not ready:
-                # everyone runnable is blocked on a signal; advance the clock
+                # A partner that is merely BUSY must not cancel a wait. This
+                # fired whenever nobody was runnable at the current instant,
+                # so every wait expired as soon as the other agent was
+                # mid-action -- waits behaved as a 2s pause rather than a
+                # block, which is why inserting them changed nothing.
+                busy = [
+                    a for a in agents.values()
+                    if a.waiting_for is None and a.ready_at != float("inf")
+                ]
+                if busy:
+                    clock = max(clock, min(a.ready_at for a in busy))
+                    continue
                 waiting = [a for a in agents.values() if a.waiting_for is not None]
                 if not waiting:
                     break
