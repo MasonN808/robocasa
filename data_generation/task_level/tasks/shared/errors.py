@@ -140,3 +140,17 @@ class PlacementDestinationSemanticValidationError(TaskSemanticValidationError):
 
 class TaskPreconditionSemanticValidationError(TaskSemanticValidationError):
     """Raised when task-local symbolic preconditions are not met."""
+
+
+class ResourceConflictSemanticValidationError(TaskSemanticValidationError):
+    """Raised when two agents hold the same resource at the same instant.
+
+    This is what a missing wait actually looks like once the plan is run on a
+    clock rather than read down the page: nothing is out of order in the file,
+    but the two streams reach the same object or the same exclusive fixture
+    while neither has been told to hold off.
+    """
+
+
+class DeadlockSemanticValidationError(TaskSemanticValidationError):
+    """Raised when every remaining agent is blocked on a wait nothing releases."""
