@@ -103,6 +103,10 @@ class FakeValidator:
             agent.location = args.get("fixture_id")
         elif step["tool"] == "give_space":
             agent.location = None
+        elif step["tool"] == "pick_up_object":
+            agent.held_object = args.get("object_id")
+        elif step["tool"] == "place_on_surface":
+            agent.held_object = None
         self._applied += 1
 
     def is_goal_state_satisfied(self, state):
@@ -315,15 +319,16 @@ class PromptedProtocolTests(unittest.TestCase):
     """
 
     def _handover(self):
+        # ask -> block -> leave -> report -> move in.
         return plan(
             *OPEN,
             step("agent_0", "navigate_to_fixture", fixture_id="cab"),
             step("agent_1", "communicate", to="agent_0",
                  message="tell me when the cabinet is free"),
+            step("agent_1", "wait_for_signal", **{"from": "agent_0", "about": "cab"}),
             step("agent_0", "give_space", fixture_id="cab"),
             step("agent_0", "communicate", to="agent_1", message="cab is yours now",
                  releases=["cab"]),
-            step("agent_1", "wait_for_signal", **{"from": "agent_0", "about": "cab"}),
             step("agent_1", "navigate_to_fixture", fixture_id="cab"),
         )
 
@@ -333,14 +338,25 @@ class PromptedProtocolTests(unittest.TestCase):
                 run = build().replay(self._handover(), model=model)
                 self.assertFalse(run.deadlocked)
                 self.assertEqual(run.conflicts, [])
+                self.assertEqual(run.protocol, [])
+
+    def test_the_wait_actually_blocks(self):
+        # agent_1 reaches its wait at instant 2 and is not woken until the
+        # release at 3, so it genuinely sits still for an instant. The wait
+        # EVENT is recorded at the instant it discharges, which is why the
+        # blocking shows up as idle time rather than as a tick difference.
+        run = build().replay(self._handover(), model=LOCK_STEP)
+        self.assertEqual(run.protocol, [], "not flagged inert")
+        self.assertGreater(run.idle["agent_1"], 0.0)
 
     def test_the_rules_state_the_release_obligation(self):
         import tick_format
 
         text = "\n".join(tick_format.TICK_FORMAT_RULES)
         self.assertIn("releases", text)
-        self.assertIn("give_space", text, "rule 7 couples release to departure")
-        self.assertIn("blocked or on a later one", text)
+        self.assertIn("give_space", text, "release is coupled to departure")
+        self.assertIn("on a LATER tick", text)
+        self.assertIn("IMMEDIATELY", text, "no gap between departure and report")
 
     def test_dropping_the_release_from_the_prompted_shape_deadlocks(self):
         # The failure mode the rules exist to prevent, held fixed.
@@ -348,6 +364,90 @@ class PromptedProtocolTests(unittest.TestCase):
                  if not (s.get("args") or {}).get("releases")]
         run = build().replay(plan(*steps), model=LOCK_STEP)
         self.assertTrue(run.deadlocked)
+
+
+class ReleaseProtocolTests(unittest.TestCase):
+    """Three rules that need no clock, so no duration model can excuse them."""
+
+    def test_releasing_a_fixture_you_are_standing_at_is_rejected(self):
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "communicate", to="agent_1",
+                      message="you can take it", releases=["cab"])),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(any("still standing at it" in p for p in run.protocol))
+
+    def test_releasing_an_object_you_are_still_holding_is_rejected(self):
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "pick_up_object", object_id="bowl",
+                      source_id="counter"),
+                 step("agent_0", "communicate", to="agent_1",
+                      message="bowl is yours", releases=["bowl"])),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(any("still holding it" in p for p in run.protocol))
+
+    def test_a_gap_between_leaving_and_reporting_is_rejected(self):
+        # Every tick in the gap is a tick the waiter sits blocked on something
+        # that is already free.
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "give_space", fixture_id="cab"),
+                 step("agent_0", "communicate", to="agent_1", message="just tidying"),
+                 step("agent_0", "communicate", to="agent_1", message="all done",
+                      releases=["cab"])),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(any("not the handover" in p for p in run.protocol))
+
+    def test_observations_between_the_departure_and_the_report_are_fine(self):
+        # get_image is inert and post-processing interleaves it everywhere.
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "give_space", fixture_id="cab"),
+                 step("agent_0", "get_image"),
+                 step("agent_0", "communicate", to="agent_1", message="all done",
+                      releases=["cab"])),
+            model=LOCK_STEP,
+        )
+        self.assertEqual(run.protocol, [])
+
+    def test_a_wait_released_on_its_own_instant_is_inert(self):
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "give_space", fixture_id="cab"),
+                 step("agent_0", "communicate", to="agent_1", message="yours",
+                      releases=["cab"]),
+                 step("agent_1", "communicate", to="agent_0", message="ok then"),
+                 step("agent_1", "communicate", to="agent_0", message="still here"),
+                 step("agent_1", "wait_for_signal", **{"from": "agent_0",
+                                                       "about": "cab"})),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(any("inert" in p for p in run.protocol))
+
+    def test_a_wait_that_arrives_after_the_release_says_so(self):
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "give_space", fixture_id="cab"),
+                 step("agent_0", "communicate", to="agent_1", message="yours",
+                      releases=["cab"]),
+                 step("agent_1", "communicate", to="agent_0", message="one"),
+                 step("agent_1", "communicate", to="agent_0", message="two"),
+                 step("agent_1", "communicate", to="agent_0", message="three"),
+                 step("agent_1", "wait_for_signal", **{"from": "agent_0",
+                                                       "about": "cab"})),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(run.deadlocked)
+        self.assertTrue(any("too late" in c for c in run.conflicts))
 
 
 class GoalTests(unittest.TestCase):

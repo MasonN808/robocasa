@@ -37,7 +37,9 @@ from .constants import (
     EXCLUSIVE_FIXTURE_TYPES,
     FIXTURE_ARG_NAMES,
     GIVE_SPACE_TOOL_NAMES,
+    NAVIGATION_TOOL_NAMES,
     OBSERVATION_TOOL_NAMES,
+    RELEASE_TOOL_NAMES,
     SOCIAL_TOOL_NAMES,
     WAIT_TOOL_NAMES,
 )
@@ -50,6 +52,7 @@ from .errors import (
     TrajectoryValidationError,
     UnsatisfiedGoalSemanticValidationError,
     UnsupportedToolSemanticValidationError,
+    WaitSignalSemanticValidationError,
 )
 
 LOCK_STEP = "lock_step"
@@ -102,6 +105,10 @@ class Replay:
     makespan: float = 0.0
     goal_at: float | None = None
     post_goal: list[str] = field(default_factory=list)
+    # Handover protocol violations. Unlike `conflicts` these need no clock: a
+    # release that reports a departure that did not happen is wrong under every
+    # duration model, whether or not the timing exposes it.
+    protocol: list[str] = field(default_factory=list)
     first_action: bool = False
     # Exclusive fixtures the sampled initial state already put both agents at.
     initial_overlap: list[str] = field(default_factory=list)
@@ -173,6 +180,10 @@ class ConcurrentTaskValidator:
         # the waiter blocked was never delivered to it and never will be.
         fired: dict[tuple[str, str], list[float]] = {}
         seen_conflicts: set[tuple[str, ...]] = set()
+        flagged: set[int] = set()
+        # Last non-observation step each agent took, so a release can be checked
+        # against what its sender did immediately before speaking.
+        previous: dict[str, dict[str, Any] | None] = {a: None for a in streams}
         # Agents that START co-located are a property of the sampled initial
         # state, not of the plan, so the opening overlap is excused. The grace
         # expires the moment they separate: coming BACK to a fixture the other
@@ -200,7 +211,22 @@ class ConcurrentTaskValidator:
                 args = step.get("args") or {}
                 key = (args.get("from"), str(args.get("about")))
                 since = waiting_since.setdefault(agent_id, ready_at[agent_id])
-                if any(at >= since - _EPS for at in fired.get(key, ())):
+                events = fired.get(key, ())
+                if any(at >= since - _EPS for at in events):
+                    # Discharge stays permissive to mirror the executor, but a
+                    # wait woken by a release fired at the very instant it began
+                    # never blocked anything: the resource was already free, so
+                    # the call bought nothing but a lost turn.
+                    inert = not any(at > since + _EPS for at in events)
+                    if inert and streams[agent_id][cursor[agent_id]] not in flagged:
+                        flagged.add(streams[agent_id][cursor[agent_id]])
+                        result.protocol.append(
+                            f"  step {step['step']}: {agent_id} waits on "
+                            f"{str(args.get('about'))!r} at t={since:g}, but "
+                            f"{args.get('from')} released it at t={since:g} -- the "
+                            f"wait is inert. Either drop the wait or move it "
+                            f"before the release."
+                        )
                     runnable.append(agent_id)
 
             if not runnable:
@@ -208,10 +234,21 @@ class ConcurrentTaskValidator:
                 for agent_id in result.blocked:
                     step = steps[streams[agent_id][cursor[agent_id]]]
                     args = step.get("args") or {}
+                    key = (args.get("from"), str(args.get("about")))
+                    earlier = fired.get(key, ())
+                    since = waiting_since.get(agent_id, ready_at[agent_id])
+                    detail = (
+                        f"the release fired at t={max(earlier):g}, before this "
+                        f"agent began waiting at t={since:g}, so it was "
+                        f"delivered to nobody -- the wait is too late to be "
+                        f"woken by it"
+                        if earlier
+                        else "it is never released"
+                    )
                     result.conflicts.append(
                         f"  {agent_id} is blocked forever at step {step['step']}: "
                         f"wait_for_signal(from={args.get('from')!r}, "
-                        f"about={str(args.get('about'))!r}) is never released."
+                        f"about={str(args.get('about'))!r}) -- {detail}."
                     )
                 break
 
@@ -241,7 +278,14 @@ class ConcurrentTaskValidator:
 
                 if tool == "communicate":
                     for released in _released_ids(step):
+                        self._check_release(
+                            step, agent_id, released, state,
+                            previous[agent_id], clock, result,
+                        )
                         fired.setdefault((agent_id, released), []).append(clock)
+
+                if tool not in OBSERVATION_TOOL_NAMES:
+                    previous[agent_id] = step
 
                 end = clock + duration_of(tool, model)
                 result.events.append(
@@ -378,6 +422,70 @@ class ConcurrentTaskValidator:
                 f"other must release it."
             )
 
+    def _check_release(
+        self,
+        step: dict[str, Any],
+        agent_id: str,
+        released: str,
+        state: Any,
+        previous: dict[str, Any] | None,
+        clock: float,
+        result: Replay,
+    ) -> None:
+        """A release is a report of a departure, so the departure must be real.
+
+        `releases` is otherwise a pure speech act: nothing stops an agent
+        handing over a fixture it is still standing at. The waiter then wakes
+        and walks into an occupied space, and whether that shows up as a
+        collision depends entirely on which duration model is running -- see
+        `concurrent_fsm_demo.py` scenarios 8 and 9, the same defect with
+        opposite verdicts. These three rules need no clock.
+        """
+
+        agent_state = state.agents.get(agent_id)
+        if agent_state is None:
+            return
+        prefix = f"  step {step['step']}: {agent_id} releases {released!r}"
+
+        # 1. Still holding it.
+        if agent_state.held_object == released:
+            result.protocol.append(
+                f"{prefix} while still holding it. Put it down first."
+            )
+            return
+
+        # 2. Still standing at it.
+        if self._exclusive(released) and agent_state.location == released:
+            result.protocol.append(
+                f"{prefix} while still standing at it. Call "
+                f"give_space(fixture_id={released!r}) first -- announcing a "
+                f"handover is not performing one."
+            )
+            return
+
+        # 3. Released, but not as the report of the departure.
+        if previous is None:
+            return
+        args = previous.get("args") or {}
+        departed = (
+            previous["tool"] in GIVE_SPACE_TOOL_NAMES
+            and str(args.get("fixture_id")) == released
+        ) or (
+            previous["tool"] in NAVIGATION_TOOL_NAMES
+            and str(args.get("fixture_id")) != released
+        ) or (
+            previous["tool"] in RELEASE_TOOL_NAMES
+            and released in {str(value) for value in args.values()}
+        )
+        if not departed:
+            result.protocol.append(
+                f"{prefix}, but its previous call was "
+                f"{previous['tool']}, not the handover. The release must be "
+                f"the very next thing the agent does after letting go: "
+                f"anything in between is time the waiter is blocked on a "
+                f"resource that is already free."
+            )
+
     def _occupancy(self, state: Any) -> dict[str, list[str]]:
         """Which agents are standing at each exclusive fixture right now."""
 
@@ -459,6 +567,12 @@ class ConcurrentTaskValidator:
                     f"Under the {model} schedule the agents collide:\n"
                     + "\n".join(run.conflicts),
                     details={"model": model, "conflicts": run.conflicts},
+                )
+            if run.protocol:
+                raise WaitSignalSemanticValidationError(
+                    "The handover protocol is not followed:\n"
+                    + "\n".join(run.protocol),
+                    details={"model": model, "protocol": run.protocol},
                 )
             if run.post_goal:
                 raise PostGoalActionSemanticValidationError(

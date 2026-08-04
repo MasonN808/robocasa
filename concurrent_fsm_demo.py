@@ -67,15 +67,16 @@ SCENARIOS: list[tuple[str, str, list[dict]]] = [
          s(A1, "pick_up_object", object_id="bowl", source_id="counter")],
     ),
     (
-        "4. A handover that works",
-        "The four-part shape from TICK_FORMAT_RULES: ask, LEAVE, release, move in.\n"
-        "The wait clears on the same instant the release fires.",
+        "4. A handover that works -- the four parts",
+        "1 ASK, 2 BLOCK, 3a LEAVE, 3b REPORT, 4 MOVE IN. agent_1 reaches its wait\n"
+        "at instant 2 and is absent from the plan until the release at 3 wakes it.\n"
+        "3a and 3b are adjacent: the release is the REPORT of the departure.",
         [*OPEN,
          s(A0, "navigate_to_fixture", fixture_id="cab"),
          talk(A1, "tell me when the cabinet is free"),
+         s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
          s(A0, "give_space", fixture_id="cab"),
          talk(A0, "cab is yours now", releases=["cab"]),
-         s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
          s(A1, "navigate_to_fixture", fixture_id="cab")],
     ),
     (
@@ -86,10 +87,9 @@ SCENARIOS: list[tuple[str, str, list[dict]]] = [
         [*OPEN,
          s(A0, "navigate_to_fixture", fixture_id="cab"),
          talk(A1, "tell me when the cabinet is free"),
-         s(A0, "give_space", fixture_id="cab"),
-         talk(A0, "cab is yours now"),
          s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
-         s(A1, "navigate_to_fixture", fixture_id="cab")],
+         s(A0, "give_space", fixture_id="cab"),
+         talk(A0, "cab is yours now")],
     ),
     (
         "6. The release arrives before anyone is waiting",
@@ -114,38 +114,63 @@ SCENARIOS: list[tuple[str, str, list[dict]]] = [
          s(A1, "navigate_to_fixture", fixture_id="cab")],
     ),
     (
-        "8. THE give_space LIMITATION -- caught, but for the wrong reason",
-        "agent_0 releases the cabinet WITHOUT leaving it: a promise, not a\n"
-        "departure. The protocol is formally perfect -- ask, wait, release,\n"
-        "arrive -- and `releases` has no physical precondition, so nothing\n"
-        "objects to it. The conflict below is reported because agent_1 HAPPENS\n"
-        "to arrive while agent_0 is still standing there. The protocol error is\n"
-        "never named; only its consequence is.",
+        "8. Releasing a fixture you are still standing at",
+        "agent_0 hands over the cabinet without leaving it: a promise, not a\n"
+        "departure. This used to be invisible -- `releases` was a pure speech act,\n"
+        "and whether it showed up depended on whether the arrival HAPPENED to\n"
+        "overlap. Now it is rejected outright, under every duration model.",
         [*OPEN,
          s(A0, "navigate_to_fixture", fixture_id="cab"),
          talk(A1, "tell me when the cabinet is free"),
-         talk(A0, "you can take it", releases=["cab"]),
          s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
-         talk(A0, "just tidying up"),
+         talk(A0, "you can take it", releases=["cab"]),
          s(A1, "navigate_to_fixture", fixture_id="cab"),
          s(A0, "give_space", fixture_id="cab")],
     ),
     (
-        "9. The same defect, one instant later -- not caught at all",
-        "Byte-for-byte the same protocol error as scenario 8. agent_1 has one\n"
-        "extra message to send, so agent_0's give_space lands first and the two\n"
-        "never overlap. Clean. The plan is no more correct than scenario 8; the\n"
-        "clock just absolved it. date_night/traj_000000 is exactly this -- dirty\n"
-        "under lock_step, clean under executor.\n"
-        "A STRUCTURAL rule -- 'do not release a fixture you are still standing\n"
-        "at' -- needs no clock and would catch both 8 and 9.",
+        "9. The same defect, one instant later",
+        "Scenario 8 with agent_1 delayed one instant, so agent_0's give_space now\n"
+        "lands before the arrival and the two never overlap. Under the old rules\n"
+        "this was CLEAN -- same error, opposite verdict, decided by the clock.\n"
+        "The structural rule catches it identically, which is the whole point of\n"
+        "making it structural. date_night/traj_000000 is this shape.",
         [*OPEN,
          s(A0, "navigate_to_fixture", fixture_id="cab"),
          talk(A1, "tell me when the cabinet is free"),
-         talk(A0, "you can take it", releases=["cab"]),
          s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
+         talk(A0, "you can take it", releases=["cab"]),
          talk(A1, "thanks, finishing up here"),
          s(A0, "give_space", fixture_id="cab"),
+         s(A1, "navigate_to_fixture", fixture_id="cab")],
+    ),
+    (
+        "10. A gap between leaving and reporting",
+        "agent_0 does leave, but chats for an instant before saying so. Every tick\n"
+        "in that gap is a tick agent_1 sits blocked on a cabinet that is already\n"
+        "free. The release must be the very next thing after the departure.",
+        [*OPEN,
+         s(A0, "navigate_to_fixture", fixture_id="cab"),
+         talk(A1, "tell me when the cabinet is free"),
+         s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
+         s(A0, "give_space", fixture_id="cab"),
+         talk(A0, "just tidying up"),
+         talk(A0, "all done now", releases=["cab"]),
+         s(A1, "navigate_to_fixture", fixture_id="cab")],
+    ),
+    (
+        "11. Waiting for something already released",
+        "agent_0 completes the handover before agent_1 ever blocks. There is\n"
+        "nothing left to wait for, so the wait is dead weight -- and because a\n"
+        "release only wakes an agent ALREADY waiting, it is worse than useless:\n"
+        "agent_1 blocks on a message that has come and gone.",
+        [*OPEN,
+         s(A0, "navigate_to_fixture", fixture_id="cab"),
+         s(A0, "give_space", fixture_id="cab"),
+         talk(A0, "cab is free", releases=["cab"]),
+         talk(A1, "one moment"),
+         talk(A1, "nearly ready"),
+         talk(A1, "ok now"),
+         s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
          s(A1, "navigate_to_fixture", fixture_id="cab")],
     ),
 ]
@@ -168,13 +193,16 @@ def main() -> None:
         print("-" * 78)
         print(validator.render(candidate, model=args.model, width=40))
         run = validator.replay(candidate, model=args.model, stop_on_step_error=False)
-        verdict = (
-            "DEADLOCK" if run.deadlocked
-            else f"{len(run.conflicts)} CONFLICT(S)" if run.conflicts
-            else "clean"
-        )
+        parts = []
+        if run.deadlocked:
+            parts.append("DEADLOCK")
+        if run.conflicts and not run.deadlocked:
+            parts.append(f"{len(run.conflicts)} CONFLICT(S)")
+        if run.protocol:
+            parts.append(f"{len(run.protocol)} PROTOCOL ERROR(S)")
+        verdict = " + ".join(parts) or "clean"
         print(f"\n  -> {verdict}   makespan={run.makespan:g}  idle={run.idle}")
-        for line in run.conflicts:
+        for line in run.conflicts + run.protocol:
             print(line)
         print()
 
