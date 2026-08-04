@@ -175,12 +175,12 @@ class ConcurrentTaskValidator:
         cursor = {agent_id: 0 for agent_id in streams}
         ready_at = {agent_id: 0.0 for agent_id in streams}
         waiting_since: dict[str, float] = {}
+        blocked_on: dict[str, tuple[str, str]] = {}
         # A release is an EVENT: it wakes only an agent already waiting when it
         # fires, exactly as AgentRuntime.deliver does -- a message sent before
         # the waiter blocked was never delivered to it and never will be.
         fired: dict[tuple[str, str], list[float]] = {}
         seen_conflicts: set[tuple[str, ...]] = set()
-        flagged: set[int] = set()
         # When each wait first blocked, and when each resource was actually
         # let go of, so the two orderings can be checked after the run.
         wait_started: dict[int, float] = {}
@@ -202,47 +202,48 @@ class ConcurrentTaskValidator:
         clock = 0.0
 
         while True:
-            pending = [a for a in streams if cursor[a] < len(streams[a])]
+            # An agent blocked on its LAST step still counts: it has nothing
+            # left to do, but it is stuck rather than finished, and the
+            # executor would sit there too.
+            pending = [
+                a for a in streams
+                if cursor[a] < len(streams[a]) or a in blocked_on
+            ]
             if not pending:
                 break
 
+            # A wait is CALLED once and then the agent sits blocked, exactly as
+            # AgentRuntime does: `waiting_for` is set when the call is made and
+            # cleared when a message is delivered. Deferring the call until it
+            # could succeed put it on the clock at the instant it discharged,
+            # which drew the agent as idle for the whole block and then calling
+            # wait at the very moment it was already free.
             runnable: list[str] = []
             for agent_id in pending:
-                step = steps[streams[agent_id][cursor[agent_id]]]
-                if step["tool"] not in WAIT_TOOL_NAMES:
-                    runnable.append(agent_id)
-                    continue
-                args = step.get("args") or {}
-                key = (args.get("from"), str(args.get("about")))
-                if agent_id not in waiting_since:
-                    wait_started[streams[agent_id][cursor[agent_id]]] = ready_at[agent_id]
-                since = waiting_since.setdefault(agent_id, ready_at[agent_id])
-                events = fired.get(key, ())
-                if any(at >= since - _EPS for at in events):
-                    # Discharge stays permissive to mirror the executor, but a
-                    # wait woken by a release fired at the very instant it began
-                    # never blocked anything: the resource was already free, so
-                    # the call bought nothing but a lost turn.
-                    inert = not any(at > since + _EPS for at in events)
-                    if inert and streams[agent_id][cursor[agent_id]] not in flagged:
-                        flagged.add(streams[agent_id][cursor[agent_id]])
-                        result.protocol.append(
-                            f"  step {step['step']}: {agent_id} waits on "
-                            f"{str(args.get('about'))!r} at t={since:g}, but "
-                            f"{args.get('from')} released it at t={since:g} -- the "
-                            f"wait is inert. Either drop the wait or move it "
-                            f"before the release."
-                        )
+                key = blocked_on.get(agent_id)
+                if key is not None:
+                    woken = [
+                        at for at in fired.get(key, ())
+                        if at >= waiting_since[agent_id] - _EPS
+                    ]
+                    if not woken:
+                        continue
+                    blocked_on.pop(agent_id)
+                    ready_at[agent_id] = max(ready_at[agent_id], min(woken))
+                if cursor[agent_id] < len(streams[agent_id]):
                     runnable.append(agent_id)
 
+            if not runnable and not blocked_on:
+                break
+
             if not runnable:
-                result.blocked = sorted(pending)
+                result.blocked = sorted(blocked_on)
                 for agent_id in result.blocked:
-                    step = steps[streams[agent_id][cursor[agent_id]]]
+                    index = streams[agent_id][cursor[agent_id] - 1]
+                    step = steps[index]
                     args = step.get("args") or {}
-                    key = (args.get("from"), str(args.get("about")))
-                    earlier = fired.get(key, ())
-                    since = waiting_since.get(agent_id, ready_at[agent_id])
+                    earlier = fired.get(blocked_on[agent_id], ())
+                    since = waiting_since[agent_id]
                     detail = (
                         f"the release fired at t={max(earlier):g}, before this "
                         f"agent began waiting at t={since:g}, so it was "
@@ -252,8 +253,8 @@ class ConcurrentTaskValidator:
                         else "it is never released"
                     )
                     result.conflicts.append(
-                        f"  {agent_id} is blocked forever at step {step['step']}: "
-                        f"wait_for_signal(from={args.get('from')!r}, "
+                        f"  {agent_id} is blocked forever from t={since:g}, at step "
+                        f"{step['step']}: wait_for_signal(from={args.get('from')!r}, "
                         f"about={str(args.get('about'))!r}) -- {detail}."
                     )
                 break
@@ -267,9 +268,28 @@ class ConcurrentTaskValidator:
             for agent_id, index in instant:
                 step = steps[index]
                 tool = step["tool"]
-                waiting_since.pop(agent_id, None)
 
-                if tool not in WAIT_TOOL_NAMES:
+                if tool in WAIT_TOOL_NAMES:
+                    self._check_ask(step, agent_id, previous[agent_id], result)
+                    args = step.get("args") or {}
+                    key = (args.get("from"), str(args.get("about")))
+                    blocked_on[agent_id] = key
+                    waiting_since[agent_id] = clock
+                    wait_started[index] = clock
+                    # A release fired at the very instant the wait is called is
+                    # a race in the executor -- whether the message lands before
+                    # or after `waiting_for` is set depends on the order the
+                    # cycle happens to process proposals. Discharge stays
+                    # permissive; the plan is flagged instead of gambled on.
+                    if any(at <= clock + _EPS for at in fired.get(key, ())):
+                        result.protocol.append(
+                            f"  step {step['step']}: {agent_id} calls "
+                            f"wait_for_signal on {str(args.get('about'))!r} at "
+                            f"t={clock:g}, but {args.get('from')} released it at "
+                            f"t={max(fired[key]):g}. The wait is inert -- block "
+                            f"before the release, or drop it."
+                        )
+                else:
                     try:
                         self._apply(step, state)
                     except TrajectoryValidationError as exc:
@@ -281,9 +301,6 @@ class ConcurrentTaskValidator:
                             return result
                     if tool not in OBSERVATION_TOOL_NAMES | SOCIAL_TOOL_NAMES:
                         result.first_action = True
-
-                if tool in WAIT_TOOL_NAMES:
-                    self._check_ask(step, agent_id, previous[agent_id], result)
 
                 if tool == "communicate":
                     for released in _released_ids(step):

@@ -184,11 +184,19 @@ class WaitTests(unittest.TestCase):
         )
 
     def test_a_wait_blocks_until_its_release_fires(self):
+        # The wait is CALLED once, at the instant the agent reaches it, and the
+        # agent then sits blocked -- it does not re-issue the call when woken.
+        # Recording the call at its discharge instead drew the agent as idle
+        # through the block and then calling wait once the way was already
+        # clear, which is not what the executor does or what the plan says.
         run = build().replay(self._waiting_plan(release=True), model=LOCK_STEP)
         by_index = {e.index: e.tick for e in run.events}
+        self.assertEqual(by_index[3], 1, "the wait is called at t=1")
         self.assertEqual(by_index[6], 3, "the release is sent at t=3")
-        self.assertEqual(by_index[3], 3, "the wait clears on the same instant")
-        self.assertEqual(by_index[4], 4, "and the arrival follows it")
+        # AgentRuntime.deliver bumps `ready_at` to the release clock, so a woken
+        # agent resumes in that same cycle rather than the next one.
+        self.assertEqual(by_index[4], 3, "the waiter resumes on the release")
+        self.assertEqual(run.idle["agent_1"], 1.0, "blocked for one instant")
 
     def test_a_wait_nothing_releases_is_a_deadlock_not_a_pass(self):
         run = build().replay(self._waiting_plan(release=False), model=LOCK_STEP)
