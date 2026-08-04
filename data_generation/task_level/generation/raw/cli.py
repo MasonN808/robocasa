@@ -635,6 +635,13 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         help="Maximum parallel trajectory workers.",
     )
     parser.add_argument(
+        "--tick-format",
+        action="store_true",
+        help="Generate rows of simultaneous actions instead of a flat step "
+             "list, with wait_for_signal available so the model places its "
+             "own coordination.",
+    )
+    parser.add_argument(
         "--max-retries",
         type=int,
         default=5,
@@ -779,6 +786,8 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         thinking_level=args.thinking_level,
         max_workers=args.max_workers,
         max_retries=args.max_retries,
+        tick_format=getattr(args, "tick_format", False),
+        work_partition=getattr(args, "work_partition", None),
         parallelize_tasks=args.parallelize_tasks,
         summary_path=default_summary_path,
         cost_output_path=args.cost_output,

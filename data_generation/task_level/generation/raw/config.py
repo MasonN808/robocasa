@@ -64,6 +64,9 @@ class RuntimeConfig:
     # Only for the calibration sweep that measures how reliably the model
     # can produce each split; normal generation samples them by weight.
     work_partition: str | None = None
+    # Generate rows of simultaneous actions instead of a flat step list, and
+    # let the model place its own waits. See tick_format.py.
+    tick_format: bool = False
     random_start_location: bool = True
     parallelize_tasks: bool = False
     sampling: str = "base"

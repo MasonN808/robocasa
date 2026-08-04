@@ -104,7 +104,10 @@ class BaseSamplingStrategy:
     ) -> dict[str, Any]:
         """Uses the task's original single-trajectory response schema."""
 
-        del runtime_config
+        if getattr(runtime_config, "tick_format", False):
+            tick_schema = task_definition.tick_response_schema
+            if tick_schema is not None:
+                return tick_schema
         return task_definition.response_schema
 
     def preflight_token_estimate(

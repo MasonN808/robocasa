@@ -18,7 +18,7 @@ from data_generation.task_level.tasks.shared.instances import (
 from data_generation.task_level.tasks.shared.partitions import select_partition
 from data_generation.task_level.tasks.shared.prompting import make_task_prompt_builder
 from data_generation.task_level.tasks.shared.schema import build_task_response_schema
-from tick_format import build_tick_response_schema
+from tick_format import TICK_FORMAT_RULES, build_tick_response_schema
 from data_generation.task_level.tasks.shared.state import TaskRuntimeState
 from data_generation.task_level.tasks.shared.types import (
     PreflightTokenEstimate,
@@ -525,7 +525,14 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
             chosen = dict(chosen)
         else:
             chosen = select_partition(partitions, run_index)
-        return replace(instance, work_partition=chosen)
+        rules = instance.extra_execution_rules or task_spec.extra_execution_rules
+        if getattr(runtime_config, "tick_format", False):
+            rules = tuple(rules) + TICK_FORMAT_RULES
+        return replace(
+            instance,
+            work_partition=chosen,
+            extra_execution_rules=tuple(rules),
+        )
 
     def _validator_factory(task_instance: TaskInstance | None) -> SpecDrivenTaskValidator:
         return SpecDrivenTaskValidator(
