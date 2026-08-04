@@ -98,6 +98,12 @@ def _contested(step, fixtures, objects):
     return out
 
 
+from data_generation.task_level.tasks.shared.scheduling import (  # noqa: E402
+    schedule,
+    usage_spans,
+)
+
+
 def _vacates(step, fixture_id):
     """True if this step takes the acting agent off `fixture_id`'s floor space."""
 
@@ -252,66 +258,6 @@ def _insert_occupancy_waits(steps, fixtures, locations, rng):
         out.append(step)
         out.extend(after.get(index, []))
     return out, inserted
-
-
-def schedule(steps, permanent_releases=False):
-    """Assign each step the tick it runs at under lock-step.
-
-    Every call costs one tick, so at each tick every agent not blocked on an
-    undischarged wait acts -- all at once. Returns (ticks, deadlocked); a step
-    the agents never reach has tick None.
-
-    A release is an EVENT, not a standing fact: it wakes only an agent that is
-    already waiting when it fires. This matches the live sim, where a waiter is
-    woken by a message being delivered -- a message sent before the agent began
-    waiting was never delivered to it and never will be. Treating releases as
-    permanent made the schedule more permissive than the executor, so a plan
-    could look clean here and deadlock there.
-
-    `permanent_releases=True` restores the old, laxer reading for comparison.
-    """
-
-    order: dict[str, list[int]] = {}
-    for index, step in enumerate(steps):
-        order.setdefault(step.get("agent"), []).append(index)
-
-    pointer = {agent: 0 for agent in order}
-    ticks: list[int | None] = [None] * len(steps)
-    # (releasing agent, id) -> ticks at which that release fired
-    fired: dict[tuple[str, str], list[int]] = {}
-    waiting_since: dict[str, int] = {}
-    tick = 0
-    while True:
-        runnable = []
-        for agent, indices in order.items():
-            if pointer[agent] >= len(indices):
-                continue
-            index = indices[pointer[agent]]
-            step = steps[index]
-            if step.get("tool") == "wait_for_signal":
-                args = step.get("args") or {}
-                key = (args.get("from"), str(args.get("about")))
-                since = waiting_since.setdefault(agent, tick)
-                events = fired.get(key, ())
-                if permanent_releases:
-                    if not events:
-                        continue
-                elif not any(at >= since for at in events):
-                    continue
-                waiting_since.pop(agent, None)
-            runnable.append((agent, index))
-        if not runnable:
-            break
-        for agent, index in runnable:
-            ticks[index] = tick
-            step = steps[index]
-            if step.get("tool") == "communicate":
-                value = (step.get("args") or {}).get("releases") or []
-                for released_id in ([value] if isinstance(value, str) else value):
-                    fired.setdefault((agent, str(released_id)), []).append(tick)
-            pointer[agent] += 1
-        tick += 1
-    return ticks, any(pointer[a] < len(order[a]) for a in order)
 
 
 def footprint(step, fixtures, objects):

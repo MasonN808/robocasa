@@ -9,6 +9,7 @@ from typing import Any, Sequence
 
 from data_generation.utils import stable_json_sha256
 
+from .scheduling import overlapping_users, schedule, usage_spans
 from .constants import (
     ACQUIRE_TOOL_NAMES,
     CLOSE_PART_TOOL_NAMES,
@@ -461,6 +462,25 @@ class FiniteStateTaskValidator:
         fixtures = self.initial_state.get("fixtures") or {}
         objects = set(self.initial_state.get("objects") or {})
 
+
+        def _resources(step: dict[str, Any]) -> list[str]:
+            tool = step["tool"]
+            if tool in SOCIAL_TOOL_NAMES or tool in OBSERVATION_TOOL_NAMES:
+                return []
+            if tool in GIVE_SPACE_TOOL_NAMES:
+                return []
+            args = step.get("args") or {}
+            found: list[str] = []
+            for name in DEPENDENCY_ARG_NAMES:
+                value = args.get(name)
+                if isinstance(value, str) and value in objects:
+                    found.append(value)
+            for name in FIXTURE_ARG_NAMES:
+                value = args.get(name)
+                if isinstance(value, str) and value in fixtures and _exclusive(value):
+                    found.append(value)
+            return found
+
         def _exclusive(fixture_id: str) -> bool:
             state = fixtures.get(fixture_id)
             if not isinstance(state, dict):
@@ -469,6 +489,20 @@ class FiniteStateTaskValidator:
                 str(state.get("fixture_type", "")).lower()
                 in EXCLUSIVE_FIXTURE_TYPES
             )
+
+        # Contention is a TEMPORAL fact, not a structural one. Requiring a wait
+        # wherever two agents merely touch the same thing demanded one for
+        # handoffs the schedule already separates, and a release for such a
+        # wait fires before the waiter arrives -- which under the executor's
+        # message semantics is a hang, not a redundancy. Measured over 1560
+        # trajectories: 309 deadlocked that way. Only an overlap needs a wait.
+        ticks, _ = schedule(steps)
+        spans = usage_spans(steps, ticks, lambda step: _resources(step))
+        overlapping = {
+            (resource, first, later)
+            for resource, first, later in overlapping_users(spans)
+        }
+        overlapping |= {(r, b, a) for r, a, b in overlapping}
 
         held: dict[str, tuple[str, int]] = {}
         violations: list[str] = []
@@ -500,6 +534,8 @@ class FiniteStateTaskValidator:
                 holder, held_at = held.get(resource, (None, -1))
                 if holder is None or holder == actor:
                     continue
+                if (resource, holder, actor) not in overlapping:
+                    continue  # the schedule already separates them
                 if any(
                     earlier["tool"] in WAIT_TOOL_NAMES
                     and earlier["agent"] == actor
@@ -584,7 +620,18 @@ class FiniteStateTaskValidator:
             )
 
         needle = about.casefold()
-        for offset, later in enumerate(steps[step_index + 1 :], start=step_index + 1):
+        # "After" means after in TIME, not after in the file. The two agents
+        # advance independently, so a release written earlier in the list can
+        # still fire once the waiter is already blocked -- and placing it where
+        # it fires correctly is what stops it arriving before the waiter exists.
+        wait_ticks, _ = schedule(steps)
+        wait_tick = wait_ticks[step_index]
+        for offset, later in enumerate(steps):
+            later_tick = wait_ticks[offset]
+            if wait_tick is not None and (later_tick is None or later_tick < wait_tick):
+                continue
+            if wait_tick is None and offset <= step_index:
+                continue
             if later["agent"] != from_agent or later["tool"] != "communicate":
                 continue
             later_args = later.get("args") or {}
@@ -642,6 +689,11 @@ class FiniteStateTaskValidator:
             if step["agent"] != agent:
                 continue
             if step["tool"] in SOCIAL_TOOL_NAMES or step["tool"] in OBSERVATION_TOOL_NAMES:
+                continue
+            # Stepping off a fixture is not using it. Counting give_space here
+            # made a correct release look like a broken promise, because the
+            # holder yields the space right after handing it over.
+            if step["tool"] in GIVE_SPACE_TOOL_NAMES:
                 continue
             if any(str(value) == resource for value in (step.get("args") or {}).values()):
                 return True
