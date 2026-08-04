@@ -360,6 +360,13 @@ def _insert_lockstep_waits(steps, fixtures, objects, rng, max_rounds=8):
         holder = steps[first].get("agent")
         waiter = steps[second].get("agent")
         resource = shared[0]
+        # KNOWN SOFT SPOT: in 2 of 1560 trajectories the waiter is already
+        # waiting on this resource, and what clears the collision is the three
+        # extra steps shifting the tick alignment rather than a new ordering
+        # constraint. Guarding against the duplicate was tried and brings both
+        # collisions back, so the duplicate stays -- two robots in one cabinet
+        # is a worse defect than a redundant message. A principled fix would
+        # re-place the existing wait instead of adding a second one.
         block = [
             {"agent": waiter, "tool": "communicate", "derived": True,
              "args": {"to": holder, "message": rng.choice(ASKS).format(x=resource)},
