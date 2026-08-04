@@ -1,8 +1,15 @@
 """Semantics of wait_for_signal.
 
-The environment deliberately does NOT inspect args.about: any inbound message
-wakes a waiter and the model decides whether it was the one it needed. These
-tests pin that down, plus the two guards (livelock cap, mutual-wait deadlock).
+A waiter is woken by a message that hands over what it named in args.about --
+a `communicate` carrying `releases: <that id>` -- and not by anything else.
+These tests pin that down, plus the two guards (livelock cap, mutual-wait
+deadlock).
+
+Until 2026-08 the harness woke a waiter on ANY inbound message and left
+relevance to the model. That let an unrelated message discharge a wait, which
+is how traj_000004 of arrange_bread_bowl resumed early and collided over the
+bowl. `--lenient-wait-discharge` still restores the old rule for evaluating
+checkpoints trained before `releases` existed.
 """
 import unittest
 from training.bc_task_vlm.live_sim_eval import AgentRuntime, WAIT_TOOL_NAME
@@ -15,12 +22,26 @@ class WaitForSignalSemantics(unittest.TestCase):
     def test_starts_not_waiting(self):
         self.assertIsNone(self.a.waiting_for)
 
-    def test_any_message_from_other_agent_wakes(self):
+    def test_message_releasing_the_awaited_id_wakes(self):
+        self.a.waiting_for = {"from": "agent_1", "about": "bowl"}
+        self.a.deliver({"agent": "agent_1", "tool": "communicate",
+                        "args": {"to": "agent_0", "message": "all yours",
+                                 "releases": "bowl"}})
+        self.assertIsNone(self.a.waiting_for)
+
+    def test_unrelated_message_does_not_wake(self):
         self.a.waiting_for = {"from": "agent_1", "about": "bowl"}
         self.a.deliver({"agent": "agent_1", "tool": "communicate",
                         "args": {"to": "agent_0", "message": "totally unrelated"}})
-        self.assertIsNone(self.a.waiting_for,
-                          "relevance is the model's judgement, not the harness's")
+        self.assertIsNotNone(self.a.waiting_for,
+                             "only a release of the awaited id discharges a wait")
+
+    def test_message_releasing_something_else_does_not_wake(self):
+        self.a.waiting_for = {"from": "agent_1", "about": "bowl"}
+        self.a.deliver({"agent": "agent_1", "tool": "communicate",
+                        "args": {"to": "agent_0", "message": "tray is free",
+                                 "releases": "tray"}})
+        self.assertIsNotNone(self.a.waiting_for)
 
     def test_own_message_does_not_wake(self):
         self.a.waiting_for = {"from": "agent_1", "about": "bowl"}
@@ -34,12 +55,13 @@ class WaitForSignalSemantics(unittest.TestCase):
                         "args": {"fixture_id": "counter"}})
         self.assertIsNotNone(self.a.waiting_for)
 
-    def test_about_is_never_matched(self):
-        """A message that does not mention `about` still wakes the agent."""
+    def test_about_named_in_prose_alone_does_not_wake(self):
+        """Discharge is structural: mentioning the id in text is not enough."""
         self.a.waiting_for = {"from": "agent_1", "about": "hotdog_bun"}
         self.a.deliver({"agent": "agent_1", "tool": "communicate",
-                        "args": {"to": "agent_0", "message": "I am at the fridge"}})
-        self.assertIsNone(self.a.waiting_for)
+                        "args": {"to": "agent_0",
+                                 "message": "I still have the hotdog_bun"}})
+        self.assertIsNotNone(self.a.waiting_for)
 
     def test_wait_is_in_shared_tool_registry(self):
         from data_generation.task_level.subatomic_tool_specs import (
@@ -47,7 +69,15 @@ class WaitForSignalSemantics(unittest.TestCase):
         )
         spec = TASK_LEVEL_ALLOWED_TOOL_SPECS[WAIT_TOOL_NAME]
         self.assertEqual(spec["tool_args"], ["from", "about"])
-        self.assertIn("does NOT check", spec["description"])
+        self.assertIn("args.releases", spec["description"])
+
+    def test_communicate_offers_releases_as_an_optional_argument(self):
+        from data_generation.task_level.subatomic_tool_specs import (
+            TASK_LEVEL_ALLOWED_TOOL_SPECS,
+        )
+        spec = TASK_LEVEL_ALLOWED_TOOL_SPECS["communicate"]
+        self.assertEqual(spec["tool_args"], ["to", "message"])
+        self.assertEqual(spec["optional_tool_args"], ["releases"])
 
 
 if __name__ == "__main__":
