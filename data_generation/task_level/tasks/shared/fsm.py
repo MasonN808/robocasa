@@ -543,6 +543,12 @@ class FiniteStateTaskValidator:
         The announcement is deliberately NOT checked for the id. Its job is to
         make the wait visible, since under partial observability the partner
         cannot see it; identifying the thing is the release's job.
+
+        A release is `communicate` carrying `releases: <id>`. Matching the id
+        out of the message text still works, for trajectories written before
+        that field existed, but new data should use the field: a wait that any
+        sufficiently-worded sentence can discharge teaches the model to write
+        the sentence rather than to finish the work.
         """
 
         tool_args = step["args"]
@@ -584,13 +590,20 @@ class FiniteStateTaskValidator:
             later_args = later.get("args") or {}
             if later_args.get("to") != step["agent"]:
                 continue
-            message = str(later_args.get("message", ""))
-            if needle not in message.casefold():
-                continue
-            # A message that is nothing but the id discharges no obligation;
-            # generated data contained a release whose whole text was "bowl".
-            if not message.casefold().replace(needle, "").strip(" .,;:!"):
-                continue
+            # A structural release is the real signal. The textual rule below
+            # it is a fallback for trajectories generated before `releases`
+            # existed; it stays because those remain valid, not because
+            # phrasing should be able to discharge a wait.
+            released = later_args.get("releases") or []
+            released = [released] if isinstance(released, str) else list(released)
+            if about not in released:
+                message = str(later_args.get("message", ""))
+                if needle not in message.casefold():
+                    continue
+                # A message that is nothing but the id discharges no obligation;
+                # generated data contained a release whose whole text was "bowl".
+                if not message.casefold().replace(needle, "").strip(" .,;:!"):
+                    continue
             # The partner must leave it alone until the waiter has had its
             # turn -- not forever. Two agents may legitimately use one fixture
             # in alternation, each handing it back when done.
@@ -651,9 +664,9 @@ class FiniteStateTaskValidator:
                 details={"agent": step["agent"], "to": to_agent},
             )
 
-        if set(tool_args) != {"to", "message"}:
+        if not set(tool_args) <= {"to", "message", "releases"}:
             raise CommunicationStepSemanticValidationError(
-                "communicate args may only contain to and message.",
+                "communicate args may only contain to, message and releases.",
                 details={"arg_names": sorted(tool_args)},
             )
         normalized_message = " ".join(message.strip().split())
@@ -661,6 +674,51 @@ class FiniteStateTaskValidator:
             "to": to_agent,
             "message": normalized_message,
         }
+        released = self._normalize_released_ids(step, tool_args.get("releases"))
+        if released:
+            step["args"]["releases"] = released
+
+    def _normalize_released_ids(
+        self,
+        step: dict[str, Any],
+        raw: Any,
+    ) -> list[str]:
+        """Normalizes communicate.releases into a list of known symbolic ids.
+
+        `releases` is what actually discharges a wait. Keeping it structural,
+        rather than reading the id out of the message text, means a release
+        cannot be produced by phrasing alone -- the model would otherwise learn
+        one canonical sentence and emit it whether or not it had finished.
+        """
+
+        if raw is None:
+            return []
+        values = [raw] if isinstance(raw, str) else raw
+        if not isinstance(values, (list, tuple)) or not all(
+            isinstance(value, str) for value in values
+        ):
+            raise CommunicationStepSemanticValidationError(
+                "communicate releases must be a symbolic id or a list of them.",
+                details={"agent": step["agent"], "releases": raw},
+            )
+        known = set(self.initial_state.get("objects") or {}) | set(
+            self.initial_state.get("fixtures") or {}
+        )
+        released: list[str] = []
+        for value in values:
+            value = value.strip()
+            if not value:
+                continue
+            if known and value not in known:
+                raise CommunicationStepSemanticValidationError(
+                    f"communicate releases={value!r} is not a symbolic id in "
+                    f"this task; it must name a declared object or fixture.",
+                    details={"agent": step["agent"], "releases": value,
+                             "known_ids": sorted(known)},
+                )
+            if value not in released:
+                released.append(value)
+        return released
 
     def _validate_required_observation_sequence(
         self,

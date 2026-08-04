@@ -92,18 +92,21 @@ TASK_LEVEL_ALLOWED_TOOL_SPECS = {
     "communicate": {
         "description": (
             "Send a short coordination message to the other agent in the scene. "
-            "args.to must be that agent's exact ID."
+            "args.to must be that agent's exact ID. Set args.releases to the "
+            "exact symbolic id of a thing you have finished with and are handing "
+            "over -- that, and only that, wakes a partner who is waiting on it. "
+            "Omit args.releases from every other message."
         ),
         "tool_args": ["to", "message"],
+        "optional_tool_args": ["releases"],
     },
     "wait_for_signal": {
         "description": (
-            "Pause until the other agent sends you a message. Use this when you "
-            "cannot proceed until they report something. args.about names what "
-            "you are waiting to hear about, for your partner's benefit and for "
-            "the record; the environment does NOT check it. ANY message from "
-            "args.from wakes you, so if the message you receive is not the one "
-            "you needed, call wait_for_signal again."
+            "Pause until the other agent hands over what you are waiting for. "
+            "args.about names that thing by its exact symbolic id. You stay "
+            "paused until args.from sends a communicate whose args.releases "
+            "names the same id -- their other messages do not wake you, so you "
+            "do not need to wait again after an unrelated one."
         ),
         "tool_args": ["from", "about"],
     },

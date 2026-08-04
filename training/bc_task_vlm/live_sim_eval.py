@@ -343,6 +343,24 @@ def _tool_duration(
     return duration
 
 
+_LENIENT_WAIT_DISCHARGE = False
+
+
+def _releases_awaited(step: dict[str, Any], waiting_for: dict[str, Any]) -> bool:
+    """True when this message hands over the thing the waiter is waiting for."""
+
+    if _LENIENT_WAIT_DISCHARGE:
+        return True
+    about = str((waiting_for or {}).get("about") or "").strip()
+    if not about:
+        # Nothing was named, so nothing specific can be handed over; fall back
+        # to the old behaviour rather than waiting forever.
+        return True
+    released = (step.get("args") or {}).get("releases") or []
+    released = [released] if isinstance(released, str) else list(released)
+    return about in {str(value).strip() for value in released}
+
+
 class AgentRuntime:
     """Private state for one logical agent under partial observability."""
 
@@ -357,11 +375,12 @@ class AgentRuntime:
         self.last_proposal_key: str | None = None
         self.repeated_proposals = 0
         # wait_for_signal state. `waiting_for` records the DECLARED intent
-        # ({"from","about"}); the harness never checks `about` against message
-        # content -- any delivered message wakes the agent and the model decides
-        # whether it was the one it needed. That is deliberate: a harness that
-        # guaranteed relevance would leave nothing to learn and nothing to
-        # measure, whereas this makes comprehension an observable decision.
+        # ({"from","about"}). A wait is discharged by a message that names the
+        # same id in `releases` -- not by any message at all. The old rule woke
+        # a waiter on anything the partner said, which is how traj_000004 of
+        # arrange_bread_bowl resumed on a message about something else and then
+        # collided over the bowl. `--lenient-wait-discharge` restores it for
+        # evaluating checkpoints trained before `releases` existed.
         self.waiting_for: dict[str, Any] | None = None
         self.consecutive_waits = 0
 
@@ -369,12 +388,11 @@ class AgentRuntime:
         """Appends to this agent's private history (own act or delivered msg)."""
 
         self.private_history.append(deepcopy(step))
-        # ANY inbound message from another agent wakes a waiter. Relevance is
-        # the model's judgement, not the environment's.
         if (
             self.waiting_for is not None
             and step.get("tool") == "communicate"
             and step.get("agent") != self.agent_id
+            and _releases_awaited(step, self.waiting_for)
         ):
             self.waiting_for = None
             # Resume at the moment of release. `ready_at` still holds the stale
@@ -1615,7 +1633,9 @@ def run_trajectory_partial(
     max_silent = int(getattr(args, "max_silent_retries", 3))
     multiplier = float(getattr(args, "duration_multiplier", 1.0))
     global _DURATION_JITTER, _DURATION_RNG, _UNIFORM_DURATIONS
+    global _LENIENT_WAIT_DISCHARGE
     _UNIFORM_DURATIONS = bool(getattr(args, "uniform_durations", False))
+    _LENIENT_WAIT_DISCHARGE = bool(getattr(args, "lenient_wait_discharge", False))
     _DURATION_JITTER = float(getattr(args, "duration_jitter", 0.0))
     # Per trajectory, so the same trajectory gets the same perturbed schedule
     # regardless of which shard or order it ran in.
@@ -2685,6 +2705,14 @@ def parse_args() -> argparse.Namespace:
         help="Scales measured executor sim-steps into virtual-clock duration.",
     )
     partial.add_argument(
+        "--lenient-wait-discharge",
+        action="store_true",
+        help="Wake a waiting agent on ANY message from its partner, as the "
+             "harness did before communicate.releases existed. Needed to "
+             "evaluate checkpoints trained on data without that field; "
+             "otherwise their waits are only cleared by the deadlock breaker.",
+    )
+    parser.add_argument(
         "--uniform-durations",
         action="store_true",
         help="Lock-step: every call costs one tick, so both agents advance "

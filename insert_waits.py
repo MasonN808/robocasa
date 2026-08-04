@@ -205,7 +205,8 @@ def _insert_occupancy_waits(steps, fixtures, locations, rng):
                         "agent": occupant, "tool": "communicate",
                         "args": {"to": actor,
                                  "message": f"I have moved off {blocking}, so "
-                                            f"{needed} is clear for you now."},
+                                            f"{needed} is clear for you now.",
+                                 "releases": needed},
                         "reasoning": f"I am out of the way of {needed}.",
                     }
                     # If the departure is already behind us in plan order the
@@ -275,7 +276,8 @@ def insert(steps, fixtures, objects, rng, locations=None):
                         "reasoning": f"Waiting for {resource}."})
             out.append({"agent": holder, "tool": "communicate",
                         "args": {"to": actor,
-                                 "message": rng.choice(FREES).format(x=resource)},
+                                 "message": rng.choice(FREES).format(x=resource),
+                                 "releases": resource},
                         "reasoning": f"I am done with {resource}."})
             inserted += 1
         out.append(step)
@@ -327,7 +329,8 @@ def insert(steps, fixtures, objects, rng, locations=None):
         pending[last_use] = {
             "agent": holder, "tool": "communicate",
             "args": {"to": step["agent"],
-                     "message": rng.choice(FREES).format(x=about)},
+                     "message": rng.choice(FREES).format(x=about),
+                     "releases": about},
             "reasoning": f"I am done with {about}.",
         }
         inserted += 1
