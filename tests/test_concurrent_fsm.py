@@ -193,10 +193,18 @@ class WaitTests(unittest.TestCase):
         by_index = {e.index: e.tick for e in run.events}
         self.assertEqual(by_index[3], 1, "the wait is called at t=1")
         self.assertEqual(by_index[6], 3, "the release is sent at t=3")
-        # AgentRuntime.deliver bumps `ready_at` to the release clock, so a woken
-        # agent resumes in that same cycle rather than the next one.
-        self.assertEqual(by_index[4], 3, "the waiter resumes on the release")
-        self.assertEqual(run.idle["agent_1"], 1.0, "blocked for one instant")
+        # The waiter resumes on the instant AFTER the release, never on it:
+        # same-instant resumption is a delivery race, and costing the wake a
+        # tick removes it.
+        self.assertEqual(by_index[4], 4, "the waiter resumes after the release")
+        self.assertEqual(run.idle["agent_1"], 2.0, "blocked from t=2 to t=4")
+
+    def test_a_woken_agent_never_acts_on_the_release_instant(self):
+        for model in (LOCK_STEP, EXECUTOR):
+            with self.subTest(model=model):
+                run = build().replay(self._waiting_plan(release=True), model=model)
+                at = {e.index: e.start for e in run.events}
+                self.assertGreater(at[4], at[6])
 
     def test_a_wait_nothing_releases_is_a_deadlock_not_a_pass(self):
         run = build().replay(self._waiting_plan(release=False), model=LOCK_STEP)
@@ -369,6 +377,7 @@ class PromptedProtocolTests(unittest.TestCase):
         self.assertIn("on a LATER tick", text)
         self.assertIn("IMMEDIATELY", text, "no gap between departure and report")
         self.assertIn("very next tick", text, "no gap between ask and wait")
+        self.assertIn("tick AFTER the release", text, "no same-tick resumption")
 
     def test_the_wait_must_immediately_follow_the_ask(self):
         steps = list(self._handover()["steps"])

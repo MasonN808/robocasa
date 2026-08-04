@@ -223,11 +223,17 @@ TICK_FORMAT_RULES: tuple[str, ...] = (
     "    tick 10  agent_0: communicate(to=agent_1, releases=[\"cab\"])"
     "                  <- 3b. REPORT, the very next tick\n"
     "    tick 11  agent_1: navigate_to_fixture(fixture_id=\"cab\")"
-    "                     <- 4. MOVE IN and carry on\n"
+    "                     <- 4. MOVE IN, the tick AFTER the release,\n"
+    "                                                                        "
+    "                          never on the same tick as it\n"
     "Two adjacencies and one ordering. ASK then BLOCK are adjacent. LEAVE then "
     "REPORT are adjacent, because the release is the report of the departure. "
     "And the whole of part 2 precedes the whole of part 3: the waiter is "
     "already blocked before the holder lets go. Everything else is free.",
+    "A released agent starts moving on the tick AFTER the release, not on the "
+    "same one. The message has to arrive before it can be acted on, so put "
+    "the waiter's next call one tick later than the communicate that freed "
+    "it. The tick the release is sent belongs to the holder alone.",
     "Being idle is a cost. If an agent has nothing to do for many ticks, the "
     "work is badly divided -- give it something, or shorten the wait.",
 )

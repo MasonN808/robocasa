@@ -67,6 +67,8 @@ _EXECUTOR_DEFAULT_FLOOR = 2.0
 # Float clocks accumulate error; instants are compared, not stored, so round.
 _EPS = 1e-6
 
+_WAIT_TOOL = "wait_for_signal"
+
 
 def duration_of(tool_name: str, model: str) -> float:
     """Virtual-clock cost of one completed call under `model`."""
@@ -229,7 +231,16 @@ class ConcurrentTaskValidator:
                     if not woken:
                         continue
                     blocked_on.pop(agent_id)
-                    ready_at[agent_id] = max(ready_at[agent_id], min(woken))
+                    # A woken agent resumes on the instant AFTER the release,
+                    # never on the release itself. Same-instant resumption is a
+                    # race the executor would have to arbitrate -- the message
+                    # has to be delivered before the waiter's next proposal is
+                    # built -- and it is one more thing for the model to get
+                    # subtly wrong. Costing the wake a tick removes both.
+                    ready_at[agent_id] = max(
+                        ready_at[agent_id],
+                        min(woken) + duration_of(_WAIT_TOOL, model),
+                    )
                 if cursor[agent_id] < len(streams[agent_id]):
                     runnable.append(agent_id)
 
