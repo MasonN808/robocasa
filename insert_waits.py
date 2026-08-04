@@ -218,10 +218,24 @@ def _insert_occupancy_waits(steps, fixtures, locations, rng):
                         after.setdefault(leaves, []).append(release)
                     occupied[blocking].discard(occupant)
                     inserted += 1
+        # Occupancy has to follow the agents, not just record where they began.
+        # `occupied` was seeded from the starting layout and only ever had
+        # entries removed, so an agent that walked somewhere new mid-plan was
+        # never registered as occupying it -- the other agent then approached
+        # an apparently empty fixture and no wait was inserted.
         args = step.get("args") or {}
         if step.get("tool") in NAVIGATION_TOOL_NAMES:
-            standing[actor] = args.get("fixture_id")
+            arriving_at = args.get("fixture_id")
+            previous = standing.get(actor)
+            if isinstance(previous, str):
+                occupied.get(previous, set()).discard(actor)
+            if isinstance(arriving_at, str):
+                occupied.setdefault(arriving_at, set()).add(actor)
+            standing[actor] = arriving_at
         elif step.get("tool") in GIVE_SPACE_TOOL_NAMES:
+            previous = standing.get(actor)
+            if isinstance(previous, str):
+                occupied.get(previous, set()).discard(actor)
             standing[actor] = None
 
     if not inserted:
