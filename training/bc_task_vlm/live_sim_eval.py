@@ -303,6 +303,15 @@ def _sim_clock(session: "SimSession") -> float | None:
 # plans survive a different interleaving, not measuring their quality.
 _DURATION_JITTER = 0.0
 _DURATION_RNG: random.Random | None = None
+# Lock-step. Every call costs one tick, so both agents advance together and the
+# ONLY thing that can order them is a wait and its release -- no timing is left
+# to rescue a plan that forgot one. This REMOVES the timing dimension rather
+# than testing it: there is exactly one schedule, so a plan that works is
+# correct rather than lucky, and wait necessity becomes decidable by ablation.
+# Two costs, both deliberate: a communicate costs the same tick as a navigate,
+# so makespan degenerates to step count; and intra-tick order still exists (two
+# sequential executor calls), so the contention model stays load-bearing.
+_UNIFORM_DURATIONS = False
 
 
 def _tool_duration(
@@ -314,9 +323,11 @@ def _tool_duration(
     The floors matter because the executor teleports: if measured costs come out
     uniform, equal durations from a common start would keep both agents in
     lockstep forever, which is precisely the artificial regime the virtual clock
-    exists to avoid.
+    exists to avoid -- unless lock-step is what you asked for.
     """
 
+    if _UNIFORM_DURATIONS:
+        return 1.0
     if tool_name in ("communicate", "get_image"):
         floor = 0.25
     elif tool_name == "navigate_to_fixture":
@@ -1603,7 +1614,8 @@ def run_trajectory_partial(
     rejection_mode = getattr(args, "rejection_mode", REJECTION_MODE_SILENT_RETRY)
     max_silent = int(getattr(args, "max_silent_retries", 3))
     multiplier = float(getattr(args, "duration_multiplier", 1.0))
-    global _DURATION_JITTER, _DURATION_RNG
+    global _DURATION_JITTER, _DURATION_RNG, _UNIFORM_DURATIONS
+    _UNIFORM_DURATIONS = bool(getattr(args, "uniform_durations", False))
     _DURATION_JITTER = float(getattr(args, "duration_jitter", 0.0))
     # Per trajectory, so the same trajectory gets the same perturbed schedule
     # regardless of which shard or order it ran in.
@@ -2671,6 +2683,13 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Scales measured executor sim-steps into virtual-clock duration.",
+    )
+    partial.add_argument(
+        "--uniform-durations",
+        action="store_true",
+        help="Lock-step: every call costs one tick, so both agents advance "
+             "together and only a wait+release can order them. Removes the "
+             "timing dimension instead of testing it.",
     )
     partial.add_argument(
         "--duration-jitter",
