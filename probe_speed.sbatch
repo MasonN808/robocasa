@@ -44,7 +44,10 @@ case "$PROBE" in
                                                                       # Vertex 400, response count
                                                                       # exceeds request limits
   workers)  WORKERS=12 ;;
-  combined) EXTRA=(--thinking-level medium --sampling verbalized --verbalized-k 4); RUNS=3; WORKERS=12 ;;
+  # k=2 not 4: k=4 gets a Vertex 400 on PrepareCoffee. Workers raised to 12
+  # because verbalized trades wall clock for cost -- each call is longer and
+  # there are half as many, so 4 workers left the pipe empty.
+  combined) EXTRA=(--thinking-level medium --sampling verbalized --verbalized-k 2); RUNS=5; WORKERS=12 ;;
   *) echo "unknown PROBE=$PROBE"; exit 1 ;;
 esac
 
