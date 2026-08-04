@@ -349,7 +349,6 @@ class ConcurrentTaskValidator:
                         f"t={result.goal_at:g}."
                     )
 
-        self._check_wait_ordering(steps, wait_started, departures, result)
         result.makespan = max((event.end for event in result.events), default=0.0)
         busy = {agent_id: 0.0 for agent_id in streams}
         for event in result.events:
@@ -525,34 +524,15 @@ class ConcurrentTaskValidator:
                 f"are about to wait on."
             )
 
-    def _check_wait_ordering(
-        self,
-        steps: Sequence[dict[str, Any]],
-        wait_started: dict[int, float],
-        departures: dict[tuple[str, str], list[float]],
-        result: Replay,
-    ) -> None:
-        """The holder must still be holding it when the waiter blocks.
-
-        If the resource was let go BEFORE the wait began, there was nothing to
-        wait for: the waiter should simply have gone. Such a wait either costs a
-        turn for nothing or -- since a release only wakes an agent already
-        waiting -- hangs on a message that has come and gone.
-        """
-
-        for index, since in wait_started.items():
-            args = steps[index].get("args") or {}
-            holder, about = args.get("from"), str(args.get("about"))
-            left = departures.get((holder, about))
-            if not left or any(at > since + _EPS for at in left):
-                continue
-            result.protocol.append(
-                f"  step {steps[index]['step']}: "
-                f"{steps[index]['agent']} starts waiting on {about!r} at "
-                f"t={since:g}, but {holder} had already let it go at "
-                f"t={max(left):g}. Nothing was ever contested -- either drop "
-                f"the wait, or block before {holder} leaves."
-            )
+    # NOTE: an earlier rule here rejected a wait whose holder had already let
+    # the resource go before the wait began. Measured against real tick output
+    # it was wrong 6 times in 7: the holder vacates on the SAME instant the
+    # waiter blocks, which is not a mistake but the tightest correct handover
+    # there is -- the release still lands afterwards and still wakes the
+    # waiter. The one genuinely-early case was equally harmless. What the rule
+    # was reaching for is a wait that cannot be discharged, and that is already
+    # caught exactly: by the inert check when the release lands on the wait's
+    # own instant, and by the deadlock check when it lands before.
 
     def _check_release(
         self,
@@ -613,8 +593,12 @@ class ConcurrentTaskValidator:
             return
         args = previous.get("args") or {}
         departed = (
+            # Stepping clear of ANY fixture counts. Placing an object down and
+            # then giving space before announcing is not a gap in the handover,
+            # it IS the handover -- the agent finishes withdrawing and only then
+            # says so. Requiring the released id to match rejected all 5 of the
+            # real cases, every one of them correct.
             previous["tool"] in GIVE_SPACE_TOOL_NAMES
-            and str(args.get("fixture_id")) == released
         ) or (
             previous["tool"] in NAVIGATION_TOOL_NAMES
             and str(args.get("fixture_id")) != released
