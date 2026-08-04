@@ -104,6 +104,11 @@ from data_generation.task_level.tasks.shared.scheduling import (  # noqa: E402
 )
 
 
+def _is_exclusive_fixture(resource, fixtures):
+    kind = str((fixtures.get(resource) or {}).get("fixture_type", "")).lower()
+    return kind in EXCLUSIVE_FIXTURE_TYPES
+
+
 def _vacates(step, fixture_id):
     """True if this step takes the acting agent off `fixture_id`'s floor space."""
 
@@ -356,7 +361,17 @@ def _insert_lockstep_waits(steps, fixtures, objects, rng, max_rounds=8):
 
 
 def _resource_spans(steps, ticks, fixtures, objects):
-    """Tick span over which each agent occupies each resource."""
+    """Tick span over which each agent occupies each resource.
+
+    KNOWN GAP: this is built from the calls that NAME a resource, which is not
+    the same as occupying it -- an agent stands at a cabinet until it leaves,
+    whether or not any later call mentions the cabinet. Extending the spans to
+    cover the whole stay was tried and did not pay: it removed one collision of
+    18 and introduced a deadlock, because the wait it then inserts has no use
+    site to anchor the release to. The 15 co-occupancy collisions the concurrent
+    validator still reports here need the insertion point derived from the stay
+    itself, not from a call.
+    """
 
     spans: dict[str, dict[str, list[int]]] = {}
     where: dict[tuple[str, str], list[int]] = {}
@@ -400,10 +415,30 @@ def _first_overlap(steps, ticks, fixtures, objects):
             continue
         holder_last = where[(resource, holder)][-1]
         waiter_first = where[(resource, waiter)][0]
+        # Overlapping USE is not overlapping occupancy. If the holder already
+        # walked away before the waiter got there, the handoff has happened and
+        # a wait would block on a release that fired before it existed. Spans
+        # cannot see this because give_space is deliberately not a use.
+        if _departed_before(steps, ticks, holder, resource, ticks[waiter_first]):
+            continue
         key = min(ticks[waiter_first], ticks[holder_last])
         if best is None or key < best[0]:
             best = (key, holder, waiter, resource, holder_last, waiter_first)
     return best[1:] if best else None
+
+
+def _departed_before(steps, ticks, holder, resource, arrival_tick):
+    """True when `holder` left `resource` no later than the waiter reached it."""
+
+    if arrival_tick is None:
+        return False
+    return any(
+        step.get("agent") == holder
+        and ticks[index] is not None
+        and ticks[index] <= arrival_tick
+        and _vacates(step, resource)
+        for index, step in enumerate(steps)
+    )
 
 
 def _ordered_already(steps, waiter, holder, resource):
@@ -439,12 +474,28 @@ def _insert_temporal_waits(steps, fixtures, objects, rng, max_rounds=16):
                             "message": rng.choice(FREES).format(x=resource),
                             "releases": resource},
                    "reasoning": f"I am done with {resource}."}
+        # A release REPORTS a departure, so the departure has to happen. The
+        # holder's last USE is not one: it is still standing at the fixture,
+        # and the waiter it wakes walks straight into it. Whether that showed
+        # up as a collision used to depend on which duration model was running.
+        # Emitting give_space first also pushes the release one tick later than
+        # the wait, which is what stops it landing on the same instant and
+        # discharging a wait that never blocked.
+        vacate = None
+        if _is_exclusive_fixture(resource, fixtures) and not _vacates(
+            steps[holder_last], resource
+        ):
+            vacate = {"agent": holder, "tool": "give_space", "derived": True,
+                      "args": {"fixture_id": resource},
+                      "reasoning": f"Stepping away from {resource} for {waiter}."}
         rebuilt: list[dict] = []
         for index, step in enumerate(steps):
             if index == waiter_first:
                 rebuilt.extend([ask, wait])
             rebuilt.append(step)
             if index == holder_last:
+                if vacate is not None:
+                    rebuilt.append(vacate)
                 rebuilt.append(release)
         steps = rebuilt
         inserted += 1
