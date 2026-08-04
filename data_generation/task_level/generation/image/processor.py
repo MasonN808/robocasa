@@ -487,8 +487,51 @@ def _replace_validation_with_post_process_status(trajectory: dict[str, Any]) -> 
     }
 
 
+def _revalidate_tick_trajectory(trajectory: dict[str, Any]) -> None:
+    """Replays the post-processed plan and records the real verdict, in place.
+
+    Post-processing rewrites the steps, which is why the placeholder verdict
+    says the record "must be revalidated" -- but nothing ever did, so every
+    image-processed trajectory carried `is_valid: False` and downstream stages
+    had to take the data on trust. Injection is supposed to be schedule-
+    preserving; this is what proves it per trajectory instead of per batch.
+    """
+
+    from copy import deepcopy
+
+    from data_generation.task_level.tasks.shared.concurrent_fsm import (
+        ConcurrentTaskValidator,
+    )
+    from data_generation.task_level.tasks.specs import load_task_spec
+    from data_generation.task_level.tasks.specs.runtime import SpecDrivenTaskValidator
+
+    inner = SpecDrivenTaskValidator(load_task_spec(trajectory["composite_task"]))
+    inner.initial_state = deepcopy(trajectory["initial_state"])
+    validator = ConcurrentTaskValidator(inner)
+    candidate = {"agents": trajectory["agents"], "steps": trajectory["steps"]}
+    signature = stable_json_sha256(_normalized_signature_payload(trajectory))
+    try:
+        validation = dict(validator.validate(candidate))
+    except Exception as exc:  # noqa: BLE001 - the verdict is the output here
+        trajectory["validation"] = {
+            "is_valid": False,
+            "checks": [],
+            "final_state": None,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "step": None,
+            "signature": signature,
+        }
+        return
+    validation.pop("normalized_candidate", None)
+    validation["signature"] = signature
+    trajectory["validation"] = validation
+
+
 def post_process_trajectory(
     trajectory: dict[str, Any],
+    *,
+    revalidate: bool = False,
 ) -> dict[str, Any]:
     """Returns one rewritten trajectory record with inserted observation steps."""
 
@@ -529,7 +572,10 @@ def post_process_trajectory(
             ),
             trajectory_id=trajectory_id,
         )
-    _replace_validation_with_post_process_status(updated_trajectory)
+    if revalidate and isinstance(tick_rows, list):
+        _revalidate_tick_trajectory(updated_trajectory)
+    else:
+        _replace_validation_with_post_process_status(updated_trajectory)
     return updated_trajectory
 
 
@@ -682,11 +728,12 @@ def _set_post_process_progress_status(progress_bar: Any, status: str) -> None:
 def _post_process_summary_trajectory_file(
     source_trajectory_path: Path,
     output_trajectory_path: Path,
+    revalidate: bool = False,
 ) -> int:
     """Rewrites one saved trajectory file and returns its final step count."""
 
     trajectory = _load_json_file(source_trajectory_path)
-    updated_trajectory = post_process_trajectory(trajectory)
+    updated_trajectory = post_process_trajectory(trajectory, revalidate=revalidate)
     write_json_output(updated_trajectory, output_trajectory_path)
     return len(updated_trajectory["steps"])
 
@@ -694,10 +741,11 @@ def _post_process_summary_trajectory_file(
 def _post_process_payload_trajectory(
     index: int,
     trajectory: dict[str, Any],
+    revalidate: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """Processes one inline trajectory while preserving caller-managed ordering."""
 
-    return index, post_process_trajectory(trajectory)
+    return index, post_process_trajectory(trajectory, revalidate=revalidate)
 
 
 def _post_process_summary_dataset(
@@ -707,6 +755,7 @@ def _post_process_summary_dataset(
     output_dataset_path: Path,
     disable_progress: bool,
     workers: int,
+    revalidate: bool = False,
 ) -> int:
     """Writes a copied summary dataset tree and post-processes its trajectories."""
 
@@ -740,7 +789,9 @@ def _post_process_summary_dataset(
         max_workers = min(workers, len(trajectory_path_pairs))
         if max_workers <= 1:
             for source_path, output_path in trajectory_path_pairs:
-                _post_process_summary_trajectory_file(source_path, output_path)
+                _post_process_summary_trajectory_file(
+                    source_path, output_path, revalidate
+                )
                 progress_bar.update(1)
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -749,6 +800,7 @@ def _post_process_summary_dataset(
                         _post_process_summary_trajectory_file,
                         source_path,
                         output_path,
+                        revalidate,
                     )
                     for source_path, output_path in trajectory_path_pairs
                 ]
@@ -769,6 +821,7 @@ def _post_process_payload_dataset(
     output_dataset_path: Path,
     disable_progress: bool,
     workers: int,
+    revalidate: bool = False,
 ) -> int:
     """Writes a copied inline dataset payload with post-processed trajectories."""
 
@@ -793,13 +846,20 @@ def _post_process_payload_dataset(
         if max_workers <= 1:
             updated_trajectories = []
             for trajectory in trajectories:
-                updated_trajectories.append(post_process_trajectory(trajectory))
+                updated_trajectories.append(
+                    post_process_trajectory(trajectory, revalidate=revalidate)
+                )
                 progress_bar.update(1)
         else:
             updated_trajectories = [None] * len(trajectories)
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
-                    executor.submit(_post_process_payload_trajectory, index, trajectory)
+                    executor.submit(
+                        _post_process_payload_trajectory,
+                        index,
+                        trajectory,
+                        revalidate,
+                    )
                     for index, trajectory in enumerate(trajectories)
                 ]
                 for future in as_completed(futures):
@@ -820,6 +880,7 @@ def post_process_dataset(
     output_dataset_path: Path | None = None,
     disable_progress: bool = False,
     workers: int = 1,
+    revalidate: bool = False,
 ) -> int:
     """Post-processes one dataset into a copied output JSON and returns the count."""
 
@@ -836,6 +897,7 @@ def post_process_dataset(
             output_dataset_path=output_dataset_path,
             disable_progress=disable_progress,
             workers=workers,
+            revalidate=revalidate,
         )
     return _post_process_payload_dataset(
         dataset_path,
@@ -843,4 +905,5 @@ def post_process_dataset(
         output_dataset_path=output_dataset_path,
         disable_progress=disable_progress,
         workers=workers,
+        revalidate=revalidate,
     )

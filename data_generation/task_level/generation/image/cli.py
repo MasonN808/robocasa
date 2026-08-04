@@ -67,6 +67,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "data/pre_image/<run_timestamp>/.../summary.json."
         ),
     )
+    parser.add_argument(
+        "--revalidate",
+        action="store_true",
+        help=(
+            "Replay each post-processed tick trajectory with the concurrent "
+            "validator and record the real verdict, instead of the placeholder "
+            "that says the record still needs revalidating. Tick records only; "
+            "flat records keep the placeholder."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.workers <= 0:
         parser.error("--workers must be greater than 0.")
@@ -86,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dataset_path=output_dataset_path,
             disable_progress=args.disable_progress,
             workers=args.workers,
+            revalidate=args.revalidate,
         )
     except Exception as exc:
         print(f"Failed to post-process trajectories: {exc}", file=sys.stderr)
