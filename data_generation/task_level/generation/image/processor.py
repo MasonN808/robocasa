@@ -500,6 +500,7 @@ def _revalidate_tick_trajectory(trajectory: dict[str, Any]) -> None:
     from copy import deepcopy
 
     from data_generation.task_level.tasks.shared.concurrent_fsm import (
+        LOCK_STEP,
         ConcurrentTaskValidator,
     )
     from data_generation.task_level.tasks.specs import load_task_spec
@@ -507,7 +508,7 @@ def _revalidate_tick_trajectory(trajectory: dict[str, Any]) -> None:
 
     inner = SpecDrivenTaskValidator(load_task_spec(trajectory["composite_task"]))
     inner.initial_state = deepcopy(trajectory["initial_state"])
-    validator = ConcurrentTaskValidator(inner)
+    validator = ConcurrentTaskValidator(inner, models=(LOCK_STEP,))
     candidate = {"agents": trajectory["agents"], "steps": trajectory["steps"]}
     signature = stable_json_sha256(_normalized_signature_payload(trajectory))
     try:

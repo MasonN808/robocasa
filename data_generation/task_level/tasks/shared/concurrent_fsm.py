@@ -145,10 +145,24 @@ class ConcurrentTaskValidator:
     is applied -- and that turns out to be where all the bugs were.
     """
 
-    def __init__(self, validator: Any) -> None:
+    def __init__(
+        self,
+        validator: Any,
+        *,
+        models: Sequence[str] = DURATION_MODELS,
+    ) -> None:
         self.validator = validator
         self.composite_task = validator.composite_task
         self.agent_ids = tuple(validator.agent_ids)
+        # Which duration regimes `validate` insists on by default. Tick
+        # generation passes (LOCK_STEP,) alone. The model writes a grid of
+        # equal instants; judging that grid under per-tool durations makes
+        # correctness depend on wall-clock costs it was never told about. A
+        # waiter whose own route is expensive arrives at its wait late, the
+        # holder's cheap messages reach the release early, and a release that
+        # fires with nobody blocked is discarded. 7 of the 9 deadlocks in job
+        # 266947 were exactly this, and every one was clean under LOCK_STEP.
+        self.models = tuple(models)
 
     # -- replay -----------------------------------------------------------
 
@@ -677,15 +691,17 @@ class ConcurrentTaskValidator:
         self,
         candidate: dict[str, Any],
         *,
-        models: Sequence[str] = DURATION_MODELS,
+        models: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """Validates under every duration model; returns the FSM result shape.
+        """Validates under the configured duration models; FSM result shape.
 
-        A plan that survives only one timing regime survived by luck, so all of
-        them have to agree. The reported final state comes from LOCK_STEP, the
-        regime with exactly one schedule.
+        Where more than one regime is checked, all of them have to agree: a
+        plan that survives only one survived by luck. Tick generation
+        deliberately configures LOCK_STEP alone -- see `__init__`. The reported
+        final state comes from LOCK_STEP, the regime with exactly one schedule.
         """
 
+        models = tuple(models) if models is not None else self.models
         replays = {model: self.replay(candidate, model=model) for model in models}
         primary = replays.get(LOCK_STEP) or next(iter(replays.values()))
 

@@ -42,6 +42,7 @@ from data_generation.task_level.tasks import (
     supported_task_names,
 )
 from data_generation.task_level.tasks.shared.concurrent_fsm import (
+    LOCK_STEP,
     ConcurrentTaskValidator,
 )
 from data_generation.utils import round_cost, stable_json_sha256
@@ -617,7 +618,9 @@ def _validate_candidate(
         # deadlocks on the first tick validated clean. Raising here is what
         # makes the generation loop retry, which is the only way the data ends
         # up correct while the model is still allowed to be wrong.
-        validator = ConcurrentTaskValidator(validator)
+        # LOCK_STEP only: the model writes a grid of equal instants, so that
+        # is the regime its plan means. See ConcurrentTaskValidator.__init__.
+        validator = ConcurrentTaskValidator(validator, models=(LOCK_STEP,))
     elif derive_coordination and isinstance(initial_state, dict):
         candidate = _derive_coordination(candidate, initial_state)
     try:
