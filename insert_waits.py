@@ -76,6 +76,12 @@ def _contested(step, fixtures, objects):
 
     if step.get("tool") in SOCIAL_TOOL_NAMES or step.get("tool") in OBSERVATION_TOOL_NAMES:
         return []
+    # Yielding a fixture is the opposite of claiming it. Counting give_space
+    # here made the agent that stepped ASIDE the holder, so the next agent to
+    # use the fixture was told to wait for someone who had already left --
+    # a wait whose release had therefore always already fired.
+    if step.get("tool") in GIVE_SPACE_TOOL_NAMES:
+        return []
     args = step.get("args") or {}
     out = []
     for name in DEPENDENCY_ARG_NAMES:
