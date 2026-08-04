@@ -39,6 +39,13 @@ EXTRA=()
 
 case "$PROBE" in
   think)    EXTRA=(--thinking-level medium) ;;
+  low)      EXTRA=(--thinking-level low) ;;
+  # Decision probe for any future big run: `low` was 11.6x cheaper and 2x
+  # faster on the two EASY tasks but lost 2/10 runs on PrepareCoffee to
+  # deadlock. These four are the hard tail (17/20 at uncapped, job 266947), so
+  # this measures whether yield collapses where it already hurts.
+  lowhard)  EXTRA=(--thinking-level low); RUNS=5
+            TASKS="HotDogSetup PrepareSausageCheese PrepareCheeseStation PlateStoreDinner" ;;
   verbal)   EXTRA=(--sampling verbalized --verbalized-k 4); RUNS=3 ;;  # k=4 needs the strategy too
   verbal2)  EXTRA=(--sampling verbalized --verbalized-k 2); RUNS=5 ;;  # k=4 broke PrepareCoffee:
                                                                       # Vertex 400, response count
