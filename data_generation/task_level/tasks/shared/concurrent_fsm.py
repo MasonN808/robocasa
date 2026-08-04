@@ -181,6 +181,10 @@ class ConcurrentTaskValidator:
         fired: dict[tuple[str, str], list[float]] = {}
         seen_conflicts: set[tuple[str, ...]] = set()
         flagged: set[int] = set()
+        # When each wait first blocked, and when each resource was actually
+        # let go of, so the two orderings can be checked after the run.
+        wait_started: dict[int, float] = {}
+        departures: dict[tuple[str, str], list[float]] = {}
         # Last non-observation step each agent took, so a release can be checked
         # against what its sender did immediately before speaking.
         previous: dict[str, dict[str, Any] | None] = {a: None for a in streams}
@@ -210,6 +214,8 @@ class ConcurrentTaskValidator:
                     continue
                 args = step.get("args") or {}
                 key = (args.get("from"), str(args.get("about")))
+                if agent_id not in waiting_since:
+                    wait_started[streams[agent_id][cursor[agent_id]]] = ready_at[agent_id]
                 since = waiting_since.setdefault(agent_id, ready_at[agent_id])
                 events = fired.get(key, ())
                 if any(at >= since - _EPS for at in events):
@@ -276,6 +282,9 @@ class ConcurrentTaskValidator:
                     if tool not in OBSERVATION_TOOL_NAMES | SOCIAL_TOOL_NAMES:
                         result.first_action = True
 
+                if tool in WAIT_TOOL_NAMES:
+                    self._check_ask(step, agent_id, previous[agent_id], result)
+
                 if tool == "communicate":
                     for released in _released_ids(step):
                         self._check_release(
@@ -283,6 +292,9 @@ class ConcurrentTaskValidator:
                             previous[agent_id], clock, result,
                         )
                         fired.setdefault((agent_id, released), []).append(clock)
+
+                for resource in self._let_go_of(step, previous[agent_id]):
+                    departures.setdefault((agent_id, resource), []).append(clock)
 
                 if tool not in OBSERVATION_TOOL_NAMES:
                     previous[agent_id] = step
@@ -309,6 +321,7 @@ class ConcurrentTaskValidator:
                         f"t={result.goal_at:g}."
                     )
 
+        self._check_wait_ordering(steps, wait_started, departures, result)
         result.makespan = max((event.end for event in result.events), default=0.0)
         busy = {agent_id: 0.0 for agent_id in streams}
         for event in result.events:
@@ -420,6 +433,86 @@ class ConcurrentTaskValidator:
                 f"  t={clock:g}: {detail} -- both reach for {resource!r} at the "
                 f"same instant. One of them must wait_for_signal on it and the "
                 f"other must release it."
+            )
+
+    def _let_go_of(
+        self, step: dict[str, Any], previous: dict[str, Any] | None
+    ) -> list[str]:
+        """Resources this call actually hands back: a fixture left, a thing put down."""
+
+        args = step.get("args") or {}
+        if step["tool"] in GIVE_SPACE_TOOL_NAMES:
+            return [str(args.get("fixture_id"))]
+        if step["tool"] in RELEASE_TOOL_NAMES:
+            objects = set(self.validator.initial_state.get("objects") or {})
+            return [
+                str(value)
+                for value in args.values()
+                if isinstance(value, str) and value in objects
+            ]
+        return []
+
+    def _check_ask(
+        self,
+        step: dict[str, Any],
+        agent_id: str,
+        previous: dict[str, Any] | None,
+        result: Replay,
+    ) -> None:
+        """A wait is announced before it is taken.
+
+        The partner cannot see that an agent has stopped -- a blocked agent is
+        simply absent from the plan. The ask is what tells it a handover is
+        owed, so the wait goes IMMEDIATELY after it: any call in between is the
+        agent doing other work while claiming it cannot proceed.
+        """
+
+        holder = (step.get("args") or {}).get("from")
+        prefix = f"  step {step['step']}: {agent_id} waits on"
+        about = str((step.get("args") or {}).get("about"))
+        if previous is None or previous["tool"] != "communicate":
+            was = "nothing" if previous is None else previous["tool"]
+            result.protocol.append(
+                f"{prefix} {about!r} but its previous call was {was}, not the "
+                f"request. Ask {holder} for it on the tick before you block, "
+                f"so the other agent knows a handover is owed."
+            )
+            return
+        if (previous.get("args") or {}).get("to") != holder:
+            result.protocol.append(
+                f"{prefix} {about!r} on {holder}, but the message right before "
+                f"it was addressed to "
+                f"{(previous.get('args') or {}).get('to')!r}. Ask the agent you "
+                f"are about to wait on."
+            )
+
+    def _check_wait_ordering(
+        self,
+        steps: Sequence[dict[str, Any]],
+        wait_started: dict[int, float],
+        departures: dict[tuple[str, str], list[float]],
+        result: Replay,
+    ) -> None:
+        """The holder must still be holding it when the waiter blocks.
+
+        If the resource was let go BEFORE the wait began, there was nothing to
+        wait for: the waiter should simply have gone. Such a wait either costs a
+        turn for nothing or -- since a release only wakes an agent already
+        waiting -- hangs on a message that has come and gone.
+        """
+
+        for index, since in wait_started.items():
+            args = steps[index].get("args") or {}
+            holder, about = args.get("from"), str(args.get("about"))
+            left = departures.get((holder, about))
+            if not left or any(at > since + _EPS for at in left):
+                continue
+            result.protocol.append(
+                f"  step {steps[index]['step']}: "
+                f"{steps[index]['agent']} starts waiting on {about!r} at "
+                f"t={since:g}, but {holder} had already let it go at "
+                f"t={max(left):g}. Nothing was ever contested -- either drop "
+                f"the wait, or block before {holder} leaves."
             )
 
     def _check_release(

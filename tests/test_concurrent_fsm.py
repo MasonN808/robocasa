@@ -319,13 +319,16 @@ class PromptedProtocolTests(unittest.TestCase):
     """
 
     def _handover(self):
-        # ask -> block -> leave -> report -> move in.
+        # ASK, then BLOCK on the very next tick; the holder keeps working for
+        # as long as it likes, and only then LEAVES and REPORTS back to back.
         return plan(
             *OPEN,
-            step("agent_0", "navigate_to_fixture", fixture_id="cab"),
             step("agent_1", "communicate", to="agent_0",
                  message="tell me when the cabinet is free"),
             step("agent_1", "wait_for_signal", **{"from": "agent_0", "about": "cab"}),
+            step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+            step("agent_0", "communicate", to="agent_1", message="still working here"),
+            step("agent_0", "communicate", to="agent_1", message="nearly done"),
             step("agent_0", "give_space", fixture_id="cab"),
             step("agent_0", "communicate", to="agent_1", message="cab is yours now",
                  releases=["cab"]),
@@ -357,6 +360,38 @@ class PromptedProtocolTests(unittest.TestCase):
         self.assertIn("give_space", text, "release is coupled to departure")
         self.assertIn("on a LATER tick", text)
         self.assertIn("IMMEDIATELY", text, "no gap between departure and report")
+        self.assertIn("very next tick", text, "no gap between ask and wait")
+
+    def test_the_wait_must_immediately_follow_the_ask(self):
+        steps = list(self._handover()["steps"])
+        steps.insert(3, step("agent_1", "get_image"))  # inert, must be allowed
+        self.assertEqual(build().replay(plan(*steps), model=LOCK_STEP).protocol, [])
+
+        steps[3] = step("agent_1", "communicate", to="agent_0", message="one more thing")
+        run = build().replay(plan(*steps), model=LOCK_STEP)
+        self.assertEqual(run.protocol, [], "an extra ask is still an ask")
+
+        steps[3] = step("agent_1", "navigate_to_fixture", fixture_id="sink")
+        run = build().replay(plan(*steps), model=LOCK_STEP)
+        self.assertTrue(any("not the request" in p for p in run.protocol))
+
+    def test_the_holder_must_still_hold_it_when_the_waiter_blocks(self):
+        # give_space moved before the wait: nothing was ever contested.
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "give_space", fixture_id="cab"),
+                 step("agent_1", "communicate", to="agent_0", message="one moment"),
+                 step("agent_1", "communicate", to="agent_0",
+                      message="tell me when the cabinet is free"),
+                 step("agent_1", "wait_for_signal", **{"from": "agent_0",
+                                                       "about": "cab"}),
+                 step("agent_0", "communicate", to="agent_1", message="yours",
+                      releases=["cab"]),
+                 step("agent_1", "navigate_to_fixture", fixture_id="cab")),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(any("had already let it go" in p for p in run.protocol))
 
     def test_dropping_the_release_from_the_prompted_shape_deadlocks(self):
         # The failure mode the rules exist to prevent, held fixed.

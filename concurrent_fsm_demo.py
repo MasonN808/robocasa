@@ -68,13 +68,17 @@ SCENARIOS: list[tuple[str, str, list[dict]]] = [
     ),
     (
         "4. A handover that works -- the four parts",
-        "1 ASK, 2 BLOCK, 3a LEAVE, 3b REPORT, 4 MOVE IN. agent_1 reaches its wait\n"
-        "at instant 2 and is absent from the plan until the release at 3 wakes it.\n"
-        "3a and 3b are adjacent: the release is the REPORT of the departure.",
+        "1 ASK, 2 BLOCK on the very next tick, then agent_0 works as long as it\n"
+        "likes (agent_1's column is empty throughout -- that is what blocked looks\n"
+        "like), 3a LEAVE, 3b REPORT on the very next tick, 4 MOVE IN.\n"
+        "Two adjacencies (ask->block, leave->report) and one ordering (the waiter\n"
+        "is blocked BEFORE the holder lets go). The gap in the middle is free.",
         [*OPEN,
-         s(A0, "navigate_to_fixture", fixture_id="cab"),
          talk(A1, "tell me when the cabinet is free"),
          s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
+         s(A0, "navigate_to_fixture", fixture_id="cab"),
+         talk(A0, "still working here"),
+         talk(A0, "nearly done"),
          s(A0, "give_space", fixture_id="cab"),
          talk(A0, "cab is yours now", releases=["cab"]),
          s(A1, "navigate_to_fixture", fixture_id="cab")],
@@ -169,8 +173,23 @@ SCENARIOS: list[tuple[str, str, list[dict]]] = [
          talk(A0, "cab is free", releases=["cab"]),
          talk(A1, "one moment"),
          talk(A1, "nearly ready"),
-         talk(A1, "ok now"),
+         talk(A1, "tell me when the cabinet is free"),
          s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
+         s(A1, "navigate_to_fixture", fixture_id="cab")],
+    ),
+    (
+        "12. Working between the ask and the wait",
+        "agent_1 asks, then goes off and does something else before blocking. If\n"
+        "it had work available it was never stuck, and the ask told agent_0 a\n"
+        "handover was owed one tick too early. Ask and block are adjacent.",
+        [*OPEN,
+         talk(A1, "tell me when the cabinet is free"),
+         s(A1, "navigate_to_fixture", fixture_id="sink"),
+         s(A1, "wait_for_signal", **{"from": A0, "about": "cab"}),
+         s(A0, "navigate_to_fixture", fixture_id="cab"),
+         talk(A0, "nearly done"),
+         s(A0, "give_space", fixture_id="cab"),
+         talk(A0, "cab is yours now", releases=["cab"]),
          s(A1, "navigate_to_fixture", fixture_id="cab")],
     ),
 ]
