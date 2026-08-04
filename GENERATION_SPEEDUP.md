@@ -74,13 +74,49 @@ workers, `base` strategy, thinking `null` -> 20 trajectories, **$1.3888**,
 
 ## Results
 
-| probe | traj | valid | cost | reason tok/traj | cost/valid | wall |
-|---|---|---|---|---|---|---|
-| baseline, uncapped | 20 | 20 | $1.3888 | 21,335 | $0.0694 | 7:24 |
-| `--thinking-level medium` | 20 | 20 | $0.9999 | 15,068 | $0.0500 | 5:25 |
+All probes: PrepareCoffee + AddSugarCubes, validity 100% in every cell.
 
-`medium` is a clear win: **-28% cost, -27% wall, validity unchanged at 20/20**.
-The extra thinking the uncapped run did was not buying correctness.
+| probe | traj | $/traj | reason/traj | wall | **s/traj** |
+|---|---|---|---|---|---|
+| baseline (uncapped, `base`) | 20 | $0.0694 | 21,335 | 7:24 | 22.2 |
+| **`--thinking-level medium`** | 20 | **$0.0500** | 15,068 | **5:25** | **16.2** |
+| `verbalized-k 4` | 12 | $0.0268 | 7,240 | 8:22 | 41.8 |
+| `verbalized-k 2` | 18 | $0.0318 | 8,953 | 15:57 | 53.1 |
+| medium + k=2 + 12 workers | 18 | $0.0354 | 10,382 | 12:08 | 40.4 |
+
+### Recommendation: `--thinking-level medium`, and nothing else
+
+**-28% cost, -27% wall, validity untouched.** The uncapped run was spending
+~6k reasoning tokens per trajectory that bought no correctness.
+
+**Verbalized sampling is a cost lever that COSTS latency, and it does not
+combine well.** It halves $/traj but doubles-to-triples s/traj, because each
+call returns k trajectories in one much longer request and there are k times
+fewer calls to overlap. Raising workers to 12 recovered only part of it (53.1
+-> 40.4 s/traj, still worse than doing nothing). Combining it with `medium` was
+no cheaper than k=2 alone.
+
+It also brings failure modes the base path does not have:
+- **k=4 is unusable on PrepareCoffee**: Vertex `400 INVALID_ARGUMENT`, response
+  count exceeds request limits. The tick response schema is already large and
+  verbalized multiplies it, so this fails per-task unpredictably across 53.
+- `UnexpectedStepIndexSemanticValidationError: step 0 does not match expected
+  index 1` appeared 5x -- candidate step numbering looks mishandled on the
+  verbalized+tick path. Unresolved.
+- 1 of 5 runs failed even after retries, in both verbalized probes.
+- It surfaced a crash that discarded a whole run's payload (fixed: type-stable
+  `_error_event_key`).
+
+**Caveat on precision:** 18-20 trajectories per cell, so a few percent of $/traj
+is noise. The latency differences are large and consistent; the small cost
+differences between verbalized variants are not meaningful.
+
+### Actual scale-out cost, for future budgeting
+
+Job 267262 (53 tasks x 30, uncapped, base): **1543 trajectories, 100% valid,
+$124.41**, 3.0% of runs exhausted retries. A pre-hoc estimate of $50-70 from
+pilot per-trajectory cost was wrong because it ignored retry multiplication.
+At `medium` the same corpus should land near $90.
 
 Report for each probe: wall clock, total cost, cost/valid trajectory, valid
 fraction, and retries used. **Validity is the guard** — a config that halves
