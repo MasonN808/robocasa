@@ -21,6 +21,22 @@ from data_generation.task_level.tasks.shared.concurrent_fsm import (
 )
 
 
+SPECS = Path(
+    "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration"
+    "/data_generation/task_level/tasks/specs/verified"
+)
+
+
+def verified_tasks() -> set[str]:
+    """Composite-task names that have a spec in specs/verified.
+
+    Specs elsewhere in specs/ are drafts and drift from the data; auditing
+    against them measures the draft, not the trajectories.
+    """
+
+    return {path.stem for path in SPECS.glob("*.json")}
+
+
 def classify(run) -> str:
     if run.step_error:
         return "step_error"
@@ -37,6 +53,7 @@ def classify(run) -> str:
 
 def main() -> None:
     paths = sorted(glob.glob(rr.ROOT + "/*/traj_*/original_trajectory.json"))
+    verified = verified_tasks()
     tally: Counter[str] = Counter()
     by_task: dict[str, Counter[str]] = defaultdict(Counter)
     both_clean = 0
@@ -44,6 +61,9 @@ def main() -> None:
     for path in paths:
         task = path.split("/")[-3]
         record = json.loads(Path(path).read_text())
+        if record["composite_task"].lower() not in verified:
+            tally["skipped:not_verified"] += 1
+            continue
         tally["total"] += 1
         try:
             validator, candidate = rr.build(record, insert=True)

@@ -585,7 +585,13 @@ class ConcurrentTaskValidator:
             return
 
         # 3. Released, but not as the report of the departure.
-        if previous is None:
+        #
+        # Only things the agent took POSSESSION of need a departure to report:
+        # a fixture it stood at, an object it held. A resource merely used --
+        # picking a drumstick out of a pan, say -- is handed back the moment
+        # that use ends, because there is nothing to put down or step off.
+        # Demanding a give_space there flagged 31 correct handovers.
+        if previous is None or released in self._named_resources(previous):
             return
         args = previous.get("args") or {}
         departed = (
