@@ -1703,6 +1703,13 @@ def run_trajectory_partial(
                 a.ready_at for a in agents.values() if a.waiting_for is None
             ] or [a.ready_at for a in agents.values()]
             clock = min(runnable_times)
+            # A wait is released by a message, so the agent resumes at the
+            # moment of release. Leaving its stale ready_at -- the time the
+            # wait would have expired -- let it act "in the past", inverting
+            # sim_time against the real execution order.
+            for a in agents.values():
+                if a.waiting_for is None and a.ready_at < clock:
+                    a.ready_at = clock
             ready = sorted(
                 (a for a in agents.values()
                  if a.ready_at <= clock and a.ready_at != float("inf")
