@@ -15,6 +15,7 @@ from .constants import (
     OPEN_PART_TOOL_NAMES,
     RELEASE_TOOL_NAMES,
 )
+from .partitions import is_degenerate, partition_rules
 from .types import TaskInstance, TaskPromptBuilder
 
 
@@ -358,6 +359,13 @@ def make_task_prompt_builder(
             if task_instance is not None and task_instance.extra_execution_rules
             else tuple(extra_execution_rules or ())
         )
+        work_partition = (
+            task_instance.work_partition if task_instance is not None else None
+        )
+        prompt_extra_execution_rules = prompt_extra_execution_rules + partition_rules(
+            work_partition,
+            agent_ids,
+        )
         allowed_tools_text = json.dumps(
             prompt_allowed_tool_specs,
             indent=2,
@@ -376,6 +384,12 @@ def make_task_prompt_builder(
             prompt_initial_state,
             indent=2,
             sort_keys=True,
+        )
+        cooperation_rule_text = (
+            ""
+            if is_degenerate(work_partition)
+            else "- Both agents must cooperatively complete the task, a single "
+                 "agent should not do all subtasks.\n"
         )
         initial_position_text = _format_initial_agent_positions(
             prompt_initial_state,
@@ -400,8 +414,7 @@ Important rules:
 - In args, use the exact IDs shown in the allowed tools block for this task.
 - Keep args as a flat object that contains only that step's tool inputs.
 - If an agent is not performing an action, be sure the agent communicates what the agent is waiting for so that no agent is doing nothing.
-- Both agents must cooperatively complete the task, a single agent should not do all subtasks.
-- Use only the allowed tools for this task.
+{cooperation_rule_text}- Use only the allowed tools for this task.
 - Every step must be executable and valid for the current task state.
 - Track each agent’s current fixture after every navigation and verify that each non-navigation action matches that current fixture.
 - Number steps consecutively starting at 0 with no gaps.

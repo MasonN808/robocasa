@@ -45,6 +45,7 @@ class TaskInstance:
     allowed_tool_specs: dict[str, dict[str, Any]] | None = None
     task_goal: str | None = None
     extra_execution_rules: tuple[str, ...] = ()
+    work_partition: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

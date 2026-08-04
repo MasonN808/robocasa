@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from data_generation.task_level.subatomic_tool_specs import build_allowed_tool_specs
@@ -14,6 +15,7 @@ from data_generation.task_level.tasks.shared.instances import (
     build_randomized_fixture_task_instance,
     make_symbolic_trajectory_record_builder,
 )
+from data_generation.task_level.tasks.shared.partitions import select_partition
 from data_generation.task_level.tasks.shared.prompting import make_task_prompt_builder
 from data_generation.task_level.tasks.shared.schema import build_task_response_schema
 from data_generation.task_level.tasks.shared.state import TaskRuntimeState
@@ -466,6 +468,7 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
         task_preconditions=task_spec.task_preconditions,
         task_effects=task_spec.task_effects,
         extra_execution_rules=task_spec.extra_execution_rules,
+        agent_ids=task_spec.agent_ids,
     )
     build_trajectory_record = make_symbolic_trajectory_record_builder(
         composite_task=task_spec.composite_task,
@@ -473,13 +476,23 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
     )
 
     def _build_task_instance(run_index: int, runtime_config: Any | None = None) -> TaskInstance:
-        return build_randomized_fixture_task_instance(
+        instance = build_randomized_fixture_task_instance(
             composite_task=task_spec.composite_task,
             agent_ids=task_spec.agent_ids,
             initial_state=task_spec.initial_state,
             allowed_tool_specs=allowed_tool_specs,
             run_index=run_index,
             runtime_config=runtime_config,
+        )
+        # The partition rides on the instance so a retry, which reuses the
+        # instance, retries the same division of work rather than drifting to
+        # whichever split the model finds easiest.
+        return replace(
+            instance,
+            work_partition=select_partition(
+                (task_spec.work_partitions or {}).get("partitions"),
+                run_index,
+            ),
         )
 
     def _validator_factory(task_instance: TaskInstance | None) -> SpecDrivenTaskValidator:
