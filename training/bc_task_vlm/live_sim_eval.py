@@ -1695,7 +1695,14 @@ def run_trajectory_partial(
                 for a in agents.values():
                     a.waiting_for = None
                     a.consecutive_waits = 0
-            clock = min(a.ready_at for a in agents.values())
+            # A blocked agent must not drive the clock. Its ready_at is stale
+            # -- the moment its wait WOULD have expired -- so including it here
+            # pulled the clock back every iteration and the loop never
+            # advanced past a partner that was merely busy.
+            runnable_times = [
+                a.ready_at for a in agents.values() if a.waiting_for is None
+            ] or [a.ready_at for a in agents.values()]
+            clock = min(runnable_times)
             ready = sorted(
                 (a for a in agents.values()
                  if a.ready_at <= clock and a.ready_at != float("inf")
