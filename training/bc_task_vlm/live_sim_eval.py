@@ -611,6 +611,15 @@ class FsmMirror:
         )
         if initial_state:
             self.validator.initial_state = initial_state
+        # Per-step legality now comes from the concurrent validator rather than
+        # the linear one. It encodes the semantics the executor actually has:
+        # observation is inert and never gated, a wait touches nothing, and
+        # coordination is judged on a clock rather than on written order.
+        from data_generation.task_level.tasks.shared.concurrent_fsm import (
+            ConcurrentTaskValidator,
+        )
+
+        self._concurrent = ConcurrentTaskValidator(self.validator)
         agents = self.validator._normalize_agents(trajectory.get("agents"))
         self.runtime_state = self.validator._build_runtime_state(agents)
         self.goal_satisfied = self.validator.is_goal_state_satisfied(
@@ -644,23 +653,18 @@ class FsmMirror:
         validator = self.validator
         state = self.runtime_state
         try:
-            if step["tool"] == "communicate":
-                validator._validate_communicate_step(step)
-                state.communicated_agents.add(step["agent"])
-                validator.apply_task_effects(step, state)
-            else:
-                if state.communicated_agents != set(validator.agent_ids):
-                    return False, (
-                        "Both agents must communicate before the first task "
-                        "action."
-                    )
-                if step["tool"] not in validator.allowed_tool_specs:
-                    return False, f"Tool {step['tool']} is not allowed here."
-                validator._validate_task_local_symbolic_constraints(step)
-                validator._validate_generic_transition(step, state)
-                validator.validate_task_preconditions(step, state)
-                validator._apply_generic_effects(step, state)
-                validator.apply_task_effects(step, state)
+            if step["tool"] == WAIT_TOOL_NAME:
+                # A wait is a scheduling primitive, not a world action: it
+                # touches nothing, so no transition rule applies to it. The
+                # linear validator disagrees -- its held-object rule exempts
+                # navigation, release, observation and give_space but not
+                # waiting, so an agent holding a mug is forbidden to wait,
+                # which is nonsense. Oracle replay of 18 tick trajectories hit
+                # that on 3 of 282 steps, every one with sim_success=True.
+                # The parallel path already intercepts waits before they reach
+                # the mirror; this is the sequential path doing the same.
+                return True, None
+            self._concurrent._apply(step, state)
             self.goal_satisfied = validator.is_goal_state_satisfied(state)
             return True, None
         except Exception as exc:  # validator raises typed validation errors
