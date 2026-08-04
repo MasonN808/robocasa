@@ -8,10 +8,15 @@ from pathlib import Path
 import shutil
 from typing import Any, Sequence
 
-from data_generation.task_level.tasks.shared.constants import NAVIGATION_TOOL_NAMES
+from data_generation.task_level.tasks.shared.constants import (
+    NAVIGATION_TOOL_NAMES,
+    WAIT_TOOL_NAMES,
+)
 from data_generation.utils import stable_json_sha256, write_json_output
 from tqdm import tqdm
 
+TICK_ROWS_KEY = "tick_rows"
+TICK_KEY = "tick"
 GET_IMAGE_TOOL_NAME = "get_image"
 LEGACY_ENV_IMAGE_TOOL_NAME = "get_env_image"
 LEGACY_AGENT_IMAGE_TOOL_NAME = "get_agent_image"
@@ -307,6 +312,109 @@ def rebuild_steps_with_image_observations(
     return rebuilt_steps
 
 
+def _tick_row_agent_ids(rows: Sequence[dict[str, Any]]) -> tuple[str, ...]:
+    """Collects the agents appearing in tick rows, in first-seen order."""
+
+    agent_ids: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in row:
+            if key != TICK_KEY:
+                _append_unique_agent_id(agent_ids, seen, key)
+    return tuple(agent_ids)
+
+
+def rebuild_tick_rows_with_image_observations(
+    rows: Sequence[dict[str, Any]],
+    *,
+    agent_ids: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Rebuilds tick rows with observations, preserving the coordination schedule.
+
+    The flat injector pads each agent's stream in proportion to its own action
+    count, and `communicate` is never padded. Two agents therefore accumulate
+    different amounts of padding and drift apart: a release can end up firing
+    before its waiter has blocked, which is a deadlock the model never wrote.
+    Dilating the grid instead -- one source tick becomes an observe row, the
+    original row, and an observe-again row, with EVERY agent moving together --
+    leaves simultaneity and every ask/wait/release ordering exactly as written.
+
+    Waits are not bracketed: a blocked agent is not looking at anything, and
+    the wait must stay immediately after its ask for `_check_ask` to pass.
+    """
+
+    dilated: list[dict[str, dict[str, Any]]] = [
+        {agent_id: _build_initial_observation_step(agent_id) for agent_id in agent_ids}
+    ]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        actions: dict[str, dict[str, Any]] = {}
+        for agent_id in agent_ids:
+            action = row.get(agent_id)
+            if not isinstance(action, dict) or not action.get("tool"):
+                continue
+            if action["tool"] in LEGACY_INSERTED_OBSERVATION_TOOL_NAMES:
+                # Keeps reruns idempotent, exactly as the flat path does.
+                continue
+            actions[agent_id] = _copy_step_without_generated_fields(action)
+        if not actions:
+            continue
+
+        bracketed = {
+            agent_id: action["tool"]
+            for agent_id, action in actions.items()
+            if action["tool"] != COMMUNICATE_TOOL_NAME
+            and action["tool"] not in WAIT_TOOL_NAMES
+        }
+        # An empty observe row is dropped rather than kept as a blank instant.
+        # That shortens the schedule for every agent by the same tick, so the
+        # alignment the dilation exists to protect is unaffected.
+        for timing in ("before", None, "after"):
+            if timing is None:
+                dilated.append(actions)
+                continue
+            if not bracketed:
+                continue
+            dilated.append(
+                {
+                    agent_id: _build_action_observation_step(
+                        agent_id,
+                        tool_name=tool_name,
+                        timing=timing,
+                    )
+                    for agent_id, tool_name in bracketed.items()
+                }
+            )
+
+    return [
+        {TICK_KEY: tick_index, **{a: dict(act) for a, act in actions.items()}}
+        for tick_index, actions in enumerate(dilated)
+    ]
+
+
+def _attach_tick_step_images(
+    steps: list[dict[str, Any]],
+    *,
+    trajectory_id: str,
+) -> None:
+    """Fills in image paths on the flattened tick steps, in place."""
+
+    for step in steps:
+        step.pop("image_path", None)
+        if step["tool"] != GET_IMAGE_TOOL_NAME:
+            step.pop("image_paths", None)
+            continue
+        step["image_paths"] = _build_step_image_paths(
+            trajectory_id,
+            step["step"],
+            step["agent"],
+            _resolve_observation_step_view_names(step),
+        )
+
+
 def _append_unique_agent_id(
     agent_ids: list[str],
     seen_agent_ids: set[str],
@@ -391,11 +499,36 @@ def post_process_trajectory(
         raise ValueError("Trajectory records must contain a non-empty trajectory_id.")
 
     updated_trajectory = dict(trajectory)
-    updated_trajectory["steps"] = rebuild_steps_with_image_observations(
-        updated_trajectory["steps"],
-        initial_image_agent_ids=_resolve_initial_image_agent_ids(updated_trajectory),
-        trajectory_id=trajectory_id,
-    )
+    tick_rows = updated_trajectory.get(TICK_ROWS_KEY)
+    if isinstance(tick_rows, list):
+        # Tick output carries its own schedule, and the flat injector would
+        # scramble it. Rebuild the rows and re-derive the flat list from them so
+        # the two stay the same plan.
+        from tick_format import to_steps
+
+        agent_ids = _resolve_initial_image_agent_ids(updated_trajectory)
+        row_agent_ids = _tick_row_agent_ids(tick_rows)
+        ordered_agent_ids = tuple(agent_ids) + tuple(
+            agent_id for agent_id in row_agent_ids if agent_id not in set(agent_ids)
+        )
+        rebuilt_rows = rebuild_tick_rows_with_image_observations(
+            tick_rows,
+            agent_ids=ordered_agent_ids,
+        )
+        updated_trajectory[TICK_ROWS_KEY] = rebuilt_rows
+        updated_trajectory["steps"] = to_steps(rebuilt_rows, ordered_agent_ids)
+        _attach_tick_step_images(
+            updated_trajectory["steps"],
+            trajectory_id=trajectory_id,
+        )
+    else:
+        updated_trajectory["steps"] = rebuild_steps_with_image_observations(
+            updated_trajectory["steps"],
+            initial_image_agent_ids=_resolve_initial_image_agent_ids(
+                updated_trajectory
+            ),
+            trajectory_id=trajectory_id,
+        )
     _replace_validation_with_post_process_status(updated_trajectory)
     return updated_trajectory
 

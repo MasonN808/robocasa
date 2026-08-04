@@ -634,6 +634,12 @@ def _validate_candidate(
             )
         validation = dict(validator.validate(candidate))
         normalized_candidate = validation.pop("normalized_candidate", candidate)
+        if wrote_ticks and "tick_rows" not in normalized_candidate:
+            # Normalization rebuilds the record from a fixed field list. The
+            # rows have to survive it: they are the schedule, and the flat
+            # steps cannot be turned back into them.
+            normalized_candidate = dict(normalized_candidate)
+            normalized_candidate["tick_rows"] = candidate["tick_rows"]
         return validation, normalized_candidate
     except TrajectoryValidationError as exc:
         if enforce_validation:
@@ -1196,6 +1202,14 @@ def _build_trajectory_records_from_sampled_candidates(
             generation_usage=generation_usage,
             task_instance=task_instance,
         )
+        # `build_trajectory_record` copies a fixed field list, so the rows the
+        # model actually wrote are dropped unless carried over here. They are
+        # not recoverable from the flat steps -- which agent was idle on which
+        # tick is exactly what flattening throws away -- and the image pass
+        # needs them to keep the coordination schedule intact.
+        tick_rows = normalized_candidate.get("tick_rows")
+        if isinstance(tick_rows, list):
+            trajectory_record["tick_rows"] = tick_rows
         trajectory_record.update(
             build_saved_trajectory_metadata(
                 runtime_config=runtime_config,
