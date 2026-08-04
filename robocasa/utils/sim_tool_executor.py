@@ -6372,7 +6372,14 @@ class SimToolExecutor(
         to: str,
         message: str,
         robot_idx: int = 0,
+        releases: list[str] | None = None,
     ) -> ToolResult:
+        # `releases` is symbolic bookkeeping: it names the resource this message
+        # hands over, which is what wakes a partner blocked in wait_for_signal.
+        # A message moves nothing in MuJoCo, so there is nothing to execute --
+        # but the argument has to be ACCEPTED, or every tick trajectory dies at
+        # its first handover with "unexpected keyword argument 'releases'".
+        # Recorded in the result so the executed trace still shows the handover.
         return ToolResult(
             "communicate",
             True,
@@ -6380,6 +6387,7 @@ class SimToolExecutor(
                 "robot_idx": robot_idx,
                 "to": to,
                 "message": message,
+                "releases": list(releases or ()),
             },
         )
 

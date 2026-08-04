@@ -18,12 +18,20 @@
 # The 20 pilot trajectories (job 266619) after post-processing with
 # --revalidate: 20/20 is_valid, 336 get_image steps, tick_rows preserved.
 #
-# egl, not osmesa: osmesa dies with 'NoneType' object has no attribute
-# 'glGetError'.
+# GL is selected via --gl-backend / --gpu-ids, NOT via exported env vars.
 
 cd /work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration
 
 export PYTHONWARNINGS=ignore
+# GL has to be egl in BOTH places, and the two are set differently:
+#   - the PARENT imports mujoco at module scope (sweep_trajectories.py:116),
+#     before any flag is read, so it needs MUJOCO_GL exported. Job 266761 left
+#     it unset, mujoco defaulted to osmesa, and the import died with
+#     "'NoneType' object has no attribute 'glGetError'".
+#   - the WORKERS get MUJOCO_GL from --gl-backend. Job 266732 exported egl but
+#     passed no flag, so workers got osmesa while inheriting
+#     PYOPENGL_PLATFORM=egl: "Cannot use OSMesa rendering platform".
+# Setting the env AND passing the flag is what makes the two agree.
 export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
 
@@ -36,7 +44,8 @@ rm -rf "$OUT"
 "$PY" scripts/sweep_trajectories.py \
   --input-dir "$IN" \
   --output-dir "$OUT" \
-  --tasks prepare_coffee add_sugar_cubes || echo "exited $?"
+  --tasks prepare_coffee add_sugar_cubes \
+  --gpu-ids 0 --gl-backend egl || echo "exited $?"
 
 echo "TICK RENDER DONE"
 find "$OUT" -name '*.png' | wc -l
