@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=tick-sim
-#SBATCH --partition=rtx-batch
+#SBATCH --partition=rtx-devel
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
@@ -24,8 +24,8 @@
 cd /work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration
 
 export PYTHONWARNINGS=ignore
-export MUJOCO_GL=osmesa
-export PYOPENGL_PLATFORM=osmesa
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
 
 PY=/work/umass/shlomo_umass/dbenhamougol_umass/envs/robocasa-v3/bin/python
 BASE=/work/umass/shlomo_umass/dbenhamougol_umass/tick_sim_check
@@ -38,7 +38,7 @@ rm -rf "$OUT"
   --manifest "$BASE/manifest.json" \
   --dataset-root "$BASE/data" \
   --output-dir "$OUT" \
-  --gl-backend osmesa \
+  --gl-backend egl \
   --render-size 256 || echo "exited $?"
 
 echo "TICK SIM CHECK DONE"
