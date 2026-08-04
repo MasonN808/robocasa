@@ -176,6 +176,14 @@ TICK_FORMAT_RULES: tuple[str, ...] = (
     "wait_for_signal(from, about) blocks the calling agent until the other "
     "agent sends a communicate whose releases names the same id. Nothing else "
     "wakes it, so put the wait where the agent genuinely cannot proceed.",
+    "`about` and `releases` name a THING, never an event. Both must be an "
+    "object id or a fixture id that appears in initial_state, copied exactly: "
+    "about=\"coffee_machine\", releases=[\"coffee_machine\"]. Names like "
+    "\"mug_placed\", \"counter_free\", \"your_turn\" or \"task_done\" are not "
+    "ids -- they describe a moment rather than a thing, nothing can ever "
+    "release them, and a single one of them throws the whole trajectory away. "
+    "Ask yourself: is this the name of something in the kitchen? If not, it is "
+    "wrong. You are waiting FOR an object or a fixture, not ON an event.",
     "A WAIT IS HALF A PROTOCOL, AND YOU MUST WRITE BOTH HALVES. Every "
     "wait_for_signal(from=X, about=R) you write obliges agent X to send "
     "communicate(to=<waiter>, releases=[\"R\"]) on a LATER tick, naming R "

@@ -498,6 +498,17 @@ class ConcurrentTaskValidator:
         holder = (step.get("args") or {}).get("from")
         prefix = f"  step {step['step']}: {agent_id} waits on"
         about = str((step.get("args") or {}).get("about"))
+        if not self._known_id(about):
+            # Coordinating on a fiction. The model names the MOMENT it is
+            # waiting for -- "mug_placed", "counter_free" -- instead of the
+            # thing, and since a consistent fiction matches itself, a replay
+            # that only pairs waits with releases would let it through.
+            result.protocol.append(
+                f"{prefix} {about!r}, which is not an object or fixture in "
+                f"initial_state. `about` names a THING that exists, never an "
+                f"event or a state."
+            )
+            return
         if previous is None or previous["tool"] != "communicate":
             was = "nothing" if previous is None else previous["tool"]
             result.protocol.append(
@@ -568,6 +579,13 @@ class ConcurrentTaskValidator:
             return
         prefix = f"  step {step['step']}: {agent_id} releases {released!r}"
 
+        if not self._known_id(released):
+            result.protocol.append(
+                f"{prefix}, which is not an object or fixture in initial_state. "
+                f"`releases` names a THING that exists, never an event or a state."
+            )
+            return
+
         # 1. Still holding it.
         if agent_state.held_object == released:
             result.protocol.append(
@@ -612,6 +630,14 @@ class ConcurrentTaskValidator:
                 f"anything in between is time the waiter is blocked on a "
                 f"resource that is already free."
             )
+
+    def _known_id(self, symbol: str) -> bool:
+        """True when this names something that actually exists in the scene."""
+
+        initial = self.validator.initial_state
+        return symbol in (initial.get("objects") or {}) or symbol in (
+            initial.get("fixtures") or {}
+        )
 
     def _occupancy(self, state: Any) -> dict[str, list[str]]:
         """Which agents are standing at each exclusive fixture right now."""

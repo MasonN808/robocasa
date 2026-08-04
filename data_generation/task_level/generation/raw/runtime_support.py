@@ -41,6 +41,9 @@ from data_generation.task_level.tasks import (
     get_task_definition,
     supported_task_names,
 )
+from data_generation.task_level.tasks.shared.concurrent_fsm import (
+    ConcurrentTaskValidator,
+)
 from data_generation.utils import round_cost, stable_json_sha256
 
 
@@ -602,10 +605,19 @@ def _validate_candidate(
     allowed_tool_specs: dict[str, dict[str, Any]] | None = None,
     derive_coordination: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if _is_tick_format(candidate):
+    wrote_ticks = _is_tick_format(candidate)
+    if wrote_ticks:
         # The model wrote in execution order and placed its own waits, so there
         # is nothing to derive -- flatten it and let the FSM judge the result.
         candidate = _flatten_tick_candidate(candidate)
+        # ...and judge it with the validator that actually RUNS the plan. The
+        # linear one replays the flat list in written order, where two agents
+        # never collide and no wait ever blocks, so it cannot see whether the
+        # coordination the model placed works. Under it, tick output that
+        # deadlocks on the first tick validated clean. Raising here is what
+        # makes the generation loop retry, which is the only way the data ends
+        # up correct while the model is still allowed to be wrong.
+        validator = ConcurrentTaskValidator(validator)
     elif derive_coordination and isinstance(initial_state, dict):
         candidate = _derive_coordination(candidate, initial_state)
     try:

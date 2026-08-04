@@ -95,7 +95,12 @@ TASK_LEVEL_ALLOWED_TOOL_SPECS = {
             "args.to must be that agent's exact ID. Set args.releases to the "
             "exact symbolic id of a thing you have finished with and are handing "
             "over -- that, and only that, wakes a partner who is waiting on it. "
-            "Omit args.releases from every other message."
+            "Omit args.releases from every other message. "
+            "args.releases must be an object id or a fixture id that appears in "
+            "initial_state, copied exactly. It names a THING, never an event or "
+            "a status: 'coffee_machine' and 'mug' are ids; 'mug_placed', "
+            "'counter_free' and 'task_done' are not, and an id that does not "
+            "exist releases nothing at all."
         ),
         "tool_args": ["to", "message"],
         "optional_tool_args": ["releases"],
@@ -103,7 +108,13 @@ TASK_LEVEL_ALLOWED_TOOL_SPECS = {
     "wait_for_signal": {
         "description": (
             "Pause until the other agent hands over what you are waiting for. "
-            "args.about names that thing by its exact symbolic id. You stay "
+            "args.about names that thing by its exact symbolic id -- an object "
+            "id or a fixture id that appears in initial_state, copied exactly. "
+            "It is a THING you are waiting FOR, never an event you are waiting "
+            "ON: wait about='coffee_machine', never about='mug_placed' or "
+            "'your_turn'. An id that is not in initial_state can never be "
+            "released, so the wait blocks forever and the whole plan is thrown "
+            "away. You stay "
             "paused until args.from sends a communicate whose args.releases "
             "names the same id -- their other messages do not wake you, so you "
             "do not need to wait again after an unrelated one."

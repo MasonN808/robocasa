@@ -418,6 +418,69 @@ class PromptedProtocolTests(unittest.TestCase):
         self.assertTrue(run.deadlocked)
 
 
+class SymbolGroundingTests(unittest.TestCase):
+    """Coordination has to be about things that exist.
+
+    The tick A/B failed every trajectory this way: the model named the MOMENT
+    it was waiting for -- "mug_placed", "counter_free" -- instead of the thing.
+    A consistent fiction matches itself, so pairing waits with releases is not
+    enough to catch it.
+    """
+
+    def test_waiting_on_an_invented_id_is_rejected(self):
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_1", "communicate", to="agent_0", message="tell me when"),
+                 step("agent_1", "wait_for_signal", **{"from": "agent_0",
+                                                       "about": "mug_placed"}),
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "give_space", fixture_id="cab"),
+                 step("agent_0", "communicate", to="agent_1", message="done",
+                      releases=["mug_placed"])),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(any("not an object or fixture" in p for p in run.protocol))
+
+    def test_releasing_an_invented_id_is_rejected(self):
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "communicate", to="agent_1", message="your turn now",
+                      releases=["your_turn"])),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(any("not an object or fixture" in p for p in run.protocol))
+
+    def test_a_consistent_fiction_still_fails(self):
+        # Both halves agree, so the replay pairs them and nothing hangs. The
+        # plan is still coordinating on something that does not exist.
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_1", "communicate", to="agent_0", message="tell me when"),
+                 step("agent_1", "wait_for_signal", **{"from": "agent_0",
+                                                       "about": "task_done"}),
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "communicate", to="agent_1", message="done",
+                      releases=["task_done"]),
+                 step("agent_1", "navigate_to_fixture", fixture_id="sink")),
+            model=LOCK_STEP,
+        )
+        self.assertFalse(run.deadlocked, "the fiction matches itself")
+        self.assertTrue(run.protocol, "but it is still rejected")
+
+    def test_real_ids_pass(self):
+        for about in ("cab", "bowl"):
+            with self.subTest(about=about):
+                self.assertTrue(build()._known_id(about))
+        self.assertFalse(build()._known_id("mug_placed"))
+
+    def test_the_prompt_forbids_invented_ids(self):
+        import tick_format
+
+        text = "\n".join(tick_format.TICK_FORMAT_RULES)
+        self.assertIn("mug_placed", text, "name the failure mode concretely")
+        self.assertIn("initial_state", text)
+
+
 class ReleaseProtocolTests(unittest.TestCase):
     """Three rules that need no clock, so no duration model can excuse them."""
 
