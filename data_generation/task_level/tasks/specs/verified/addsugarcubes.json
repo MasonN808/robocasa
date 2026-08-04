@@ -307,5 +307,101 @@
         "reasoning": "Placing the second cube on the plate to complete the task."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "sugar_cube_1",
+          "source_id": "dining_counter"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "sugar_cube_1",
+          "support_object_id": "cake_plate"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "sugar_cube_2",
+          "source_id": "dining_counter"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "sugar_cube_2",
+          "support_object_id": "cake_plate"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object sugar_cube_1",
+            "place_on_object sugar_cube_1 -> cake_plate"
+          ],
+          "agent_1": [
+            "pick_up_object sugar_cube_2",
+            "place_on_object sugar_cube_2 -> cake_plate"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object sugar_cube_1",
+            "place_on_object sugar_cube_1 -> cake_plate"
+          ],
+          "agent_0": [
+            "pick_up_object sugar_cube_2",
+            "place_on_object sugar_cube_2 -> cake_plate"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object sugar_cube_1",
+            "place_on_object sugar_cube_1 -> cake_plate",
+            "pick_up_object sugar_cube_2",
+            "place_on_object sugar_cube_2 -> cake_plate"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object sugar_cube_1",
+            "place_on_object sugar_cube_1 -> cake_plate",
+            "pick_up_object sugar_cube_2",
+            "place_on_object sugar_cube_2 -> cake_plate"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
   }
 }

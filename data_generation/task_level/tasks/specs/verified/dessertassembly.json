@@ -300,5 +300,101 @@
         "reasoning": "Placing the cupcake onto the tray completes the assembly."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "dessert_bowl",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "dessert_bowl",
+          "receptacle_id": "tray"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "cupcake",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "cupcake",
+          "receptacle_id": "tray"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object dessert_bowl",
+            "place_in_receptacle dessert_bowl -> tray"
+          ],
+          "agent_1": [
+            "pick_up_object cupcake",
+            "place_in_receptacle cupcake -> tray"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object dessert_bowl",
+            "place_in_receptacle dessert_bowl -> tray"
+          ],
+          "agent_0": [
+            "pick_up_object cupcake",
+            "place_in_receptacle cupcake -> tray"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object dessert_bowl",
+            "place_in_receptacle dessert_bowl -> tray",
+            "pick_up_object cupcake",
+            "place_in_receptacle cupcake -> tray"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object dessert_bowl",
+            "place_in_receptacle dessert_bowl -> tray",
+            "pick_up_object cupcake",
+            "place_in_receptacle cupcake -> tray"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
   }
 }

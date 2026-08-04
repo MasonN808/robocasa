@@ -449,5 +449,242 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "lime",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "cabinet",
+          "part_id": "hinged"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "lime",
+          "support_object_id": "receptacle"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "garlic",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "garlic",
+          "support_object_id": "receptacle"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "bowl",
+          "support_id": "counter"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "condiment",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "condiment",
+          "support_id": "counter"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object lime",
+            "place_on_object lime -> receptacle",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ],
+          "agent_1": [
+            "open_hinged_part cabinet -> hinged",
+            "pick_up_object garlic",
+            "place_on_object garlic -> receptacle",
+            "pick_up_object condiment",
+            "place_on_surface condiment"
+          ]
+        },
+        "labels": "010011011",
+        "weight": 0.2315,
+        "balance": 0.8,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object lime",
+            "place_on_object lime -> receptacle",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ],
+          "agent_0": [
+            "open_hinged_part cabinet -> hinged",
+            "pick_up_object garlic",
+            "place_on_object garlic -> receptacle",
+            "pick_up_object condiment",
+            "place_on_surface condiment"
+          ]
+        },
+        "labels": "101100100",
+        "weight": 0.2315,
+        "balance": 0.8,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object lime",
+            "place_on_object lime -> receptacle",
+            "pick_up_object bowl",
+            "place_on_surface bowl",
+            "pick_up_object condiment",
+            "place_on_surface condiment"
+          ],
+          "agent_1": [
+            "open_hinged_part cabinet -> hinged",
+            "pick_up_object garlic",
+            "place_on_object garlic -> receptacle"
+          ]
+        },
+        "labels": "010011000",
+        "weight": 0.1005,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object lime",
+            "place_on_object lime -> receptacle",
+            "pick_up_object bowl",
+            "place_on_surface bowl",
+            "pick_up_object condiment",
+            "place_on_surface condiment"
+          ],
+          "agent_0": [
+            "open_hinged_part cabinet -> hinged",
+            "pick_up_object garlic",
+            "place_on_object garlic -> receptacle"
+          ]
+        },
+        "labels": "101100111",
+        "weight": 0.1005,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object lime",
+            "place_on_object lime -> receptacle",
+            "pick_up_object garlic",
+            "place_on_object garlic -> receptacle"
+          ],
+          "agent_1": [
+            "open_hinged_part cabinet -> hinged",
+            "pick_up_object bowl",
+            "place_on_surface bowl",
+            "pick_up_object condiment",
+            "place_on_surface condiment"
+          ]
+        },
+        "labels": "010100111",
+        "weight": 0.0926,
+        "balance": 0.8,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object lime",
+            "place_on_object lime -> receptacle",
+            "pick_up_object garlic",
+            "place_on_object garlic -> receptacle"
+          ],
+          "agent_0": [
+            "open_hinged_part cabinet -> hinged",
+            "pick_up_object bowl",
+            "place_on_surface bowl",
+            "pick_up_object condiment",
+            "place_on_surface condiment"
+          ]
+        },
+        "labels": "101011000",
+        "weight": 0.0926,
+        "balance": 0.8,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object lime",
+            "place_on_object lime -> receptacle",
+            "pick_up_object garlic",
+            "place_on_object garlic -> receptacle",
+            "pick_up_object condiment",
+            "place_on_surface condiment"
+          ],
+          "agent_1": [
+            "open_hinged_part cabinet -> hinged",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ]
+        },
+        "labels": "010100100",
+        "weight": 0.0754,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object lime",
+            "place_on_object lime -> receptacle",
+            "pick_up_object garlic",
+            "place_on_object garlic -> receptacle",
+            "pick_up_object condiment",
+            "place_on_surface condiment"
+          ],
+          "agent_0": [
+            "open_hinged_part cabinet -> hinged",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ]
+        },
+        "labels": "101011011",
+        "weight": 0.0754,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      }
+    ]
+  }
 }

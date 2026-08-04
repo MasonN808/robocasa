@@ -375,5 +375,101 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "item1",
+          "source_id": "dining_table"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "item1",
+          "reference_object_id": "anchor_item"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "item2",
+          "source_id": "dining_table"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "item2",
+          "reference_object_id": "item1"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object item1",
+            "place_next_to item1 -> anchor_item"
+          ],
+          "agent_1": [
+            "pick_up_object item2",
+            "place_next_to item2 -> item1"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object item1",
+            "place_next_to item1 -> anchor_item"
+          ],
+          "agent_0": [
+            "pick_up_object item2",
+            "place_next_to item2 -> item1"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object item1",
+            "place_next_to item1 -> anchor_item",
+            "pick_up_object item2",
+            "place_next_to item2 -> item1"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object item1",
+            "place_next_to item1 -> anchor_item",
+            "pick_up_object item2",
+            "place_next_to item2 -> item1"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

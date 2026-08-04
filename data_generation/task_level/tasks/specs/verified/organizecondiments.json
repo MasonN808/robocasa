@@ -407,5 +407,195 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "condiment1",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "condiment1",
+          "receptacle_id": "cab"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "condiment2",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "condiment2",
+          "receptacle_id": "cab"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "condiment3",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "condiment3",
+          "receptacle_id": "cab"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object condiment1",
+            "place_in_receptacle condiment1 -> cab",
+            "pick_up_object condiment3",
+            "place_in_receptacle condiment3 -> cab"
+          ],
+          "agent_0": [
+            "pick_up_object condiment2",
+            "place_in_receptacle condiment2 -> cab"
+          ]
+        },
+        "labels": "110011",
+        "weight": 0.2065,
+        "balance": 0.5,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object condiment1",
+            "place_in_receptacle condiment1 -> cab",
+            "pick_up_object condiment3",
+            "place_in_receptacle condiment3 -> cab"
+          ],
+          "agent_1": [
+            "pick_up_object condiment2",
+            "place_in_receptacle condiment2 -> cab"
+          ]
+        },
+        "labels": "001100",
+        "weight": 0.1652,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object condiment1",
+            "place_in_receptacle condiment1 -> cab"
+          ],
+          "agent_0": [
+            "pick_up_object condiment2",
+            "place_in_receptacle condiment2 -> cab",
+            "pick_up_object condiment3",
+            "place_in_receptacle condiment3 -> cab"
+          ]
+        },
+        "labels": "110000",
+        "weight": 0.1652,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object condiment1",
+            "place_in_receptacle condiment1 -> cab",
+            "pick_up_object condiment2",
+            "place_in_receptacle condiment2 -> cab"
+          ],
+          "agent_0": [
+            "pick_up_object condiment3",
+            "place_in_receptacle condiment3 -> cab"
+          ]
+        },
+        "labels": "111100",
+        "weight": 0.1652,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object condiment1",
+            "place_in_receptacle condiment1 -> cab",
+            "pick_up_object condiment2",
+            "place_in_receptacle condiment2 -> cab"
+          ],
+          "agent_1": [
+            "pick_up_object condiment3",
+            "place_in_receptacle condiment3 -> cab"
+          ]
+        },
+        "labels": "000011",
+        "weight": 0.1239,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object condiment1",
+            "place_in_receptacle condiment1 -> cab"
+          ],
+          "agent_1": [
+            "pick_up_object condiment2",
+            "place_in_receptacle condiment2 -> cab",
+            "pick_up_object condiment3",
+            "place_in_receptacle condiment3 -> cab"
+          ]
+        },
+        "labels": "001111",
+        "weight": 0.1239,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object condiment1",
+            "place_in_receptacle condiment1 -> cab",
+            "pick_up_object condiment2",
+            "place_in_receptacle condiment2 -> cab",
+            "pick_up_object condiment3",
+            "place_in_receptacle condiment3 -> cab"
+          ],
+          "agent_1": []
+        },
+        "labels": "000000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object condiment1",
+            "place_in_receptacle condiment1 -> cab",
+            "pick_up_object condiment2",
+            "place_in_receptacle condiment2 -> cab",
+            "pick_up_object condiment3",
+            "place_in_receptacle condiment3 -> cab"
+          ],
+          "agent_0": []
+        },
+        "labels": "111111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

@@ -387,5 +387,101 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "wine_bottle",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "wine_bottle",
+          "reference_object_id": "wine_glass"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "juice_bottle",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "juice_bottle",
+          "reference_object_id": "glass_cup"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object wine_bottle",
+            "place_next_to wine_bottle -> wine_glass"
+          ],
+          "agent_1": [
+            "pick_up_object juice_bottle",
+            "place_next_to juice_bottle -> glass_cup"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object wine_bottle",
+            "place_next_to wine_bottle -> wine_glass"
+          ],
+          "agent_0": [
+            "pick_up_object juice_bottle",
+            "place_next_to juice_bottle -> glass_cup"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object wine_bottle",
+            "place_next_to wine_bottle -> wine_glass",
+            "pick_up_object juice_bottle",
+            "place_next_to juice_bottle -> glass_cup"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object wine_bottle",
+            "place_next_to wine_bottle -> wine_glass",
+            "pick_up_object juice_bottle",
+            "place_next_to juice_bottle -> glass_cup"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

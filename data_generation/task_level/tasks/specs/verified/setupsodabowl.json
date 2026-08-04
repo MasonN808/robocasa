@@ -387,5 +387,180 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "fridge",
+          "part_id": "hinged"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "soda1",
+          "source_id": "fridge"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "soda1",
+          "receptacle_id": "ice_bowl"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "soda2",
+          "source_id": "fridge"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "soda2",
+          "receptacle_id": "ice_bowl"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object soda2",
+            "place_in_receptacle soda2 -> ice_bowl"
+          ],
+          "agent_1": [
+            "pick_up_object soda1",
+            "place_in_receptacle soda1 -> ice_bowl"
+          ]
+        },
+        "labels": "01100",
+        "weight": 0.2414,
+        "balance": 0.667,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object soda2",
+            "place_in_receptacle soda2 -> ice_bowl"
+          ],
+          "agent_0": [
+            "pick_up_object soda1",
+            "place_in_receptacle soda1 -> ice_bowl"
+          ]
+        },
+        "labels": "10011",
+        "weight": 0.2414,
+        "balance": 0.667,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object soda1",
+            "place_in_receptacle soda1 -> ice_bowl"
+          ],
+          "agent_1": [
+            "pick_up_object soda2",
+            "place_in_receptacle soda2 -> ice_bowl"
+          ]
+        },
+        "labels": "00011",
+        "weight": 0.1931,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object soda1",
+            "place_in_receptacle soda1 -> ice_bowl"
+          ],
+          "agent_0": [
+            "pick_up_object soda2",
+            "place_in_receptacle soda2 -> ice_bowl"
+          ]
+        },
+        "labels": "11100",
+        "weight": 0.1931,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged"
+          ],
+          "agent_1": [
+            "pick_up_object soda1",
+            "place_in_receptacle soda1 -> ice_bowl",
+            "pick_up_object soda2",
+            "place_in_receptacle soda2 -> ice_bowl"
+          ]
+        },
+        "labels": "01111",
+        "weight": 0.0405,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged"
+          ],
+          "agent_0": [
+            "pick_up_object soda1",
+            "place_in_receptacle soda1 -> ice_bowl",
+            "pick_up_object soda2",
+            "place_in_receptacle soda2 -> ice_bowl"
+          ]
+        },
+        "labels": "10000",
+        "weight": 0.0405,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object soda1",
+            "place_in_receptacle soda1 -> ice_bowl",
+            "pick_up_object soda2",
+            "place_in_receptacle soda2 -> ice_bowl"
+          ],
+          "agent_1": []
+        },
+        "labels": "00000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object soda1",
+            "place_in_receptacle soda1 -> ice_bowl",
+            "pick_up_object soda2",
+            "place_in_receptacle soda2 -> ice_bowl"
+          ],
+          "agent_0": []
+        },
+        "labels": "11111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

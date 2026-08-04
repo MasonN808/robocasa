@@ -491,5 +491,125 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "oil_or_vinegar_bottle",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "garlic",
+          "source_id": "fridge"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "oil_or_vinegar_bottle",
+          "reference_object_id": "mixing_bowl"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "garlic",
+          "receptacle_id": "mixing_bowl"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "shaker",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "shaker",
+          "reference_object_id": "mixing_bowl"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object oil_or_vinegar_bottle",
+            "place_next_to oil_or_vinegar_bottle -> mixing_bowl",
+            "pick_up_object shaker",
+            "place_next_to shaker -> mixing_bowl"
+          ],
+          "agent_1": [
+            "pick_up_object garlic",
+            "place_in_receptacle garlic -> mixing_bowl"
+          ]
+        },
+        "labels": "010100",
+        "weight": 0.25,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object oil_or_vinegar_bottle",
+            "place_next_to oil_or_vinegar_bottle -> mixing_bowl"
+          ],
+          "agent_1": [
+            "pick_up_object garlic",
+            "place_in_receptacle garlic -> mixing_bowl",
+            "pick_up_object shaker",
+            "place_next_to shaker -> mixing_bowl"
+          ]
+        },
+        "labels": "010111",
+        "weight": 0.25,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object oil_or_vinegar_bottle",
+            "place_next_to oil_or_vinegar_bottle -> mixing_bowl"
+          ],
+          "agent_0": [
+            "pick_up_object garlic",
+            "place_in_receptacle garlic -> mixing_bowl",
+            "pick_up_object shaker",
+            "place_next_to shaker -> mixing_bowl"
+          ]
+        },
+        "labels": "101000",
+        "weight": 0.25,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object oil_or_vinegar_bottle",
+            "place_next_to oil_or_vinegar_bottle -> mixing_bowl",
+            "pick_up_object shaker",
+            "place_next_to shaker -> mixing_bowl"
+          ],
+          "agent_0": [
+            "pick_up_object garlic",
+            "place_in_receptacle garlic -> mixing_bowl"
+          ]
+        },
+        "labels": "101011",
+        "weight": 0.25,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      }
+    ]
+  }
 }

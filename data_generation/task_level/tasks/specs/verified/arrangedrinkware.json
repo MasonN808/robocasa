@@ -302,5 +302,101 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "pitcher",
+          "source_id": "sink_counter"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "pitcher",
+          "support_id": "dining_counter"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "cup",
+          "source_id": "sink_counter"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "cup",
+          "support_id": "dining_counter"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object pitcher",
+            "place_on_surface pitcher"
+          ],
+          "agent_1": [
+            "pick_up_object cup",
+            "place_on_surface cup"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object pitcher",
+            "place_on_surface pitcher"
+          ],
+          "agent_0": [
+            "pick_up_object cup",
+            "place_on_surface cup"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object pitcher",
+            "place_on_surface pitcher",
+            "pick_up_object cup",
+            "place_on_surface cup"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object pitcher",
+            "place_on_surface pitcher",
+            "pick_up_object cup",
+            "place_on_surface cup"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

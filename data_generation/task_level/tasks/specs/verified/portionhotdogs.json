@@ -405,5 +405,385 @@
         "reasoning": "Completing plate2 with a sausage."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "hotdog_bun1",
+          "source_id": "bowl"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "hotdog_bun1",
+          "support_object_id": "plate1"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "sausage1",
+          "source_id": "bowl"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "sausage1",
+          "support_object_id": "plate1"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "hotdog_bun2",
+          "source_id": "bowl"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "hotdog_bun2",
+          "support_object_id": "plate2"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "sausage2",
+          "source_id": "bowl"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "sausage2",
+          "support_object_id": "plate2"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2"
+          ],
+          "agent_1": [
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ]
+        },
+        "labels": "00110011",
+        "weight": 0.1637,
+        "balance": 1.0,
+        "cross_agent_deps": 5
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2"
+          ],
+          "agent_0": [
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ]
+        },
+        "labels": "11001100",
+        "weight": 0.1637,
+        "balance": 1.0,
+        "cross_agent_deps": 5
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ],
+          "agent_1": [
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2"
+          ]
+        },
+        "labels": "00111100",
+        "weight": 0.1403,
+        "balance": 1.0,
+        "cross_agent_deps": 4
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ],
+          "agent_0": [
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2"
+          ]
+        },
+        "labels": "11000011",
+        "weight": 0.1403,
+        "balance": 1.0,
+        "cross_agent_deps": 4
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1"
+          ],
+          "agent_1": [
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ]
+        },
+        "labels": "00001111",
+        "weight": 0.0701,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1"
+          ],
+          "agent_0": [
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ]
+        },
+        "labels": "11110000",
+        "weight": 0.0701,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ],
+          "agent_1": [
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2"
+          ]
+        },
+        "labels": "00001100",
+        "weight": 0.028,
+        "balance": 0.333,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ],
+          "agent_1": [
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1"
+          ]
+        },
+        "labels": "00110000",
+        "weight": 0.028,
+        "balance": 0.333,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ],
+          "agent_0": [
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1"
+          ]
+        },
+        "labels": "11001111",
+        "weight": 0.028,
+        "balance": 0.333,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ],
+          "agent_0": [
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2"
+          ]
+        },
+        "labels": "11110011",
+        "weight": 0.028,
+        "balance": 0.333,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ],
+          "agent_1": []
+        },
+        "labels": "00000000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ],
+          "agent_0": []
+        },
+        "labels": "11111111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2"
+          ],
+          "agent_1": [
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ]
+        },
+        "labels": "00000011",
+        "weight": 0.0224,
+        "balance": 0.333,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1"
+          ],
+          "agent_1": [
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ]
+        },
+        "labels": "00111111",
+        "weight": 0.0224,
+        "balance": 0.333,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1"
+          ],
+          "agent_0": [
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2",
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ]
+        },
+        "labels": "11000000",
+        "weight": 0.0224,
+        "balance": 0.333,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object hotdog_bun1",
+            "place_on_object hotdog_bun1 -> plate1",
+            "pick_up_object sausage1",
+            "place_on_object sausage1 -> plate1",
+            "pick_up_object hotdog_bun2",
+            "place_on_object hotdog_bun2 -> plate2"
+          ],
+          "agent_0": [
+            "pick_up_object sausage2",
+            "place_on_object sausage2 -> plate2"
+          ]
+        },
+        "labels": "11111100",
+        "weight": 0.0224,
+        "balance": 0.333,
+        "cross_agent_deps": 2
+      }
+    ]
   }
 }

@@ -364,5 +364,101 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "pan",
+          "source_id": "stove"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "pan",
+          "support_id": "dining_table"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "steak",
+          "source_id": "pan"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "steak",
+          "support_object_id": "plate"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object pan",
+            "place_on_surface pan"
+          ],
+          "agent_1": [
+            "pick_up_object steak",
+            "place_on_object steak -> plate"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object pan",
+            "place_on_surface pan"
+          ],
+          "agent_0": [
+            "pick_up_object steak",
+            "place_on_object steak -> plate"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object pan",
+            "place_on_surface pan",
+            "pick_up_object steak",
+            "place_on_object steak -> plate"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object pan",
+            "place_on_surface pan",
+            "pick_up_object steak",
+            "place_on_object steak -> plate"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

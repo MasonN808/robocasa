@@ -345,5 +345,101 @@
         "reasoning": "Placing the strawberry on the plate next to the cake."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "cherry1",
+          "source_id": "fruit_plate"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "cherry1",
+          "support_object_id": "cake"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "strawberry1",
+          "source_id": "fruit_plate"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "strawberry1",
+          "support_object_id": "cake_plate"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object cherry1",
+            "place_on_object cherry1 -> cake"
+          ],
+          "agent_1": [
+            "pick_up_object strawberry1",
+            "place_on_object strawberry1 -> cake_plate"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object cherry1",
+            "place_on_object cherry1 -> cake"
+          ],
+          "agent_0": [
+            "pick_up_object strawberry1",
+            "place_on_object strawberry1 -> cake_plate"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object cherry1",
+            "place_on_object cherry1 -> cake",
+            "pick_up_object strawberry1",
+            "place_on_object strawberry1 -> cake_plate"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object cherry1",
+            "place_on_object cherry1 -> cake",
+            "pick_up_object strawberry1",
+            "place_on_object strawberry1 -> cake_plate"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
   }
 }

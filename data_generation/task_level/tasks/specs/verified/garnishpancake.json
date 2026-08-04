@@ -337,5 +337,90 @@
         "reasoning": "Placing the strawberry on the pancake completes the garnish task."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "fridge",
+          "part_id": "door"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "strawberry",
+          "source_id": "fridge"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "strawberry",
+          "support_object_id": "pancake"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door"
+          ],
+          "agent_1": [
+            "pick_up_object strawberry",
+            "place_on_object strawberry -> pancake"
+          ]
+        },
+        "labels": "011",
+        "weight": 0.475,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door"
+          ],
+          "agent_0": [
+            "pick_up_object strawberry",
+            "place_on_object strawberry -> pancake"
+          ]
+        },
+        "labels": "100",
+        "weight": 0.475,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object strawberry",
+            "place_on_object strawberry -> pancake"
+          ],
+          "agent_1": []
+        },
+        "labels": "000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object strawberry",
+            "place_on_object strawberry -> pancake"
+          ],
+          "agent_0": []
+        },
+        "labels": "111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
   }
 }

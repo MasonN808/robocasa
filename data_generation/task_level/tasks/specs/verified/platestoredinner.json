@@ -473,5 +473,362 @@
         "reasoning": "Placing the bowl inside the fridge to complete the task."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "fridge",
+          "part_id": "door"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "meat1",
+          "source_id": "pan"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "meat1",
+          "support_object_id": "plate"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "meat2",
+          "source_id": "pan"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "meat2",
+          "receptacle_id": "bowl"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "bowl",
+          "receptacle_id": "fridge"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl"
+          ],
+          "agent_0": [
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ]
+        },
+        "labels": "1001100",
+        "weight": 0.1518,
+        "balance": 0.75,
+        "cross_agent_deps": 5
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl"
+          ],
+          "agent_1": [
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ]
+        },
+        "labels": "0110011",
+        "weight": 0.1301,
+        "balance": 0.75,
+        "cross_agent_deps": 4
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate"
+          ],
+          "agent_0": [
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ]
+        },
+        "labels": "1110000",
+        "weight": 0.1301,
+        "balance": 0.75,
+        "cross_agent_deps": 4
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate"
+          ],
+          "agent_1": [
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ]
+        },
+        "labels": "0001111",
+        "weight": 0.1084,
+        "balance": 0.75,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ],
+          "agent_1": [
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl"
+          ]
+        },
+        "labels": "0111100",
+        "weight": 0.0651,
+        "balance": 0.75,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ],
+          "agent_0": [
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl"
+          ]
+        },
+        "labels": "1000011",
+        "weight": 0.0651,
+        "balance": 0.75,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ],
+          "agent_0": [
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl"
+          ]
+        },
+        "labels": "1110011",
+        "weight": 0.0575,
+        "balance": 0.4,
+        "cross_agent_deps": 4
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ],
+          "agent_1": [
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl"
+          ]
+        },
+        "labels": "0001100",
+        "weight": 0.0479,
+        "balance": 0.4,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ],
+          "agent_0": [
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate"
+          ]
+        },
+        "labels": "1001111",
+        "weight": 0.0479,
+        "balance": 0.4,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl"
+          ],
+          "agent_0": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ]
+        },
+        "labels": "1111100",
+        "weight": 0.0479,
+        "balance": 0.4,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl"
+          ],
+          "agent_1": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ]
+        },
+        "labels": "0000011",
+        "weight": 0.0383,
+        "balance": 0.4,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ],
+          "agent_1": [
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate"
+          ]
+        },
+        "labels": "0110000",
+        "weight": 0.0383,
+        "balance": 0.4,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> door"
+          ],
+          "agent_0": [
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ]
+        },
+        "labels": "1000000",
+        "weight": 0.0123,
+        "balance": 0.167,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> door"
+          ],
+          "agent_1": [
+            "pick_up_object meat1",
+            "place_on_object meat1 -> plate",
+            "pick_up_object meat2",
+            "place_in_receptacle meat2 -> bowl",
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> fridge"
+          ]
+        },
+        "labels": "0111111",
+        "weight": 0.0092,
+        "balance": 0.167,
+        "cross_agent_deps": 1
+      }
+    ]
   }
 }

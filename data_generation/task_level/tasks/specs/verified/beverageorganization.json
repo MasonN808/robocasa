@@ -374,5 +374,195 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "drink_0",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "drink_0",
+          "support_id": "dining_table"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "drink_1",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "drink_1",
+          "support_id": "dining_table"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "drink_2",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "drink_2",
+          "support_id": "dining_table"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object drink_0",
+            "place_on_surface drink_0",
+            "pick_up_object drink_1",
+            "place_on_surface drink_1"
+          ],
+          "agent_1": [
+            "pick_up_object drink_2",
+            "place_on_surface drink_2"
+          ]
+        },
+        "labels": "000011",
+        "weight": 0.1583,
+        "balance": 0.5,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object drink_0",
+            "place_on_surface drink_0",
+            "pick_up_object drink_2",
+            "place_on_surface drink_2"
+          ],
+          "agent_1": [
+            "pick_up_object drink_1",
+            "place_on_surface drink_1"
+          ]
+        },
+        "labels": "001100",
+        "weight": 0.1583,
+        "balance": 0.5,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object drink_0",
+            "place_on_surface drink_0"
+          ],
+          "agent_1": [
+            "pick_up_object drink_1",
+            "place_on_surface drink_1",
+            "pick_up_object drink_2",
+            "place_on_surface drink_2"
+          ]
+        },
+        "labels": "001111",
+        "weight": 0.1583,
+        "balance": 0.5,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object drink_0",
+            "place_on_surface drink_0"
+          ],
+          "agent_0": [
+            "pick_up_object drink_1",
+            "place_on_surface drink_1",
+            "pick_up_object drink_2",
+            "place_on_surface drink_2"
+          ]
+        },
+        "labels": "110000",
+        "weight": 0.1583,
+        "balance": 0.5,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object drink_0",
+            "place_on_surface drink_0",
+            "pick_up_object drink_2",
+            "place_on_surface drink_2"
+          ],
+          "agent_0": [
+            "pick_up_object drink_1",
+            "place_on_surface drink_1"
+          ]
+        },
+        "labels": "110011",
+        "weight": 0.1583,
+        "balance": 0.5,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object drink_0",
+            "place_on_surface drink_0",
+            "pick_up_object drink_1",
+            "place_on_surface drink_1"
+          ],
+          "agent_0": [
+            "pick_up_object drink_2",
+            "place_on_surface drink_2"
+          ]
+        },
+        "labels": "111100",
+        "weight": 0.1583,
+        "balance": 0.5,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object drink_0",
+            "place_on_surface drink_0",
+            "pick_up_object drink_1",
+            "place_on_surface drink_1",
+            "pick_up_object drink_2",
+            "place_on_surface drink_2"
+          ],
+          "agent_1": []
+        },
+        "labels": "000000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object drink_0",
+            "place_on_surface drink_0",
+            "pick_up_object drink_1",
+            "place_on_surface drink_1",
+            "pick_up_object drink_2",
+            "place_on_surface drink_2"
+          ],
+          "agent_0": []
+        },
+        "labels": "111111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

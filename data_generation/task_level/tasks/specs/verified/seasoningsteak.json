@@ -331,5 +331,51 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "shaker",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "shaker",
+          "reference_object_id": "steak"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object shaker",
+            "place_next_to shaker -> steak"
+          ],
+          "agent_1": []
+        },
+        "labels": "00",
+        "weight": 0.5,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object shaker",
+            "place_next_to shaker -> steak"
+          ],
+          "agent_0": []
+        },
+        "labels": "11",
+        "weight": 0.5,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

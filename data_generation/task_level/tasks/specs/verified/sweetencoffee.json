@@ -375,5 +375,71 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "milk",
+          "source_id": "fridge"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "sugar_cube",
+          "source_id": "saucer_plate"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "sugar_cube",
+          "receptacle_id": "coffee"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "milk",
+          "reference_object_id": "coffee"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object milk",
+            "place_next_to milk -> coffee"
+          ],
+          "agent_1": [
+            "pick_up_object sugar_cube",
+            "place_in_receptacle sugar_cube -> coffee"
+          ]
+        },
+        "labels": "0110",
+        "weight": 0.5,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object milk",
+            "place_next_to milk -> coffee"
+          ],
+          "agent_0": [
+            "pick_up_object sugar_cube",
+            "place_in_receptacle sugar_cube -> coffee"
+          ]
+        },
+        "labels": "1001",
+        "weight": 0.5,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      }
+    ]
+  }
 }

@@ -423,5 +423,80 @@
         "reasoning": "I am placing the knife next to the plate to complete the setup."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "butter_knife",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "fridge",
+          "part_id": "door"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "butter",
+          "source_id": "fridge"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "butter_knife",
+          "reference_object_id": "plate"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "butter",
+          "support_object_id": "plate"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object butter_knife",
+            "place_next_to butter_knife -> plate"
+          ],
+          "agent_1": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object butter",
+            "place_on_object butter -> plate"
+          ]
+        },
+        "labels": "01101",
+        "weight": 0.5,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object butter_knife",
+            "place_next_to butter_knife -> plate"
+          ],
+          "agent_0": [
+            "open_hinged_part fridge -> door",
+            "pick_up_object butter",
+            "place_on_object butter -> plate"
+          ]
+        },
+        "labels": "10010",
+        "weight": 0.5,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      }
+    ]
   }
 }

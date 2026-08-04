@@ -416,5 +416,101 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "condiment1",
+          "source_id": "cab"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "condiment1",
+          "support_id": "counter"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "condiment2",
+          "source_id": "cab"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "condiment2",
+          "reference_object_id": "condiment1"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object condiment1",
+            "place_on_surface condiment1"
+          ],
+          "agent_1": [
+            "pick_up_object condiment2",
+            "place_next_to condiment2 -> condiment1"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object condiment1",
+            "place_on_surface condiment1"
+          ],
+          "agent_0": [
+            "pick_up_object condiment2",
+            "place_next_to condiment2 -> condiment1"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object condiment1",
+            "place_on_surface condiment1",
+            "pick_up_object condiment2",
+            "place_next_to condiment2 -> condiment1"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object condiment1",
+            "place_on_surface condiment1",
+            "pick_up_object condiment2",
+            "place_next_to condiment2 -> condiment1"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

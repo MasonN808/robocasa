@@ -284,5 +284,90 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_sliding_part",
+        "args": {
+          "target_id": "drawer",
+          "part_id": "sliding"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "straw",
+          "source_id": "drawer"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "straw",
+          "receptacle_id": "glass_cup"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_sliding_part drawer -> sliding"
+          ],
+          "agent_1": [
+            "pick_up_object straw",
+            "place_in_receptacle straw -> glass_cup"
+          ]
+        },
+        "labels": "011",
+        "weight": 0.475,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_sliding_part drawer -> sliding"
+          ],
+          "agent_0": [
+            "pick_up_object straw",
+            "place_in_receptacle straw -> glass_cup"
+          ]
+        },
+        "labels": "100",
+        "weight": 0.475,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_sliding_part drawer -> sliding",
+            "pick_up_object straw",
+            "place_in_receptacle straw -> glass_cup"
+          ],
+          "agent_1": []
+        },
+        "labels": "000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_sliding_part drawer -> sliding",
+            "pick_up_object straw",
+            "place_in_receptacle straw -> glass_cup"
+          ],
+          "agent_0": []
+        },
+        "labels": "111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

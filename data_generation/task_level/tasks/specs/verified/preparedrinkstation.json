@@ -462,5 +462,125 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "cup",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "pitcher",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "cup",
+          "receptacle_id": "tray"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "pitcher",
+          "reference_object_id": "tray"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "mug",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "mug",
+          "receptacle_id": "tray"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object cup",
+            "place_in_receptacle cup -> tray",
+            "pick_up_object mug",
+            "place_in_receptacle mug -> tray"
+          ],
+          "agent_1": [
+            "pick_up_object pitcher",
+            "place_next_to pitcher -> tray"
+          ]
+        },
+        "labels": "010100",
+        "weight": 0.25,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object cup",
+            "place_in_receptacle cup -> tray"
+          ],
+          "agent_1": [
+            "pick_up_object pitcher",
+            "place_next_to pitcher -> tray",
+            "pick_up_object mug",
+            "place_in_receptacle mug -> tray"
+          ]
+        },
+        "labels": "010111",
+        "weight": 0.25,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object cup",
+            "place_in_receptacle cup -> tray"
+          ],
+          "agent_0": [
+            "pick_up_object pitcher",
+            "place_next_to pitcher -> tray",
+            "pick_up_object mug",
+            "place_in_receptacle mug -> tray"
+          ]
+        },
+        "labels": "101000",
+        "weight": 0.25,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object cup",
+            "place_in_receptacle cup -> tray",
+            "pick_up_object mug",
+            "place_in_receptacle mug -> tray"
+          ],
+          "agent_0": [
+            "pick_up_object pitcher",
+            "place_next_to pitcher -> tray"
+          ]
+        },
+        "labels": "101011",
+        "weight": 0.25,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      }
+    ]
+  }
 }

@@ -486,5 +486,195 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "spice",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "spice",
+          "reference_fixture_id": "stove"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bottle",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "bottle",
+          "reference_fixture_id": "stove"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "shaker",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "shaker",
+          "reference_fixture_id": "stove"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object spice",
+            "place_next_to spice -> stove",
+            "pick_up_object shaker",
+            "place_next_to shaker -> stove"
+          ],
+          "agent_1": [
+            "pick_up_object bottle",
+            "place_next_to bottle -> stove"
+          ]
+        },
+        "labels": "001100",
+        "weight": 0.19,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object spice",
+            "place_next_to spice -> stove",
+            "pick_up_object shaker",
+            "place_next_to shaker -> stove"
+          ],
+          "agent_0": [
+            "pick_up_object bottle",
+            "place_next_to bottle -> stove"
+          ]
+        },
+        "labels": "110011",
+        "weight": 0.19,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object spice",
+            "place_next_to spice -> stove",
+            "pick_up_object bottle",
+            "place_next_to bottle -> stove"
+          ],
+          "agent_1": [
+            "pick_up_object shaker",
+            "place_next_to shaker -> stove"
+          ]
+        },
+        "labels": "000011",
+        "weight": 0.1425,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object spice",
+            "place_next_to spice -> stove"
+          ],
+          "agent_1": [
+            "pick_up_object bottle",
+            "place_next_to bottle -> stove",
+            "pick_up_object shaker",
+            "place_next_to shaker -> stove"
+          ]
+        },
+        "labels": "001111",
+        "weight": 0.1425,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object spice",
+            "place_next_to spice -> stove"
+          ],
+          "agent_0": [
+            "pick_up_object bottle",
+            "place_next_to bottle -> stove",
+            "pick_up_object shaker",
+            "place_next_to shaker -> stove"
+          ]
+        },
+        "labels": "110000",
+        "weight": 0.1425,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object spice",
+            "place_next_to spice -> stove",
+            "pick_up_object bottle",
+            "place_next_to bottle -> stove"
+          ],
+          "agent_0": [
+            "pick_up_object shaker",
+            "place_next_to shaker -> stove"
+          ]
+        },
+        "labels": "111100",
+        "weight": 0.1425,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object spice",
+            "place_next_to spice -> stove",
+            "pick_up_object bottle",
+            "place_next_to bottle -> stove",
+            "pick_up_object shaker",
+            "place_next_to shaker -> stove"
+          ],
+          "agent_1": []
+        },
+        "labels": "000000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object spice",
+            "place_next_to spice -> stove",
+            "pick_up_object bottle",
+            "place_next_to bottle -> stove",
+            "pick_up_object shaker",
+            "place_next_to shaker -> stove"
+          ],
+          "agent_0": []
+        },
+        "labels": "111111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

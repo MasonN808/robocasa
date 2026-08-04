@@ -364,5 +364,103 @@
         "reasoning": "Placing the spoon on the right side of the plate."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "fork",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "fork",
+          "reference_object_id": "plate",
+          "relative_position": "left"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "spoon",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "spoon",
+          "reference_object_id": "plate",
+          "relative_position": "right"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object fork",
+            "place_next_to fork -> plate"
+          ],
+          "agent_1": [
+            "pick_up_object spoon",
+            "place_next_to spoon -> plate"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object fork",
+            "place_next_to fork -> plate"
+          ],
+          "agent_0": [
+            "pick_up_object spoon",
+            "place_next_to spoon -> plate"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object fork",
+            "place_next_to fork -> plate",
+            "pick_up_object spoon",
+            "place_next_to spoon -> plate"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object fork",
+            "place_next_to fork -> plate",
+            "pick_up_object spoon",
+            "place_next_to spoon -> plate"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
   }
 }

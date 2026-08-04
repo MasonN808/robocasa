@@ -319,5 +319,101 @@
         "reasoning": "Placing the bowl on the counter completes the task."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "cup",
+          "source_id": "dining_table"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "cup",
+          "receptacle_id": "bowl"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl",
+          "source_id": "dining_table"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "bowl",
+          "support_id": "kitchen_counter"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object cup",
+            "place_in_receptacle cup -> bowl"
+          ],
+          "agent_1": [
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object cup",
+            "place_in_receptacle cup -> bowl"
+          ],
+          "agent_0": [
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object cup",
+            "place_in_receptacle cup -> bowl",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object cup",
+            "place_in_receptacle cup -> bowl",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
   }
 }

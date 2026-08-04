@@ -298,5 +298,101 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "skewer1",
+          "source_id": "skewer_plate"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "skewer1",
+          "receptacle_id": "oven_tray"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "skewer2",
+          "source_id": "skewer_plate"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "skewer2",
+          "receptacle_id": "oven_tray"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object skewer1",
+            "place_in_receptacle skewer1 -> oven_tray"
+          ],
+          "agent_1": [
+            "pick_up_object skewer2",
+            "place_in_receptacle skewer2 -> oven_tray"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object skewer1",
+            "place_in_receptacle skewer1 -> oven_tray"
+          ],
+          "agent_0": [
+            "pick_up_object skewer2",
+            "place_in_receptacle skewer2 -> oven_tray"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object skewer1",
+            "place_in_receptacle skewer1 -> oven_tray",
+            "pick_up_object skewer2",
+            "place_in_receptacle skewer2 -> oven_tray"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object skewer1",
+            "place_in_receptacle skewer1 -> oven_tray",
+            "pick_up_object skewer2",
+            "place_in_receptacle skewer2 -> oven_tray"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

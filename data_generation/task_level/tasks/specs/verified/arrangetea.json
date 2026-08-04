@@ -353,5 +353,114 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "mug",
+          "source_id": "cab"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "kettle",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "kettle",
+          "receptacle_id": "tray"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "mug",
+          "receptacle_id": "tray"
+        }
+      },
+      {
+        "tool": "close_hinged_part",
+        "args": {
+          "target_id": "cab",
+          "part_id": "hinged"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object mug",
+            "place_in_receptacle mug -> tray"
+          ],
+          "agent_1": [
+            "pick_up_object kettle",
+            "place_in_receptacle kettle -> tray",
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "01101",
+        "weight": 0.2857,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object mug",
+            "place_in_receptacle mug -> tray"
+          ],
+          "agent_0": [
+            "pick_up_object kettle",
+            "place_in_receptacle kettle -> tray",
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "10010",
+        "weight": 0.2857,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object mug",
+            "place_in_receptacle mug -> tray",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_1": [
+            "pick_up_object kettle",
+            "place_in_receptacle kettle -> tray"
+          ]
+        },
+        "labels": "01100",
+        "weight": 0.2143,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object mug",
+            "place_in_receptacle mug -> tray",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_0": [
+            "pick_up_object kettle",
+            "place_in_receptacle kettle -> tray"
+          ]
+        },
+        "labels": "10011",
+        "weight": 0.2143,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      }
+    ]
+  }
 }

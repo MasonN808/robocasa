@@ -353,5 +353,180 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "obj1",
+          "source_id": "dining_table"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "obj1",
+          "receptacle_id": "cab"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "obj2",
+          "source_id": "dining_table"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "obj2",
+          "receptacle_id": "cab"
+        }
+      },
+      {
+        "tool": "close_hinged_part",
+        "args": {
+          "target_id": "cab",
+          "part_id": "hinged"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object obj1",
+            "place_in_receptacle obj1 -> cab",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_0": [
+            "pick_up_object obj2",
+            "place_in_receptacle obj2 -> cab"
+          ]
+        },
+        "labels": "11001",
+        "weight": 0.2687,
+        "balance": 0.667,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object obj1",
+            "place_in_receptacle obj1 -> cab",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_1": [
+            "pick_up_object obj2",
+            "place_in_receptacle obj2 -> cab"
+          ]
+        },
+        "labels": "00110",
+        "weight": 0.215,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object obj1",
+            "place_in_receptacle obj1 -> cab"
+          ],
+          "agent_0": [
+            "pick_up_object obj2",
+            "place_in_receptacle obj2 -> cab",
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "11000",
+        "weight": 0.215,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object obj1",
+            "place_in_receptacle obj1 -> cab"
+          ],
+          "agent_1": [
+            "pick_up_object obj2",
+            "place_in_receptacle obj2 -> cab",
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "00111",
+        "weight": 0.1612,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object obj1",
+            "place_in_receptacle obj1 -> cab",
+            "pick_up_object obj2",
+            "place_in_receptacle obj2 -> cab"
+          ],
+          "agent_1": [
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "00001",
+        "weight": 0.045,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object obj1",
+            "place_in_receptacle obj1 -> cab",
+            "pick_up_object obj2",
+            "place_in_receptacle obj2 -> cab"
+          ],
+          "agent_0": [
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "11110",
+        "weight": 0.045,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object obj1",
+            "place_in_receptacle obj1 -> cab",
+            "pick_up_object obj2",
+            "place_in_receptacle obj2 -> cab",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_1": []
+        },
+        "labels": "00000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object obj1",
+            "place_in_receptacle obj1 -> cab",
+            "pick_up_object obj2",
+            "place_in_receptacle obj2 -> cab",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_0": []
+        },
+        "labels": "11111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

@@ -518,5 +518,212 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "fridge",
+          "part_id": "hinged"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "lemon_wedge",
+          "source_id": "fridge"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "liquor",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "lemon_wedge",
+          "receptacle_id": "bowl"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "liquor",
+          "reference_object_id": "bowl"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "glass_cup",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "glass_cup",
+          "reference_object_id": "bowl"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object liquor",
+            "place_next_to liquor -> bowl"
+          ],
+          "agent_1": [
+            "pick_up_object lemon_wedge",
+            "place_in_receptacle lemon_wedge -> bowl",
+            "pick_up_object glass_cup",
+            "place_next_to glass_cup -> bowl"
+          ]
+        },
+        "labels": "0101011",
+        "weight": 0.2312,
+        "balance": 0.75,
+        "cross_agent_deps": 4
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object liquor",
+            "place_next_to liquor -> bowl"
+          ],
+          "agent_0": [
+            "pick_up_object lemon_wedge",
+            "place_in_receptacle lemon_wedge -> bowl",
+            "pick_up_object glass_cup",
+            "place_next_to glass_cup -> bowl"
+          ]
+        },
+        "labels": "1010100",
+        "weight": 0.2312,
+        "balance": 0.75,
+        "cross_agent_deps": 4
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object lemon_wedge",
+            "place_in_receptacle lemon_wedge -> bowl"
+          ],
+          "agent_1": [
+            "pick_up_object liquor",
+            "place_next_to liquor -> bowl",
+            "pick_up_object glass_cup",
+            "place_next_to glass_cup -> bowl"
+          ]
+        },
+        "labels": "0010111",
+        "weight": 0.1156,
+        "balance": 0.75,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object lemon_wedge",
+            "place_in_receptacle lemon_wedge -> bowl"
+          ],
+          "agent_0": [
+            "pick_up_object liquor",
+            "place_next_to liquor -> bowl",
+            "pick_up_object glass_cup",
+            "place_next_to glass_cup -> bowl"
+          ]
+        },
+        "labels": "1101000",
+        "weight": 0.1156,
+        "balance": 0.75,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object lemon_wedge",
+            "place_in_receptacle lemon_wedge -> bowl",
+            "pick_up_object glass_cup",
+            "place_next_to glass_cup -> bowl"
+          ],
+          "agent_1": [
+            "pick_up_object liquor",
+            "place_next_to liquor -> bowl"
+          ]
+        },
+        "labels": "0010100",
+        "weight": 0.0851,
+        "balance": 0.4,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object lemon_wedge",
+            "place_in_receptacle lemon_wedge -> bowl",
+            "pick_up_object glass_cup",
+            "place_next_to glass_cup -> bowl"
+          ],
+          "agent_0": [
+            "pick_up_object liquor",
+            "place_next_to liquor -> bowl"
+          ]
+        },
+        "labels": "1101011",
+        "weight": 0.0851,
+        "balance": 0.4,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object liquor",
+            "place_next_to liquor -> bowl",
+            "pick_up_object glass_cup",
+            "place_next_to glass_cup -> bowl"
+          ],
+          "agent_1": [
+            "pick_up_object lemon_wedge",
+            "place_in_receptacle lemon_wedge -> bowl"
+          ]
+        },
+        "labels": "0101000",
+        "weight": 0.0681,
+        "balance": 0.4,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object liquor",
+            "place_next_to liquor -> bowl",
+            "pick_up_object glass_cup",
+            "place_next_to glass_cup -> bowl"
+          ],
+          "agent_0": [
+            "pick_up_object lemon_wedge",
+            "place_in_receptacle lemon_wedge -> bowl"
+          ]
+        },
+        "labels": "1010111",
+        "weight": 0.0681,
+        "balance": 0.4,
+        "cross_agent_deps": 2
+      }
+    ]
+  }
 }

@@ -300,5 +300,90 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "fridge",
+          "part_id": "hinged"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "lemon",
+          "source_id": "fridge"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "lemon",
+          "support_object_id": "cutting_board"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged"
+          ],
+          "agent_1": [
+            "pick_up_object lemon",
+            "place_on_object lemon -> cutting_board"
+          ]
+        },
+        "labels": "011",
+        "weight": 0.475,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged"
+          ],
+          "agent_0": [
+            "pick_up_object lemon",
+            "place_on_object lemon -> cutting_board"
+          ]
+        },
+        "labels": "100",
+        "weight": 0.475,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object lemon",
+            "place_on_object lemon -> cutting_board"
+          ],
+          "agent_1": []
+        },
+        "labels": "000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part fridge -> hinged",
+            "pick_up_object lemon",
+            "place_on_object lemon -> cutting_board"
+          ],
+          "agent_0": []
+        },
+        "labels": "111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

@@ -425,5 +425,114 @@
         "reasoning": "Placing chocolate on the plate to complete the garnish."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "cabinet",
+          "part_id": "door"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "chocolate",
+          "source_id": "dining_counter"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "cinnamon",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "chocolate",
+          "support_object_id": "cupcake_plate"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "cinnamon",
+          "reference_object_id": "cupcake_plate"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cabinet -> door",
+            "pick_up_object chocolate",
+            "place_on_object chocolate -> cupcake_plate"
+          ],
+          "agent_1": [
+            "pick_up_object cinnamon",
+            "place_next_to cinnamon -> cupcake_plate"
+          ]
+        },
+        "labels": "00101",
+        "weight": 0.2857,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cabinet -> door",
+            "pick_up_object chocolate",
+            "place_on_object chocolate -> cupcake_plate"
+          ],
+          "agent_0": [
+            "pick_up_object cinnamon",
+            "place_next_to cinnamon -> cupcake_plate"
+          ]
+        },
+        "labels": "11010",
+        "weight": 0.2857,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cabinet -> door",
+            "pick_up_object cinnamon",
+            "place_next_to cinnamon -> cupcake_plate"
+          ],
+          "agent_1": [
+            "pick_up_object chocolate",
+            "place_on_object chocolate -> cupcake_plate"
+          ]
+        },
+        "labels": "01010",
+        "weight": 0.2143,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cabinet -> door",
+            "pick_up_object cinnamon",
+            "place_next_to cinnamon -> cupcake_plate"
+          ],
+          "agent_0": [
+            "pick_up_object chocolate",
+            "place_on_object chocolate -> cupcake_plate"
+          ]
+        },
+        "labels": "10101",
+        "weight": 0.2143,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      }
+    ]
   }
 }

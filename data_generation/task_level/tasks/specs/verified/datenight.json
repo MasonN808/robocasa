@@ -328,5 +328,180 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "cab",
+          "part_id": "hinged"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "decoration",
+          "source_id": "cab"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "decoration",
+          "support_id": "dining_table"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "alcohol",
+          "source_id": "cab"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "alcohol",
+          "support_id": "dining_table"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object alcohol",
+            "place_on_surface alcohol"
+          ],
+          "agent_1": [
+            "pick_up_object decoration",
+            "place_on_surface decoration"
+          ]
+        },
+        "labels": "01100",
+        "weight": 0.2424,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object alcohol",
+            "place_on_surface alcohol"
+          ],
+          "agent_0": [
+            "pick_up_object decoration",
+            "place_on_surface decoration"
+          ]
+        },
+        "labels": "10011",
+        "weight": 0.2424,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object decoration",
+            "place_on_surface decoration"
+          ],
+          "agent_1": [
+            "pick_up_object alcohol",
+            "place_on_surface alcohol"
+          ]
+        },
+        "labels": "00011",
+        "weight": 0.1818,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object decoration",
+            "place_on_surface decoration"
+          ],
+          "agent_0": [
+            "pick_up_object alcohol",
+            "place_on_surface alcohol"
+          ]
+        },
+        "labels": "11100",
+        "weight": 0.1818,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged"
+          ],
+          "agent_1": [
+            "pick_up_object decoration",
+            "place_on_surface decoration",
+            "pick_up_object alcohol",
+            "place_on_surface alcohol"
+          ]
+        },
+        "labels": "01111",
+        "weight": 0.0508,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged"
+          ],
+          "agent_0": [
+            "pick_up_object decoration",
+            "place_on_surface decoration",
+            "pick_up_object alcohol",
+            "place_on_surface alcohol"
+          ]
+        },
+        "labels": "10000",
+        "weight": 0.0508,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object decoration",
+            "place_on_surface decoration",
+            "pick_up_object alcohol",
+            "place_on_surface alcohol"
+          ],
+          "agent_1": []
+        },
+        "labels": "00000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object decoration",
+            "place_on_surface decoration",
+            "pick_up_object alcohol",
+            "place_on_surface alcohol"
+          ],
+          "agent_0": []
+        },
+        "labels": "11111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

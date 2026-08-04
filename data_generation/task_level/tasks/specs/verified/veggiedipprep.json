@@ -329,5 +329,195 @@
         "reasoning": "Placing the carrot on the tray to complete the task."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "bowl",
+          "receptacle_id": "tray"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "carrot",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "carrot",
+          "receptacle_id": "tray"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "cucumber",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "cucumber",
+          "receptacle_id": "tray"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> tray",
+            "pick_up_object cucumber",
+            "place_in_receptacle cucumber -> tray"
+          ],
+          "agent_1": [
+            "pick_up_object carrot",
+            "place_in_receptacle carrot -> tray"
+          ]
+        },
+        "labels": "001100",
+        "weight": 0.19,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> tray",
+            "pick_up_object cucumber",
+            "place_in_receptacle cucumber -> tray"
+          ],
+          "agent_0": [
+            "pick_up_object carrot",
+            "place_in_receptacle carrot -> tray"
+          ]
+        },
+        "labels": "110011",
+        "weight": 0.19,
+        "balance": 0.5,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> tray",
+            "pick_up_object carrot",
+            "place_in_receptacle carrot -> tray"
+          ],
+          "agent_1": [
+            "pick_up_object cucumber",
+            "place_in_receptacle cucumber -> tray"
+          ]
+        },
+        "labels": "000011",
+        "weight": 0.1425,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> tray"
+          ],
+          "agent_1": [
+            "pick_up_object carrot",
+            "place_in_receptacle carrot -> tray",
+            "pick_up_object cucumber",
+            "place_in_receptacle cucumber -> tray"
+          ]
+        },
+        "labels": "001111",
+        "weight": 0.1425,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> tray"
+          ],
+          "agent_0": [
+            "pick_up_object carrot",
+            "place_in_receptacle carrot -> tray",
+            "pick_up_object cucumber",
+            "place_in_receptacle cucumber -> tray"
+          ]
+        },
+        "labels": "110000",
+        "weight": 0.1425,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> tray",
+            "pick_up_object carrot",
+            "place_in_receptacle carrot -> tray"
+          ],
+          "agent_0": [
+            "pick_up_object cucumber",
+            "place_in_receptacle cucumber -> tray"
+          ]
+        },
+        "labels": "111100",
+        "weight": 0.1425,
+        "balance": 0.5,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> tray",
+            "pick_up_object carrot",
+            "place_in_receptacle carrot -> tray",
+            "pick_up_object cucumber",
+            "place_in_receptacle cucumber -> tray"
+          ],
+          "agent_1": []
+        },
+        "labels": "000000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object bowl",
+            "place_in_receptacle bowl -> tray",
+            "pick_up_object carrot",
+            "place_in_receptacle carrot -> tray",
+            "pick_up_object cucumber",
+            "place_in_receptacle cucumber -> tray"
+          ],
+          "agent_0": []
+        },
+        "labels": "111111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
   }
 }

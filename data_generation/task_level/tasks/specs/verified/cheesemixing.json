@@ -355,5 +355,101 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "cheese",
+          "source_id": "cheese_plate"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "cheese",
+          "receptacle_id": "pot"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "spatula",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "spatula",
+          "receptacle_id": "pot"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object cheese",
+            "place_in_receptacle cheese -> pot"
+          ],
+          "agent_1": [
+            "pick_up_object spatula",
+            "place_in_receptacle spatula -> pot"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.5278,
+        "balance": 1.0,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object cheese",
+            "place_in_receptacle cheese -> pot"
+          ],
+          "agent_0": [
+            "pick_up_object spatula",
+            "place_in_receptacle spatula -> pot"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.4222,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object cheese",
+            "place_in_receptacle cheese -> pot",
+            "pick_up_object spatula",
+            "place_in_receptacle spatula -> pot"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object cheese",
+            "place_in_receptacle cheese -> pot",
+            "pick_up_object spatula",
+            "place_in_receptacle spatula -> pot"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

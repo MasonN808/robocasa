@@ -422,5 +422,101 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl1",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "bowl1",
+          "reference_fixture_id": "stool1"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl2",
+          "source_id": "cabinet"
+        }
+      },
+      {
+        "tool": "place_next_to",
+        "args": {
+          "object_id": "bowl2",
+          "reference_fixture_id": "stool2"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object bowl1",
+            "place_next_to bowl1 -> stool1"
+          ],
+          "agent_1": [
+            "pick_up_object bowl2",
+            "place_next_to bowl2 -> stool2"
+          ]
+        },
+        "labels": "0011",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object bowl1",
+            "place_next_to bowl1 -> stool1"
+          ],
+          "agent_0": [
+            "pick_up_object bowl2",
+            "place_next_to bowl2 -> stool2"
+          ]
+        },
+        "labels": "1100",
+        "weight": 0.475,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object bowl1",
+            "place_next_to bowl1 -> stool1",
+            "pick_up_object bowl2",
+            "place_next_to bowl2 -> stool2"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object bowl1",
+            "place_next_to bowl1 -> stool1",
+            "pick_up_object bowl2",
+            "place_next_to bowl2 -> stool2"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

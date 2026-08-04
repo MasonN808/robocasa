@@ -398,5 +398,385 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "avocado",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "avocado",
+          "support_object_id": "receptacle"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "onion",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "onion",
+          "support_object_id": "receptacle"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "tomato",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "tomato",
+          "support_object_id": "receptacle"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bell_pepper",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "bell_pepper",
+          "support_object_id": "receptacle"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle"
+          ],
+          "agent_1": [
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ]
+        },
+        "labels": "00110011",
+        "weight": 0.1547,
+        "balance": 1.0,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle"
+          ],
+          "agent_0": [
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ]
+        },
+        "labels": "11001100",
+        "weight": 0.1547,
+        "balance": 1.0,
+        "cross_agent_deps": 3
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ],
+          "agent_1": [
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle"
+          ]
+        },
+        "labels": "00111100",
+        "weight": 0.1237,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ],
+          "agent_0": [
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle"
+          ]
+        },
+        "labels": "11000011",
+        "weight": 0.1237,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle"
+          ],
+          "agent_1": [
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ]
+        },
+        "labels": "00001111",
+        "weight": 0.0928,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle"
+          ],
+          "agent_0": [
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ]
+        },
+        "labels": "11110000",
+        "weight": 0.0928,
+        "balance": 1.0,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ],
+          "agent_1": [
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle"
+          ]
+        },
+        "labels": "00001100",
+        "weight": 0.0297,
+        "balance": 0.333,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ],
+          "agent_1": [
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle"
+          ]
+        },
+        "labels": "00110000",
+        "weight": 0.0297,
+        "balance": 0.333,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ],
+          "agent_0": [
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle"
+          ]
+        },
+        "labels": "11001111",
+        "weight": 0.0297,
+        "balance": 0.333,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ],
+          "agent_0": [
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle"
+          ]
+        },
+        "labels": "11110011",
+        "weight": 0.0297,
+        "balance": 0.333,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ],
+          "agent_1": []
+        },
+        "labels": "00000000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ],
+          "agent_0": []
+        },
+        "labels": "11111111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle"
+          ],
+          "agent_1": [
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ]
+        },
+        "labels": "00000011",
+        "weight": 0.0222,
+        "balance": 0.333,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle"
+          ],
+          "agent_1": [
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ]
+        },
+        "labels": "00111111",
+        "weight": 0.0222,
+        "balance": 0.333,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle"
+          ],
+          "agent_0": [
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle",
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ]
+        },
+        "labels": "11000000",
+        "weight": 0.0222,
+        "balance": 0.333,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "pick_up_object avocado",
+            "place_on_object avocado -> receptacle",
+            "pick_up_object onion",
+            "place_on_object onion -> receptacle",
+            "pick_up_object tomato",
+            "place_on_object tomato -> receptacle"
+          ],
+          "agent_0": [
+            "pick_up_object bell_pepper",
+            "place_on_object bell_pepper -> receptacle"
+          ]
+        },
+        "labels": "11111100",
+        "weight": 0.0222,
+        "balance": 0.333,
+        "cross_agent_deps": 1
+      }
+    ]
+  }
 }

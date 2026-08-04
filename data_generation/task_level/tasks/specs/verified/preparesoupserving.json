@@ -359,5 +359,165 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "cab",
+          "part_id": "hinged"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "ladle",
+          "source_id": "cab"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "ladle",
+          "receptacle_id": "pot"
+        }
+      },
+      {
+        "tool": "close_hinged_part",
+        "args": {
+          "target_id": "cab",
+          "part_id": "hinged"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_1": [
+            "pick_up_object ladle",
+            "place_in_receptacle ladle -> pot"
+          ]
+        },
+        "labels": "0110",
+        "weight": 0.3494,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_0": [
+            "pick_up_object ladle",
+            "place_in_receptacle ladle -> pot"
+          ]
+        },
+        "labels": "1001",
+        "weight": 0.3494,
+        "balance": 1.0,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object ladle",
+            "place_in_receptacle ladle -> pot"
+          ],
+          "agent_1": [
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "0001",
+        "weight": 0.0628,
+        "balance": 0.333,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged"
+          ],
+          "agent_1": [
+            "pick_up_object ladle",
+            "place_in_receptacle ladle -> pot",
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "0111",
+        "weight": 0.0628,
+        "balance": 0.333,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged"
+          ],
+          "agent_0": [
+            "pick_up_object ladle",
+            "place_in_receptacle ladle -> pot",
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "1000",
+        "weight": 0.0628,
+        "balance": 0.333,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object ladle",
+            "place_in_receptacle ladle -> pot"
+          ],
+          "agent_0": [
+            "close_hinged_part cab -> hinged"
+          ]
+        },
+        "labels": "1110",
+        "weight": 0.0628,
+        "balance": 0.333,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object ladle",
+            "place_in_receptacle ladle -> pot",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_1": []
+        },
+        "labels": "0000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object ladle",
+            "place_in_receptacle ladle -> pot",
+            "close_hinged_part cab -> hinged"
+          ],
+          "agent_0": []
+        },
+        "labels": "1111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

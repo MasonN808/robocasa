@@ -356,5 +356,180 @@
       }
     ]
   },
-  "notes": []
+  "notes": [],
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "cab",
+          "part_id": "hinged"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl1",
+          "source_id": "cab"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "bowl1",
+          "support_object_id": "plate1"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl2",
+          "source_id": "cab"
+        }
+      },
+      {
+        "tool": "place_on_object",
+        "args": {
+          "object_id": "bowl2",
+          "support_object_id": "plate2"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object bowl2",
+            "place_on_object bowl2 -> plate2"
+          ],
+          "agent_1": [
+            "pick_up_object bowl1",
+            "place_on_object bowl1 -> plate1"
+          ]
+        },
+        "labels": "01100",
+        "weight": 0.2424,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object bowl2",
+            "place_on_object bowl2 -> plate2"
+          ],
+          "agent_0": [
+            "pick_up_object bowl1",
+            "place_on_object bowl1 -> plate1"
+          ]
+        },
+        "labels": "10011",
+        "weight": 0.2424,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object bowl1",
+            "place_on_object bowl1 -> plate1"
+          ],
+          "agent_1": [
+            "pick_up_object bowl2",
+            "place_on_object bowl2 -> plate2"
+          ]
+        },
+        "labels": "00011",
+        "weight": 0.1818,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object bowl1",
+            "place_on_object bowl1 -> plate1"
+          ],
+          "agent_0": [
+            "pick_up_object bowl2",
+            "place_on_object bowl2 -> plate2"
+          ]
+        },
+        "labels": "11100",
+        "weight": 0.1818,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged"
+          ],
+          "agent_1": [
+            "pick_up_object bowl1",
+            "place_on_object bowl1 -> plate1",
+            "pick_up_object bowl2",
+            "place_on_object bowl2 -> plate2"
+          ]
+        },
+        "labels": "01111",
+        "weight": 0.0508,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged"
+          ],
+          "agent_0": [
+            "pick_up_object bowl1",
+            "place_on_object bowl1 -> plate1",
+            "pick_up_object bowl2",
+            "place_on_object bowl2 -> plate2"
+          ]
+        },
+        "labels": "10000",
+        "weight": 0.0508,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object bowl1",
+            "place_on_object bowl1 -> plate1",
+            "pick_up_object bowl2",
+            "place_on_object bowl2 -> plate2"
+          ],
+          "agent_1": []
+        },
+        "labels": "00000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part cab -> hinged",
+            "pick_up_object bowl1",
+            "place_on_object bowl1 -> plate1",
+            "pick_up_object bowl2",
+            "place_on_object bowl2 -> plate2"
+          ],
+          "agent_0": []
+        },
+        "labels": "11111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
+  }
 }

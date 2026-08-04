@@ -392,5 +392,180 @@
         "reasoning": "Placing the bowl on the dining counter completes the task."
       }
     ]
+  },
+  "work_partitions": {
+    "work_sequence": [
+      {
+        "tool": "open_hinged_part",
+        "args": {
+          "target_id": "toaster_oven",
+          "part_id": "door"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "toaster_oven_bread",
+          "source_id": "toaster_oven"
+        }
+      },
+      {
+        "tool": "place_in_receptacle",
+        "args": {
+          "object_id": "toaster_oven_bread",
+          "receptacle_id": "bowl"
+        }
+      },
+      {
+        "tool": "pick_up_object",
+        "args": {
+          "object_id": "bowl",
+          "source_id": "counter"
+        }
+      },
+      {
+        "tool": "place_on_surface",
+        "args": {
+          "object_id": "bowl",
+          "support_id": "dining_counter"
+        }
+      }
+    ],
+    "partitions": [
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part toaster_oven -> door",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ],
+          "agent_1": [
+            "pick_up_object toaster_oven_bread",
+            "place_in_receptacle toaster_oven_bread -> bowl"
+          ]
+        },
+        "labels": "01100",
+        "weight": 0.2424,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part toaster_oven -> door",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ],
+          "agent_0": [
+            "pick_up_object toaster_oven_bread",
+            "place_in_receptacle toaster_oven_bread -> bowl"
+          ]
+        },
+        "labels": "10011",
+        "weight": 0.2424,
+        "balance": 0.667,
+        "cross_agent_deps": 2
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part toaster_oven -> door",
+            "pick_up_object toaster_oven_bread",
+            "place_in_receptacle toaster_oven_bread -> bowl"
+          ],
+          "agent_1": [
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ]
+        },
+        "labels": "00011",
+        "weight": 0.1818,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part toaster_oven -> door",
+            "pick_up_object toaster_oven_bread",
+            "place_in_receptacle toaster_oven_bread -> bowl"
+          ],
+          "agent_0": [
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ]
+        },
+        "labels": "11100",
+        "weight": 0.1818,
+        "balance": 0.667,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part toaster_oven -> door"
+          ],
+          "agent_1": [
+            "pick_up_object toaster_oven_bread",
+            "place_in_receptacle toaster_oven_bread -> bowl",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ]
+        },
+        "labels": "01111",
+        "weight": 0.0508,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part toaster_oven -> door"
+          ],
+          "agent_0": [
+            "pick_up_object toaster_oven_bread",
+            "place_in_receptacle toaster_oven_bread -> bowl",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ]
+        },
+        "labels": "10000",
+        "weight": 0.0508,
+        "balance": 0.25,
+        "cross_agent_deps": 1
+      },
+      {
+        "assignment": {
+          "agent_0": [
+            "open_hinged_part toaster_oven -> door",
+            "pick_up_object toaster_oven_bread",
+            "place_in_receptacle toaster_oven_bread -> bowl",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ],
+          "agent_1": []
+        },
+        "labels": "00000",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      },
+      {
+        "assignment": {
+          "agent_1": [
+            "open_hinged_part toaster_oven -> door",
+            "pick_up_object toaster_oven_bread",
+            "place_in_receptacle toaster_oven_bread -> bowl",
+            "pick_up_object bowl",
+            "place_on_surface bowl"
+          ],
+          "agent_0": []
+        },
+        "labels": "11111",
+        "weight": 0.025,
+        "balance": 0.0,
+        "cross_agent_deps": 0
+      }
+    ]
   }
 }
