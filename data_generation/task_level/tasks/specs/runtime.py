@@ -487,13 +487,22 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
         # The partition rides on the instance so a retry, which reuses the
         # instance, retries the same division of work rather than drifting to
         # whichever split the model finds easiest.
-        return replace(
-            instance,
-            work_partition=select_partition(
-                (task_spec.work_partitions or {}).get("partitions"),
-                run_index,
-            ),
-        )
+        partitions = (task_spec.work_partitions or {}).get("partitions") or []
+        forced = getattr(runtime_config, "work_partition", None)
+        if forced:
+            chosen = next(
+                (p for p in partitions if p.get("labels") == forced), None
+            )
+            if chosen is None:
+                raise ValueError(
+                    f"{task_spec.composite_task} has no work partition "
+                    f"{forced!r}; available: "
+                    f"{[p.get('labels') for p in partitions]}"
+                )
+            chosen = dict(chosen)
+        else:
+            chosen = select_partition(partitions, run_index)
+        return replace(instance, work_partition=chosen)
 
     def _validator_factory(task_instance: TaskInstance | None) -> SpecDrivenTaskValidator:
         return SpecDrivenTaskValidator(

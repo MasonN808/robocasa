@@ -98,6 +98,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Max retries for trajectory generation (default: 5).",
     )
     parser.add_argument(
+        "--work-partition",
+        default=None,
+        help="Pin every run to one work partition, by its `labels` string. "
+             "For the calibration sweep that measures per-split success rate; "
+             "normal generation samples partitions by their weights.",
+    )
+    parser.add_argument(
         "--num-runs",
         type=int,
         default=1,
@@ -1131,6 +1138,7 @@ def _run_phase3(
         num_runs=args.num_runs,
         workers=args.workers,
         max_retries=args.max_retries,
+        work_partition=getattr(args, "work_partition", None),
         project=args.project,
         location=args.location or "global",
         sdk=args.sdk,

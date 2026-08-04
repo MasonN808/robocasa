@@ -60,6 +60,10 @@ class RuntimeConfig:
     temperature: float
     max_workers: int
     max_retries: int
+    # Pins every run to one work partition, identified by its `labels`.
+    # Only for the calibration sweep that measures how reliably the model
+    # can produce each split; normal generation samples them by weight.
+    work_partition: str | None = None
     random_start_location: bool = True
     parallelize_tasks: bool = False
     sampling: str = "base"
