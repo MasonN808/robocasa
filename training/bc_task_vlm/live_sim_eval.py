@@ -338,7 +338,7 @@ class AgentRuntime:
         self.waiting_for: dict[str, Any] | None = None
         self.consecutive_waits = 0
 
-    def deliver(self, step: dict[str, Any]) -> None:
+    def deliver(self, step: dict[str, Any], clock: float | None = None) -> None:
         """Appends to this agent's private history (own act or delivered msg)."""
 
         self.private_history.append(deepcopy(step))
@@ -350,6 +350,14 @@ class AgentRuntime:
             and step.get("agent") != self.agent_id
         ):
             self.waiting_for = None
+            # Resume at the moment of release. `ready_at` still holds the stale
+            # time the wait WOULD have expired, and the scheduler's catch-up
+            # cannot repair it: a freshly woken agent is exactly the one that
+            # sets the next clock minimum, so `ready_at < clock` is never true
+            # for it. It then acts in the past -- traj_000004 of
+            # arrange_bread_bowl released at t=10.5 and resumed at t=9.25.
+            if clock is not None and self.ready_at < clock:
+                self.ready_at = clock
 
     def take_observation(self) -> tuple[list[str], list[str]]:
         """Consume-once: hand over the pending observation and clear it."""
@@ -1702,7 +1710,16 @@ def run_trajectory_partial(
             runnable_times = [
                 a.ready_at for a in agents.values() if a.waiting_for is None
             ] or [a.ready_at for a in agents.values()]
-            clock = min(runnable_times)
+            # Monotonic, but only over agents that still have work. `inf` is the
+            # sentinel for an EXHAUSTED agent, and clamping upward against it
+            # pins the clock at infinity forever -- after which the catch-up
+            # below hands every other agent an infinite ready_at and nothing is
+            # ever schedulable again. Without work to order there is no time to
+            # advance to, so leave the clock where it is and let the
+            # nobody-is-ready branch decide what happens next.
+            finite = [t for t in runnable_times if t != float("inf")]
+            if finite:
+                clock = max(clock, min(finite))
             # A wait is released by a message, so the agent resumes at the
             # moment of release. Leaving its stale ready_at -- the time the
             # wait would have expired -- let it act "in the past", inverting
@@ -2002,7 +2019,7 @@ def run_trajectory_partial(
             if symbolic_step["tool"] == "communicate":
                 recipient = (symbolic_step.get("args") or {}).get("to")
                 if recipient in agents and recipient != agent.agent_id:
-                    agents[recipient].deliver(symbolic_step)
+                    agents[recipient].deliver(symbolic_step, clock=clock)
                     record["delivered_to"] = recipient
             sim_t1 = _sim_clock(session)
             measured = (
