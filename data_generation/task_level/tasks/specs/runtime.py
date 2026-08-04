@@ -18,6 +18,7 @@ from data_generation.task_level.tasks.shared.instances import (
 from data_generation.task_level.tasks.shared.partitions import select_partition
 from data_generation.task_level.tasks.shared.prompting import make_task_prompt_builder
 from data_generation.task_level.tasks.shared.schema import build_task_response_schema
+from tick_format import build_tick_response_schema
 from data_generation.task_level.tasks.shared.state import TaskRuntimeState
 from data_generation.task_level.tasks.shared.types import (
     PreflightTokenEstimate,
@@ -470,6 +471,14 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
         agent_ids=task_spec.agent_ids,
         allowed_tool_specs=model_tool_specs,
     )
+    # In tick form the model can see that an agent is blocked, so it is given
+    # wait_for_signal back and asked to place its own coordination. That is the
+    # whole point of the format: the defects the insertion pass exists to fix
+    # all come from the model not being able to see execution order.
+    tick_response_schema = build_tick_response_schema(
+        agent_ids=task_spec.agent_ids,
+        allowed_tool_specs=allowed_tool_specs,
+    )
     non_communicate_tool_names = tuple(
         tool_name for tool_name in model_tool_specs if tool_name != "communicate"
     )
@@ -528,6 +537,7 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
     return TaskDefinition(
         composite_task=task_spec.composite_task,
         response_schema=response_schema,
+        tick_response_schema=tick_response_schema,
         preflight_token_estimate=PreflightTokenEstimate(
             prompt_tokens=task_spec.preflight_token_estimate.prompt_tokens,
             output_tokens=task_spec.preflight_token_estimate.output_tokens,

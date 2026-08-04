@@ -513,6 +513,41 @@ def _unwrap_generation_response(
     return raw_response, None
 
 
+def _is_tick_format(candidate: dict[str, Any]) -> bool:
+    """Tick output is identified by shape, so no flag has to be threaded here."""
+
+    return isinstance(candidate, dict) and isinstance(candidate.get("ticks"), list)
+
+
+def _flatten_tick_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Turn tick rows into the numbered step list the FSM validates."""
+
+    from tick_format import to_steps
+
+    agent_ids = [
+        entry.get("agent")
+        for entry in (candidate.get("agents") or [])
+        if isinstance(entry, dict) and entry.get("agent")
+    ]
+    if not agent_ids:
+        # A set first: an agent appearing in several rows must still be
+        # listed once, or to_steps emits its action once per occurrence.
+        agent_ids = sorted({
+            key
+            for row in candidate["ticks"]
+            if isinstance(row, dict)
+            for key in row
+            if key != "tick"
+        })
+    flattened = dict(candidate)
+    flattened["steps"] = to_steps(candidate["ticks"], agent_ids)
+    # Keep the rows: they are what the model actually produced, and the tick
+    # numbering is not recoverable from the flat list once waits move.
+    flattened["tick_rows"] = candidate["ticks"]
+    flattened.pop("ticks", None)
+    return flattened
+
+
 def _derive_coordination(
     candidate: dict[str, Any],
     initial_state: dict[str, Any],
@@ -567,7 +602,11 @@ def _validate_candidate(
     allowed_tool_specs: dict[str, dict[str, Any]] | None = None,
     derive_coordination: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if derive_coordination and isinstance(initial_state, dict):
+    if _is_tick_format(candidate):
+        # The model wrote in execution order and placed its own waits, so there
+        # is nothing to derive -- flatten it and let the FSM judge the result.
+        candidate = _flatten_tick_candidate(candidate)
+    elif derive_coordination and isinstance(initial_state, dict):
         candidate = _derive_coordination(candidate, initial_state)
     try:
         if (

@@ -62,3 +62,6 @@ class TaskDefinition:
         dict[str, Any],
     ]
     validator_factory: Callable[[TaskInstance | None], TaskValidator]
+    # Tick-format alternative: rows of simultaneous actions rather than a
+    # flat step list. Selected per run, so both live on the definition.
+    tick_response_schema: dict[str, Any] | None = None
