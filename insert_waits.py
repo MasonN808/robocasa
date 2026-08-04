@@ -48,6 +48,8 @@ from data_generation.task_level.tasks.shared.constants import (
     DEPENDENCY_ARG_NAMES,
     EXCLUSIVE_FIXTURE_TYPES,
     FIXTURE_ARG_NAMES,
+    GIVE_SPACE_TOOL_NAMES,
+    NAVIGATION_TOOL_NAMES,
     OBSERVATION_TOOL_NAMES,
     SOCIAL_TOOL_NAMES,
 )
@@ -90,6 +92,147 @@ def _contested(step, fixtures, objects):
     return out
 
 
+def _vacates(step, fixture_id):
+    """True if this step takes the acting agent off `fixture_id`'s floor space."""
+
+    args = step.get("args") or {}
+    if step.get("tool") in GIVE_SPACE_TOOL_NAMES:
+        return str(args.get("fixture_id")) == fixture_id
+    if step.get("tool") in NAVIGATION_TOOL_NAMES:
+        return str(args.get("fixture_id")) != fixture_id
+    return False
+
+
+def _already_waiting(steps, index, actor, resource, holder):
+    """True if `actor` is standing on an undischarged wait for `resource`.
+
+    The object-contention pass runs first and may already have guarded this very
+    approach; a second wait on top of it would be redundant, and two waits with
+    one release apiece read to the FSM as one that nobody answered. Scanning
+    back stops at the actor's own last non-social step, since anything before
+    that was already discharged.
+    """
+
+    for j in range(index - 1, -1, -1):
+        step = steps[j]
+        if step.get("agent") != actor:
+            continue
+        args = step.get("args") or {}
+        if (step.get("tool") == "wait_for_signal"
+                and str(args.get("about")) == resource
+                and args.get("from") == holder):
+            return True
+        if step.get("tool") not in SOCIAL_TOOL_NAMES:
+            return False
+    return False
+
+
+def _insert_occupancy_waits(steps, fixtures, locations, rng):
+    """Guards exclusive fixtures whose approach a second robot is standing in.
+
+    Distinct from object contention: nobody touches the same thing. An exclusive
+    fixture mounted on a roomy one -- a toaster_oven sitting on a counter -- is
+    reached from its parent's floor space, so a robot merely standing at that
+    counter blocks the approach and MuJoCo refuses the navigation outright. It
+    shows up on the first move, before any object is picked up, which is why
+    tracking what has been *used* never sees it: the occupant is just standing
+    where it started.
+
+    The occupant's departure is read from the STARTING layout, not from where
+    plan order has since put it. A plan that plausibly reads "agent_1 steps
+    aside, then agent_0 moves in" carries no such guarantee: the two steps
+    become ready at the same instant and the scheduler serves whichever agent it
+    likes, so agent_0 can navigate before agent_1 has physically moved. Only a
+    message orders two agents, so occupancy persists until a wait discharges it.
+    """
+
+    occupied: dict[str, set[str]] = {}
+    for agent, where in locations.items():
+        if isinstance(where, str):
+            occupied.setdefault(where, set()).add(agent)
+
+    standing = dict(locations)
+    before: dict[int, list[dict]] = {}
+    after: dict[int, list[dict]] = {}
+    inserted = 0
+    for index, step in enumerate(steps):
+        actor = step.get("agent")
+        # give_space is a departure. Only an arrival can be blocked.
+        needs = () if step.get("tool") in GIVE_SPACE_TOOL_NAMES else _contested(
+            step, fixtures, set()
+        )
+        for needed in needs:
+            spec = fixtures.get(needed) or {}
+            if str(spec.get("fixture_type", "")).lower() not in EXCLUSIVE_FIXTURE_TYPES:
+                continue
+            # Already at the fixture: the approach happened before anyone could
+            # be in the way, and its parent's floor space is now irrelevant.
+            if standing.get(actor) == needed:
+                continue
+            # the approach is blocked at the fixture itself or at its parent
+            for blocking in (needed, spec.get("parent_fixture")):
+                if not isinstance(blocking, str):
+                    continue
+                for occupant in sorted(occupied.get(blocking, set()) - {actor}):
+                    leaves = next(
+                        (j for j in range(len(steps))
+                         if steps[j].get("agent") == occupant
+                         and _vacates(steps[j], blocking)),
+                        None,
+                    )
+                    if leaves is None:
+                        continue  # occupant never moves; a wait would deadlock
+                    if _already_waiting(steps, index, actor, needed, occupant):
+                        occupied[blocking].discard(occupant)
+                        continue
+                    # The wait names the fixture being approached, not the
+                    # ground it is approached over. A roomy parent gets used
+                    # again by both agents later, and the FSM rightly rejects a
+                    # release the sender goes on to contradict; what is really
+                    # being handed over is the way in to `needed`.
+                    before.setdefault(index, []).extend([
+                        {"agent": actor, "tool": "communicate",
+                         "args": {"to": occupant,
+                                  "message": f"I cannot get to {needed} while "
+                                             f"you are standing at {blocking}."},
+                         "reasoning": f"{occupant} is blocking the approach to "
+                                      f"{needed}."},
+                        {"agent": actor, "tool": "wait_for_signal",
+                         "args": {"from": occupant, "about": needed},
+                         "reasoning": f"Waiting for the way to {needed}."},
+                    ])
+                    release = {
+                        "agent": occupant, "tool": "communicate",
+                        "args": {"to": actor,
+                                 "message": f"I have moved off {blocking}, so "
+                                            f"{needed} is clear for you now."},
+                        "reasoning": f"I am out of the way of {needed}.",
+                    }
+                    # If the departure is already behind us in plan order the
+                    # release is simply true on arrival; otherwise it waits for
+                    # the step that actually moves the occupant.
+                    if leaves < index:
+                        before[index].append(release)
+                    else:
+                        after.setdefault(leaves, []).append(release)
+                    occupied[blocking].discard(occupant)
+                    inserted += 1
+        args = step.get("args") or {}
+        if step.get("tool") in NAVIGATION_TOOL_NAMES:
+            standing[actor] = args.get("fixture_id")
+        elif step.get("tool") in GIVE_SPACE_TOOL_NAMES:
+            standing[actor] = None
+
+    if not inserted:
+        return steps, 0
+    out: list[dict] = []
+    for index, step in enumerate(steps):
+        out.extend(before.get(index, []))
+        out.append(step)
+        out.extend(after.get(index, []))
+    return out, inserted
+
+
 def _guarded(steps, upto, actor, resource, holder, since):
     return any(
         s.get("tool") == "wait_for_signal"
@@ -100,7 +243,7 @@ def _guarded(steps, upto, actor, resource, holder, since):
     )
 
 
-def insert(steps, fixtures, objects, rng):
+def insert(steps, fixtures, objects, rng, locations=None):
     """Returns (new_steps, inserted_count).
 
     Model-written waits are discarded first. Placement is decidable from the
@@ -138,6 +281,9 @@ def insert(steps, fixtures, objects, rng):
         out.append(step)
         for resource in _contested(step, fixtures, objects):
             held[resource] = (actor, index)
+
+    out, occupancy = _insert_occupancy_waits(out, fixtures, locations or {}, rng)
+    inserted += occupancy
 
     # The model's own waits often carry a degenerate release -- a message whose
     # entire text is the id, which discharges nothing. Give those a real one.
@@ -261,7 +407,12 @@ def main() -> int:
         initial = payload.get("initial_state") or {}
         steps = payload.get("steps") or []
         new_steps, inserted = insert(
-            steps, initial.get("fixtures") or {}, set(initial.get("objects") or {}), rng
+            steps,
+            initial.get("fixtures") or {},
+            set(initial.get("objects") or {}),
+            rng,
+            {a: (s or {}).get("location")
+             for a, s in (initial.get("agents") or {}).items()},
         )
         stats["trajectories"] += 1
         stats["inserted"] += inserted
