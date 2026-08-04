@@ -306,6 +306,50 @@ class ContentionTests(unittest.TestCase):
         self.assertTrue(any("cab" in c for c in run.conflicts))
 
 
+class PromptedProtocolTests(unittest.TestCase):
+    """The handover written into TICK_FORMAT_RULES must actually work.
+
+    The rules show the model a four-part shape. If the implementation and the
+    example ever disagree, the model is being taught to produce deadlocks --
+    which is exactly what the first tick A/B measured, so pin it here.
+    """
+
+    def _handover(self):
+        return plan(
+            *OPEN,
+            step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+            step("agent_1", "communicate", to="agent_0",
+                 message="tell me when the cabinet is free"),
+            step("agent_0", "give_space", fixture_id="cab"),
+            step("agent_0", "communicate", to="agent_1", message="cab is yours now",
+                 releases=["cab"]),
+            step("agent_1", "wait_for_signal", **{"from": "agent_0", "about": "cab"}),
+            step("agent_1", "navigate_to_fixture", fixture_id="cab"),
+        )
+
+    def test_the_prompted_handover_runs_clean(self):
+        for model in (LOCK_STEP, EXECUTOR):
+            with self.subTest(model=model):
+                run = build().replay(self._handover(), model=model)
+                self.assertFalse(run.deadlocked)
+                self.assertEqual(run.conflicts, [])
+
+    def test_the_rules_state_the_release_obligation(self):
+        import tick_format
+
+        text = "\n".join(tick_format.TICK_FORMAT_RULES)
+        self.assertIn("releases", text)
+        self.assertIn("give_space", text, "rule 7 couples release to departure")
+        self.assertIn("blocked or on a later one", text)
+
+    def test_dropping_the_release_from_the_prompted_shape_deadlocks(self):
+        # The failure mode the rules exist to prevent, held fixed.
+        steps = [s for s in self._handover()["steps"]
+                 if not (s.get("args") or {}).get("releases")]
+        run = build().replay(plan(*steps), model=LOCK_STEP)
+        self.assertTrue(run.deadlocked)
+
+
 class GoalTests(unittest.TestCase):
     def test_work_begun_after_the_goal_is_reported(self):
         # The goal lands on the two navigates at t=1; the give_space at t=2 is

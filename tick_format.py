@@ -176,10 +176,36 @@ TICK_FORMAT_RULES: tuple[str, ...] = (
     "wait_for_signal(from, about) blocks the calling agent until the other "
     "agent sends a communicate whose releases names the same id. Nothing else "
     "wakes it, so put the wait where the agent genuinely cannot proceed.",
+    "A WAIT IS HALF A PROTOCOL, AND YOU MUST WRITE BOTH HALVES. Every "
+    "wait_for_signal(from=X, about=R) you write obliges agent X to send "
+    "communicate(to=<waiter>, releases=[\"R\"]) on the tick the waiter is "
+    "blocked or on a later one, naming R exactly. A plain message does not "
+    "count -- only the releases field wakes "
+    "the waiter. If you write the wait and forget X's release, that agent "
+    "never moves again and every remaining tick of the plan is dead. Before "
+    "you finish, go through your waits one by one and find the matching "
+    "release for each.",
+    "Release only what you have genuinely let go of. Before X sends "
+    "releases=[\"R\"]: if R is a fixture, X must already have called "
+    "give_space on it or navigated somewhere else; if R is an object, X must "
+    "have put it down. Saying \"you can take it\" while still standing at the "
+    "fixture is not a handover -- the other agent arrives and you are both "
+    "there.",
     "Order what an agent says around what it is about to do. If you are about "
     "to be held up, ask BEFORE announcing that you are on your way: say "
     "\"tell me when the machine is free\", wait, and only then say \"heading "
     "over\". Announcing a move you cannot make yet is wrong.",
+    "A handover has four parts and they go in this order:\n"
+    "    tick 3  agent_1: communicate(to=agent_0, message=\"tell me when the "
+    "cabinet is free\")\n"
+    "    tick 5  agent_0: give_space(fixture_id=\"cab\")          <- actually "
+    "leaves\n"
+    "    tick 6  agent_0: communicate(to=agent_1, releases=[\"cab\"])\n"
+    "            agent_1: wait_for_signal(from=agent_0, about=\"cab\")\n"
+    "    tick 7  agent_1: navigate_to_fixture(fixture_id=\"cab\")\n"
+    "Put the release on the same tick the waiter is blocked, or on a later "
+    "one. A release sent BEFORE the waiter started waiting is never delivered "
+    "to it and does not count -- the waiter blocks forever.",
     "Being idle is a cost. If an agent has nothing to do for many ticks, the "
     "work is badly divided -- give it something, or shorten the wait.",
 )
