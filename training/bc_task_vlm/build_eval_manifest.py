@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 from training.bc_task_vlm.dataset import (
+    DEFAULT_PARTIAL_STEP_INDEX_MODE,
+    PARTIAL_STEP_INDEX_MODES,
     SFT_FORMAT_PLAIN,
     build_centralized_examples,
     list_task_trajectory_ids,
@@ -74,8 +76,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--partial-step-index-mode",
-        choices=("global", "local", "none"),
-        default="global",
+        choices=PARTIAL_STEP_INDEX_MODES,
+        default=DEFAULT_PARTIAL_STEP_INDEX_MODE,
     )
     parser.add_argument(
         "--partial-observation-mode",
@@ -134,7 +136,7 @@ def build_manifest(
     config: dict[str, Any],
     train_get_image: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "global",
+    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
     partial_observation_mode: str = "consume_once",
 ) -> dict[str, Any]:
     task_names = sorted(trajectory_ids_by_task)

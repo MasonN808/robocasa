@@ -2364,7 +2364,14 @@ def _generate_once(
     if partial:
         # The caller is the actor: no agent prediction, no joint step index,
         # and observation ownership is implicit in the private state.
-        index_mode = getattr(args, "partial_step_index_mode", "none")
+        from training.bc_task_vlm.dataset import DEFAULT_PARTIAL_STEP_INDEX_MODE
+
+        # Was "none" here, "local" in training, "global" in the other two
+        # evaluators. A missing attribute must not silently mean a different
+        # prompt than the model was trained on.
+        index_mode = getattr(
+            args, "partial_step_index_mode", DEFAULT_PARTIAL_STEP_INDEX_MODE
+        )
         if index_mode == "local":
             prompt_step_index: int | None = len(history)
             step_index_label = "Next local agent turn index"

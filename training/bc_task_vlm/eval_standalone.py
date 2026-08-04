@@ -36,6 +36,8 @@ from pathlib import Path
 from typing import Any
 
 from training.bc_task_vlm.dataset import (
+    DEFAULT_PARTIAL_STEP_INDEX_MODE,
+    PARTIAL_STEP_INDEX_MODES,
     SFT_FORMAT_PLAIN,
     SUPPORTED_SFT_FORMATS,
     build_centralized_examples,
@@ -147,8 +149,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--partial-step-index-mode",
-        choices=("global", "local", "none"),
-        default="global",
+        choices=PARTIAL_STEP_INDEX_MODES,
+        default=DEFAULT_PARTIAL_STEP_INDEX_MODE,
         help=(
             "With --partial-history: how step indices are rendered. 'global' "
             "keeps the joint demonstration index (leaks the other agent's "
@@ -377,7 +379,7 @@ def load_eval_samples(
     train_get_image: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "global",
+    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
     partial_observation_mode: str = "cache",
 ) -> list[EvalSample]:
     manifest_samples = manifest["samples"]

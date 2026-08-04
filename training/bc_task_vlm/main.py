@@ -30,6 +30,8 @@ except ImportError:  # pragma: no cover - compatibility with older transformers
     from transformers import AutoModelForVision2Seq as AutoVisionLanguageModel
 
 from training.bc_task_vlm.dataset import (
+    DEFAULT_PARTIAL_STEP_INDEX_MODE,
+    PARTIAL_STEP_INDEX_MODES,
     CentralizedDataset,
     LazyVisionSFTCollator,
     SFT_FORMAT_PLAIN,
@@ -270,8 +272,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--partial-step-index-mode",
-        choices=("global", "local", "none"),
-        default="local",
+        choices=PARTIAL_STEP_INDEX_MODES,
+        default=DEFAULT_PARTIAL_STEP_INDEX_MODE,
         help=(
             "With --partial-history: how step indices are rendered. 'local' "
             "(default) renumbers per agent, giving a step count that does not "

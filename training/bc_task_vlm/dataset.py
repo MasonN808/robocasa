@@ -87,6 +87,13 @@ SUPPORTED_SFT_FORMATS = (SFT_FORMAT_PLAIN, SFT_FORMAT_TOOL_CALL)
 # the gaps between this agent's turns); "local" renumbers per agent; "none"
 # omits indices from the prompt entirely. See the design doc's decision #8.
 _PARTIAL_STEP_INDEX_MODES = ("global", "local", "none")
+PARTIAL_STEP_INDEX_MODES = _PARTIAL_STEP_INDEX_MODES
+# ONE default, shared by training and every evaluator. They used to disagree
+# three ways -- training "local", build_eval_manifest and eval_standalone
+# "global", live_sim_eval's getattr fallback "none" -- so any run that did not
+# pass the flag explicitly evaluated a model on prompts it was never trained
+# on, and an A/B on this axis would measure the mismatch, not the ablation.
+DEFAULT_PARTIAL_STEP_INDEX_MODE = "local"
 # How partial-observability prompts supply pixels.
 #   "cache"        - persistent per-agent latest observation (design-doc default)
 #   "consume_once" - a get_image result feeds that agent's NEXT target tool
