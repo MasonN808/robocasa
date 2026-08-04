@@ -163,13 +163,20 @@ def _error_event_key(error_event: dict[str, Any]) -> tuple[Any, ...]:
     trajectory_identity = error_event.get("trajectory_id")
     if trajectory_identity in {None, ""}:
         trajectory_identity = error_event.get("trajectory_index", -1)
+    # These are coerced because the key is SORTED, not merely hashed, and one
+    # batch can carry both shapes: verbalized sampling fails a whole run before
+    # any trajectory_id exists (an int index) alongside per-trajectory failures
+    # that have one (a str id). Comparing the two raised "'<' not supported
+    # between instances of 'str' and 'int'" and took the entire run's payload
+    # down at the very end -- after every API call had already been paid for.
+    attempt_number = error_event.get("attempt_number", -1)
     return (
-        trajectory_identity,
-        error_event.get("attempt_number", -1),
-        error_event.get("stage", ""),
-        error_event.get("error_type", ""),
-        error_event.get("message", ""),
-        error_event.get("saved_in_output", False),
+        str(trajectory_identity),
+        attempt_number if isinstance(attempt_number, int) else -1,
+        str(error_event.get("stage", "")),
+        str(error_event.get("error_type", "")),
+        str(error_event.get("message", "")),
+        bool(error_event.get("saved_in_output", False)),
     )
 
 

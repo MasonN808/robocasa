@@ -70,7 +70,17 @@ One variable at a time, same two tasks every time so the numbers compare.
 
 Baseline is job **266619**: PrepareCoffee + AddSugarCubes, 10 runs each, 4
 workers, `base` strategy, thinking `null` -> 20 trajectories, **$1.3888**,
-~4 min wall.
+**7:24 wall** (sacct; an earlier "~4 min" eyeball estimate was wrong).
+
+## Results
+
+| probe | traj | valid | cost | reason tok/traj | cost/valid | wall |
+|---|---|---|---|---|---|---|
+| baseline, uncapped | 20 | 20 | $1.3888 | 21,335 | $0.0694 | 7:24 |
+| `--thinking-level medium` | 20 | 20 | $0.9999 | 15,068 | $0.0500 | 5:25 |
+
+`medium` is a clear win: **-28% cost, -27% wall, validity unchanged at 20/20**.
+The extra thinking the uncapped run did was not buying correctness.
 
 Report for each probe: wall clock, total cost, cost/valid trajectory, valid
 fraction, and retries used. **Validity is the guard** — a config that halves

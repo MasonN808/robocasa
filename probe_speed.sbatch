@@ -39,9 +39,12 @@ EXTRA=()
 
 case "$PROBE" in
   think)    EXTRA=(--thinking-level medium) ;;
-  verbal)   EXTRA=(--verbalized-k 4); RUNS=3 ;;   # 3 runs x k=4 ~= 12 traj
+  verbal)   EXTRA=(--sampling verbalized --verbalized-k 4); RUNS=3 ;;  # k=4 needs the strategy too
+  verbal2)  EXTRA=(--sampling verbalized --verbalized-k 2); RUNS=5 ;;  # k=4 broke PrepareCoffee:
+                                                                      # Vertex 400, response count
+                                                                      # exceeds request limits
   workers)  WORKERS=12 ;;
-  combined) EXTRA=(--thinking-level medium --verbalized-k 4); RUNS=3; WORKERS=12 ;;
+  combined) EXTRA=(--thinking-level medium --sampling verbalized --verbalized-k 4); RUNS=3; WORKERS=12 ;;
   *) echo "unknown PROBE=$PROBE"; exit 1 ;;
 esac
 
