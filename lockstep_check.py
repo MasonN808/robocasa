@@ -24,126 +24,16 @@ import json
 import os
 from collections import Counter
 
-from insert_waits import (
-    EXCLUSIVE_FIXTURE_TYPES,
-    GIVE_SPACE_TOOL_NAMES,
-    FIXTURE_ARG_NAMES,
-    OBSERVATION_TOOL_NAMES,
-    SOCIAL_TOOL_NAMES,
-    _contested,
-)
-
-WAIT_TOOL = "wait_for_signal"
-
-
-def _released_ids(step):
-    """Symbolic ids this communicate hands over."""
-
-    value = (step.get("args") or {}).get("releases") or []
-    return {value} if isinstance(value, str) else {str(v) for v in value}
-
-
-def schedule(steps):
-    """Assign each step the tick it runs at under lock-step.
-
-    Mirrors the live-sim scheduler: at each tick every agent that is not
-    blocked on an undischarged wait executes its next step, all at once.
-
-    Returns (ticks, deadlocked) where ticks[i] is the tick of steps[i], or
-    None for steps never reached because the agents deadlocked.
-    """
-
-    order: dict[str, list[int]] = {}
-    for index, step in enumerate(steps):
-        order.setdefault(step.get("agent"), []).append(index)
-
-    pointer = {agent: 0 for agent in order}
-    ticks: list[int | None] = [None] * len(steps)
-    released: set[tuple[str, str]] = set()  # (releasing agent, id)
-    tick = 0
-
-    while True:
-        runnable = []
-        for agent, indices in order.items():
-            if pointer[agent] >= len(indices):
-                continue
-            index = indices[pointer[agent]]
-            step = steps[index]
-            if step.get("tool") == WAIT_TOOL:
-                args = step.get("args") or {}
-                key = (args.get("from"), str(args.get("about")))
-                if key not in released:
-                    continue  # still blocked
-            runnable.append((agent, index))
-
-        if not runnable:
-            break
-
-        # Every runnable agent acts at this same tick -- that is lock-step.
-        for agent, index in runnable:
-            ticks[index] = tick
-            step = steps[index]
-            if step.get("tool") == "communicate":
-                for released_id in _released_ids(step):
-                    released.add((agent, released_id))
-            pointer[agent] += 1
-        tick += 1
-
-    deadlocked = any(pointer[a] < len(order[a]) for a in order)
-    return ticks, deadlocked
-
-
-def _footprint(step, fixtures, objects):
-    """What this step occupies: contested ids plus the floor space it stands on."""
-
-    if step.get("tool") in SOCIAL_TOOL_NAMES or step.get("tool") in OBSERVATION_TOOL_NAMES:
-        return set()
-    # give_space is a departure, not a claim. One agent stepping off a fixture
-    # while the other steps on is the handoff working, not a collision --
-    # insert_waits takes the same view and never guards it.
-    if step.get("tool") in GIVE_SPACE_TOOL_NAMES:
-        return set()
-    out = set(_contested(step, fixtures, objects))
-    # Two agents cannot approach one exclusive fixture at the same instant even
-    # when they touch different objects there, and a fixture standing on
-    # another shares its floor space.
-    args = step.get("args") or {}
-    for name in FIXTURE_ARG_NAMES:
-        value = args.get(name)
-        if not isinstance(value, str):
-            continue
-        spec = fixtures.get(value) or {}
-        kind = str(spec.get("fixture_type", "")).lower()
-        if kind in EXCLUSIVE_FIXTURE_TYPES:
-            out.add(value)
-            parent = spec.get("parent_fixture")
-            if isinstance(parent, str):
-                out.add(parent)
-    return out
+# One source of truth: the schedule and footprint model live with the pass
+# that acts on them, so the checker cannot drift from the inserter.
+from insert_waits import footprint, schedule, tick_collisions  # noqa: F401
 
 
 def collisions(steps, fixtures, objects):
-    """Pairs of steps that run at the same tick and touch the same thing."""
+    """Pairs sharing a tick whose footprints intersect, plus deadlock state."""
 
-    ticks, deadlocked = schedule(steps)
-    by_tick: dict[int, list[int]] = {}
-    for index, tick in enumerate(ticks):
-        if tick is not None:
-            by_tick.setdefault(tick, []).append(index)
-
-    found = []
-    for tick, indices in sorted(by_tick.items()):
-        if len(indices) < 2:
-            continue
-        prints = {i: _footprint(steps[i], fixtures, objects) for i in indices}
-        for position, left in enumerate(indices):
-            for right in indices[position + 1 :]:
-                if steps[left].get("agent") == steps[right].get("agent"):
-                    continue
-                shared = prints[left] & prints[right]
-                if shared:
-                    found.append((tick, left, right, sorted(shared)))
-    return found, deadlocked
+    _, deadlocked = schedule(steps)
+    return tick_collisions(steps, fixtures, objects), deadlocked
 
 
 def main() -> int:

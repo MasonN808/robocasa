@@ -415,6 +415,10 @@ class SpecDrivenTaskValidator(FiniteStateTaskValidator):
         return True
 
 
+# Tools the pipeline fills in after generation; the model never emits them.
+DERIVED_TOOL_NAMES = frozenset({"wait_for_signal"})
+
+
 def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
     """Build one runtime TaskDefinition from a JSON-backed task spec."""
 
@@ -452,18 +456,28 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
         }
 
     allowed_tool_specs = build_allowed_tool_specs(tuple(tool_names), overrides=overrides)
+    # Waits are derived from the finished plan, not written by the model, so it
+    # is never shown the tool. Asking for them cost tokens and drove the FSM's
+    # repair loop in circles -- the model adds the wait it is told about, that
+    # wait is then unreleased, and the next attempt removes it again. The
+    # validator still accepts them, because it sees the derived trajectory.
+    model_tool_specs = {
+        name: spec
+        for name, spec in allowed_tool_specs.items()
+        if name not in DERIVED_TOOL_NAMES
+    }
     response_schema = build_task_response_schema(
         agent_ids=task_spec.agent_ids,
-        allowed_tool_specs=allowed_tool_specs,
+        allowed_tool_specs=model_tool_specs,
     )
     non_communicate_tool_names = tuple(
-        tool_name for tool_name in allowed_tool_specs if tool_name != "communicate"
+        tool_name for tool_name in model_tool_specs if tool_name != "communicate"
     )
     build_prompt = make_task_prompt_builder(
         composite_task=task_spec.composite_task,
         task_goal=task_spec.task_goal,
         initial_state=task_spec.initial_state,
-        allowed_tool_specs=allowed_tool_specs,
+        allowed_tool_specs=model_tool_specs,
         non_communicate_tool_names=non_communicate_tool_names,
         task_preconditions=task_spec.task_preconditions,
         task_effects=task_spec.task_effects,

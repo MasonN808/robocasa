@@ -191,18 +191,18 @@ def _insert_occupancy_waits(steps, fixtures, locations, rng):
                     # release the sender goes on to contradict; what is really
                     # being handed over is the way in to `needed`.
                     before.setdefault(index, []).extend([
-                        {"agent": actor, "tool": "communicate",
+                        {"agent": actor, "tool": "communicate", "derived": True,
                          "args": {"to": occupant,
                                   "message": f"I cannot get to {needed} while "
                                              f"you are standing at {blocking}."},
                          "reasoning": f"{occupant} is blocking the approach to "
                                       f"{needed}."},
-                        {"agent": actor, "tool": "wait_for_signal",
+                        {"agent": actor, "tool": "wait_for_signal", "derived": True,
                          "args": {"from": occupant, "about": needed},
                          "reasoning": f"Waiting for the way to {needed}."},
                     ])
                     release = {
-                        "agent": occupant, "tool": "communicate",
+                        "agent": occupant, "tool": "communicate", "derived": True,
                         "args": {"to": actor,
                                  "message": f"I have moved off {blocking}, so "
                                             f"{needed} is clear for you now.",
@@ -248,6 +248,136 @@ def _insert_occupancy_waits(steps, fixtures, locations, rng):
     return out, inserted
 
 
+def schedule(steps):
+    """Assign each step the tick it runs at under lock-step.
+
+    Every call costs one tick, so at each tick every agent not blocked on an
+    undischarged wait acts -- all at once. Returns (ticks, deadlocked); a step
+    the agents never reach has tick None.
+    """
+
+    order: dict[str, list[int]] = {}
+    for index, step in enumerate(steps):
+        order.setdefault(step.get("agent"), []).append(index)
+
+    pointer = {agent: 0 for agent in order}
+    ticks: list[int | None] = [None] * len(steps)
+    released: set[tuple[str, str]] = set()
+    tick = 0
+    while True:
+        runnable = []
+        for agent, indices in order.items():
+            if pointer[agent] >= len(indices):
+                continue
+            index = indices[pointer[agent]]
+            step = steps[index]
+            if step.get("tool") == "wait_for_signal":
+                args = step.get("args") or {}
+                if (args.get("from"), str(args.get("about"))) not in released:
+                    continue
+            runnable.append((agent, index))
+        if not runnable:
+            break
+        for agent, index in runnable:
+            ticks[index] = tick
+            step = steps[index]
+            if step.get("tool") == "communicate":
+                value = (step.get("args") or {}).get("releases") or []
+                for released_id in ([value] if isinstance(value, str) else value):
+                    released.add((agent, str(released_id)))
+            pointer[agent] += 1
+        tick += 1
+    return ticks, any(pointer[a] < len(order[a]) for a in order)
+
+
+def footprint(step, fixtures, objects):
+    """What a step occupies: contested ids plus the floor space it stands on."""
+
+    tool = step.get("tool")
+    if tool in SOCIAL_TOOL_NAMES or tool in OBSERVATION_TOOL_NAMES:
+        return set()
+    # A departure is not a claim: one agent stepping off while the other steps
+    # on is the handoff working.
+    if tool in GIVE_SPACE_TOOL_NAMES:
+        return set()
+    out = set(_contested(step, fixtures, objects))
+    args = step.get("args") or {}
+    for name in FIXTURE_ARG_NAMES:
+        value = args.get(name)
+        if not isinstance(value, str):
+            continue
+        spec = fixtures.get(value) or {}
+        if str(spec.get("fixture_type", "")).lower() in EXCLUSIVE_FIXTURE_TYPES:
+            out.add(value)
+            parent = spec.get("parent_fixture")
+            if isinstance(parent, str):
+                out.add(parent)
+    return out
+
+
+def tick_collisions(steps, fixtures, objects):
+    """Pairs of steps sharing a tick whose footprints intersect."""
+
+    ticks, _ = schedule(steps)
+    by_tick: dict[int, list[int]] = {}
+    for index, tick in enumerate(ticks):
+        if tick is not None:
+            by_tick.setdefault(tick, []).append(index)
+    found = []
+    for tick, indices in sorted(by_tick.items()):
+        if len(indices) < 2:
+            continue
+        prints = {i: footprint(steps[i], fixtures, objects) for i in indices}
+        for position, left in enumerate(indices):
+            for right in indices[position + 1 :]:
+                if steps[left].get("agent") == steps[right].get("agent"):
+                    continue
+                shared = prints[left] & prints[right]
+                if shared:
+                    found.append((tick, left, right, sorted(shared)))
+    return found
+
+
+def _insert_lockstep_waits(steps, fixtures, objects, rng, max_rounds=8):
+    """Order agents that would otherwise act on the same tick.
+
+    The occupancy pass asks "is anyone standing there when I reach this line",
+    which is a question about plan order -- and plan order is not execution
+    order. Written adjacency constrains nothing; only a wait and its release
+    do. candle_cleanup/traj_000025 alternates at the cabinet perfectly on the
+    page while agent_1 arrives seven ticks before agent_0 leaves.
+
+    Inserting a wait shifts every later tick, so this runs to a fixpoint.
+    """
+
+    inserted = 0
+    for _ in range(max_rounds):
+        found = tick_collisions(steps, fixtures, objects)
+        if not found:
+            break
+        _, left, right, shared = found[0]
+        first, second = (left, right) if left < right else (right, left)
+        holder = steps[first].get("agent")
+        waiter = steps[second].get("agent")
+        resource = shared[0]
+        block = [
+            {"agent": waiter, "tool": "communicate", "derived": True,
+             "args": {"to": holder, "message": rng.choice(ASKS).format(x=resource)},
+             "reasoning": f"I need {resource} and must wait."},
+            {"agent": waiter, "tool": "wait_for_signal", "derived": True,
+             "args": {"from": holder, "about": resource},
+             "reasoning": f"Waiting for {resource}."},
+            {"agent": holder, "tool": "communicate", "derived": True,
+             "args": {"to": waiter,
+                      "message": rng.choice(FREES).format(x=resource),
+                      "releases": resource},
+             "reasoning": f"I am done with {resource}."},
+        ]
+        steps = steps[:second] + block + steps[second:]
+        inserted += 1
+    return steps, inserted
+
+
 def _guarded(steps, upto, actor, resource, holder, since):
     return any(
         s.get("tool") == "wait_for_signal"
@@ -269,7 +399,13 @@ def insert(steps, fixtures, objects, rng, locations=None):
     deadlock breaker fires. Deriving every wait here keeps one source of truth.
     """
 
-    steps = [s for s in steps if s.get("tool") != "wait_for_signal"]
+    # Strip both the model's waits and anything a previous run of this pass
+    # derived. Without the second half the pass is not idempotent: the waits
+    # come back but the ask and release messages around them accumulate.
+    steps = [
+        s for s in steps
+        if s.get("tool") != "wait_for_signal" and not s.get("derived")
+    ]
     held: dict[str, tuple[str, int]] = {}
     out: list[dict] = []
     inserted = 0
@@ -281,14 +417,14 @@ def insert(steps, fixtures, objects, rng, locations=None):
                 continue
             if _guarded(steps, index, actor, resource, holder, at):
                 continue
-            out.append({"agent": actor, "tool": "communicate",
+            out.append({"agent": actor, "tool": "communicate", "derived": True,
                         "args": {"to": holder,
                                  "message": rng.choice(ASKS).format(x=resource)},
                         "reasoning": f"I need {resource} and must wait."})
-            out.append({"agent": actor, "tool": "wait_for_signal",
+            out.append({"agent": actor, "tool": "wait_for_signal", "derived": True,
                         "args": {"from": holder, "about": resource},
                         "reasoning": f"Waiting for {resource}."})
-            out.append({"agent": holder, "tool": "communicate",
+            out.append({"agent": holder, "tool": "communicate", "derived": True,
                         "args": {"to": actor,
                                  "message": rng.choice(FREES).format(x=resource),
                                  "releases": resource},
@@ -341,7 +477,7 @@ def insert(steps, fixtures, objects, rng, locations=None):
             default=index,
         )
         pending[last_use] = {
-            "agent": holder, "tool": "communicate",
+            "agent": holder, "tool": "communicate", "derived": True,
             "args": {"to": step["agent"],
                      "message": rng.choice(FREES).format(x=about),
                      "releases": about},
@@ -365,6 +501,11 @@ def insert(steps, fixtures, objects, rng, locations=None):
         repaired.append(step)
         if index in pending:
             repaired.append(pending.pop(index))
+
+    # Last, because the schedule is only meaningful once every wait has its
+    # release -- an undischarged wait reads as a deadlock, not as a tick.
+    repaired, lockstep = _insert_lockstep_waits(repaired, fixtures, objects, rng)
+    inserted += lockstep
 
     for number, step in enumerate(repaired):
         step["step"] = number
