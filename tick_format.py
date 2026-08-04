@@ -202,6 +202,17 @@ TICK_FORMAT_RULES: tuple[str, ...] = (
     "that tells the other agent a handover is owed. Ask, then wait, with "
     "nothing in between: doing other work in the gap means you were not "
     "actually stuck.",
+    "COUNT THE ROWS. The release must sit on a strictly LATER row than the "
+    "wait: if wait_for_signal is on tick 4, the communicate that releases it "
+    "goes on tick 5 or after, never on tick 4. Landing them on the same tick "
+    "is a coin flip in the simulator -- the message is delivered to an agent "
+    "that may not be waiting yet, and when it loses that race the agent hangs "
+    "forever. Before you finish, find each wait, find its release, and compare "
+    "the two tick numbers.",
+    "If you are about to write a wait, check first whether anything is really "
+    "in your way. An agent with nothing else to do tends to write a wait out of "
+    "politeness, for a resource the other agent has already left. That wait is "
+    "not free -- it is the coin flip above, for nothing. No contention, no wait.",
     "The whole handover must be in this time order: the waiter blocks FIRST, "
     "and only then does the holder let go. A release only wakes an agent that "
     "is ALREADY waiting, so a release -- or a give_space -- that comes before "
