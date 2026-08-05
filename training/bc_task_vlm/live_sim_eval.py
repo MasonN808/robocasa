@@ -343,6 +343,43 @@ def _tool_duration(
     return duration
 
 
+def observation_ready_at(
+    clock: float,
+    *,
+    consecutive_obs: int,
+    max_free_observations: int,
+    multiplier: float,
+) -> tuple[float, int, bool]:
+    """(ready_at, new consecutive count, capped) for one completed get_image.
+
+    Observation is instrumentation, not work, so it must not move the agent's
+    clock: an agent's clock advances per call IT makes, so charging cameras made
+    the agent that acts more also drift ahead, and releases then landed before
+    their waiters blocked. That rejected 47 of 1550 corpus trajectories in the
+    concurrent validator, where the charge was removed -- the executor has to
+    agree with the gate that certified the plan.
+
+    Staying at `clock` re-admits the agent at this instant so it can emit its
+    real action. The cap exists because a model that emits nothing but get_image
+    would otherwise freeze the clock forever and starve its partner; past the
+    cap the observation is charged normally.
+    """
+
+    if max_free_observations <= 0:
+        return (
+            clock + _tool_duration("get_image", sim_steps=None, multiplier=multiplier),
+            0,
+            False,
+        )
+    consecutive_obs += 1
+    if consecutive_obs > max_free_observations:
+        charged = clock + _tool_duration(
+            "get_image", sim_steps=None, multiplier=multiplier
+        )
+        return charged, 0, True
+    return clock, consecutive_obs, False
+
+
 _LENIENT_WAIT_DISCHARGE = False
 
 
@@ -383,6 +420,11 @@ class AgentRuntime:
         # evaluating checkpoints trained before `releases` existed.
         self.waiting_for: dict[str, Any] | None = None
         self.consecutive_waits = 0
+        # Observations are free on the virtual clock (see the get_image branch
+        # in the concurrent loop), so an agent that only ever photographs would
+        # sit at one instant forever. This counts observations taken without an
+        # intervening non-observation call; the cap charges the clock instead.
+        self.consecutive_obs = 0
 
     def deliver(self, step: dict[str, Any], clock: float | None = None) -> None:
         """Appends to this agent's private history (own act or delivered msg)."""
@@ -1696,6 +1738,8 @@ def run_trajectory_partial(
     waits_issued = 0
     wait_caps = 0
     max_consecutive_waits = int(getattr(args, 'max_consecutive_waits', 3))
+    max_free_observations = int(getattr(args, "max_free_observations", 4))
+    observation_caps = 0
     escalations = 0
     silent_resolutions = 0
 
@@ -1911,6 +1955,10 @@ def run_trajectory_partial(
                 continue
             if proposal.get("tool") != WAIT_TOOL_NAME:
                 agent.consecutive_waits = 0
+            if proposal.get("tool") != "get_image":
+                # The cap counts observations taken back-to-back; any real call
+                # in between means the agent is making progress, not looping.
+                agent.consecutive_obs = 0
 
             if proposal.get("error") or proposal.get("_rejected"):
                 pass  # counted below
@@ -1996,9 +2044,16 @@ def run_trajectory_partial(
                      "args": {"views": list(views)}}
                 )
                 record.update(legal=True, executed=True, reason=None)
-                agent.ready_at = clock + _tool_duration(
-                    "get_image", sim_steps=None, multiplier=multiplier
+                agent.ready_at, agent.consecutive_obs, capped = observation_ready_at(
+                    clock,
+                    consecutive_obs=agent.consecutive_obs,
+                    max_free_observations=max_free_observations,
+                    multiplier=multiplier,
                 )
+                if capped:
+                    record["observation_capped"] = True
+                    observation_caps += 1
+                record["consecutive_obs"] = agent.consecutive_obs
                 agent.silent_retries = 0
                 records.append(record)
                 continue
@@ -2162,6 +2217,7 @@ def run_trajectory_partial(
         "simultaneous_cycles": simultaneous_cycles,
         "waits_issued": waits_issued,
         "wait_caps": wait_caps,
+        "observation_caps": observation_caps,
         "mutual_wait_deadlocks": mutual_wait_deadlocks,
         "resource_conflicts": len(conflicts),
         "conflict_details": conflicts,
@@ -2660,6 +2716,14 @@ def parse_args() -> argparse.Namespace:
         "--max-consecutive-waits", type=int, default=3,
         help="Consecutive wait_for_signal calls before the wait is capped "
              "and charged a turn. Bounds a wait->irrelevant-message->wait livelock.",
+    )
+    parser.add_argument(
+        "--max-free-observations", type=int, default=4,
+        help="Back-to-back get_image calls that do NOT advance the agent's "
+             "virtual clock, matching the concurrent validator where "
+             "observations are free. Beyond this the observation is charged, "
+             "so an agent that only photographs cannot freeze the clock. "
+             "Set 0 to charge every observation (pre-2026-08 behaviour).",
     )
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument(

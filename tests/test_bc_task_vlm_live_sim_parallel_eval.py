@@ -358,3 +358,71 @@ def test_live_monitor_checks_only_newly_appended_records(tmp_path):
     issues = _scan_new_worker_records(specs, seen)
     assert any("harness_error" in issue for issue in issues)
     assert any("null native_success" in issue for issue in issues)
+
+
+# --- observations are free on the virtual clock, up to a cap -----------------
+#
+# The concurrent validator makes get_image cost 0.0; the executor charged it
+# 0.25 (1.0 under --uniform-durations), so a plan the gate certified could still
+# drift apart in sim. These pin the executor to the gate's semantics.
+
+
+def _obs(clock, n, cap, multiplier=1.0):
+    from training.bc_task_vlm.live_sim_eval import observation_ready_at
+
+    return observation_ready_at(
+        clock,
+        consecutive_obs=n,
+        max_free_observations=cap,
+        multiplier=multiplier,
+    )
+
+
+def test_observation_does_not_advance_the_clock_below_the_cap():
+    for n in range(4):
+        ready_at, count, capped = _obs(7.5, n, 4)
+        assert ready_at == 7.5, "an observation must not move the agent's clock"
+        assert count == n + 1
+        assert capped is False
+
+
+def test_observation_beyond_the_cap_is_charged_and_resets():
+    ready_at, count, capped = _obs(7.5, 4, 4)
+    assert ready_at > 7.5, "past the cap the clock must advance or it freezes"
+    assert capped is True
+    assert count == 0, "the counter resets so the agent gets a fresh allowance"
+
+
+def test_zero_cap_restores_the_old_always_charged_behaviour():
+    ready_at, count, capped = _obs(0.0, 0, 0)
+    assert ready_at > 0.0
+    assert (count, capped) == (0, False)
+
+
+def test_free_observations_keep_two_agents_on_the_same_schedule():
+    """The drift that broke 47 corpus trajectories, reproduced and removed.
+
+    agent_0 takes 3 actions, agent_1 takes 1, and the image pass gives each
+    action two observations. Charging the cameras puts the busier agent ahead by
+    more than a whole action, which is how a release lands before its waiter
+    blocks.
+    """
+
+    from training.bc_task_vlm.live_sim_eval import _tool_duration
+
+    def finish(actions, cap):
+        clock, n = 0.0, 0
+        for _ in range(actions):
+            for _ in range(2):  # the injector's two observations per action
+                clock, n, _capped = _obs(clock, n, cap)
+            clock += _tool_duration("pick", sim_steps=None, multiplier=1.0)
+            n = 0
+        return clock
+
+    charged = finish(3, 0) - finish(1, 0)
+    free = finish(3, 4) - finish(1, 4)
+    assert free < charged, "free observations must shrink the drift"
+    assert free == 2 * _tool_duration("pick", sim_steps=None, multiplier=1.0), (
+        "with cameras free the gap is exactly the two extra actions -- the "
+        "schedule the validator certified"
+    )

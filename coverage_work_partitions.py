@@ -218,8 +218,8 @@ def make_validator(task_name, record):
     return validator
 
 
-def analyse_task(task_name, limit=None):
-    task_dir = DATA / task_name
+def analyse_task(task_name, limit=None, data=None):
+    task_dir = (data or DATA) / task_name
     trajectories = sorted(task_dir.glob("traj_*/original_trajectory.json"))
     if limit:
         trajectories = trajectories[:limit]
@@ -297,13 +297,17 @@ def main():
     ap.add_argument("tasks", nargs="*")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--out", default=None)
+    # Both corpora use the same traj_*/original_trajectory.json layout, so the
+    # before/after comparison runs through one code path rather than two probes.
+    ap.add_argument("--data", default=None)
     args = ap.parse_args()
 
-    names = args.tasks or sorted(p.name for p in DATA.iterdir() if p.is_dir())
+    data = Path(args.data) if args.data else DATA
+    names = args.tasks or sorted(p.name for p in data.iterdir() if p.is_dir())
     results = []
     for name in names:
         try:
-            result = analyse_task(name, args.limit)
+            result = analyse_task(name, args.limit, data=data)
         except Exception as exc:  # noqa: BLE001 - probe: report and continue
             result = {"task": name, "error": f"{type(exc).__name__}: {exc}"}
         if result is None:
