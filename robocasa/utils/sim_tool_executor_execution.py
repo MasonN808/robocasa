@@ -109,6 +109,13 @@ class SimToolExecutorExecutionMixin:
                     "details": result.details,
                     "robot_positions": robot_positions,
                 }
+                # `step_index` is the position in the EXECUTED plan, which stops
+                # matching the position in the stored trajectory once the caller
+                # runs the steps in concurrent-executor order. Carry the source
+                # step through so a downstream join still lands on the right one.
+                source_step = (tool_call.get("metadata") or {}).get("step_index")
+                if source_step is not None:
+                    step_meta["source_step_index"] = source_step
                 if result.details.get("image_paths"):
                     step_meta["image_paths"] = result.details["image_paths"]
 
