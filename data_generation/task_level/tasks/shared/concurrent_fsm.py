@@ -214,6 +214,10 @@ class ConcurrentTaskValidator:
         # the waiter blocked was never delivered to it and never will be.
         fired: dict[tuple[str, str], list[float]] = {}
         seen_conflicts: set[tuple[str, ...]] = set()
+        # The tick whose co-location verdict is still open, and everyone who
+        # acted during it. Flushed when the clock advances, and once at the end.
+        open_clock: float | None = None
+        open_acting: set[str] = set()
         # When each wait first blocked, and when each resource was actually
         # let go of, so the two orderings can be checked after the run.
         wait_started: dict[int, float] = {}
@@ -304,6 +308,23 @@ class ConcurrentTaskValidator:
             clock = max(clock, min(ready_at[a] for a in runnable))
             acting = sorted(a for a in runnable if ready_at[a] <= clock + _EPS)
 
+            # Co-location is judged once per TICK, not once per batch of calls.
+            # A zero-duration call leaves its agent ready at the same clock, so
+            # one tick can produce several batches -- and checking each batch
+            # samples the world mid-tick. That caught seasoning_steak/traj_000001
+            # handing the cabinet from agent_1 to agent_0 within tick 7: between
+            # the two halves of the handoff both agents are momentarily recorded
+            # there. A tick is atomic, so the only state worth judging is the one
+            # it ends in. Deferred here rather than after the batch because this
+            # is the last point at which `state` still holds the previous tick.
+            if open_clock is not None and abs(clock - open_clock) > _EPS:
+                self._check_co_location(
+                    state, open_acting, open_clock, seen_conflicts, grace, result
+                )
+                open_acting = set()
+            open_clock = clock
+            open_acting.update(acting)
+
             instant = [(a, streams[a][cursor[a]]) for a in acting]
             self._check_simultaneous_use(steps, instant, clock, seen_conflicts, result)
 
@@ -365,8 +386,6 @@ class ConcurrentTaskValidator:
                 ready_at[agent_id] = end
                 cursor[agent_id] += 1
 
-            self._check_co_location(state, acting, clock, seen_conflicts, grace, result)
-
             if result.goal_at is None and validator.is_goal_state_satisfied(state):
                 result.goal_at = clock
             elif result.goal_at is not None:
@@ -379,6 +398,11 @@ class ConcurrentTaskValidator:
                         f"at t={clock:g}, after the goal was reached at "
                         f"t={result.goal_at:g}."
                     )
+
+        if open_clock is not None:
+            self._check_co_location(
+                state, open_acting, open_clock, seen_conflicts, grace, result
+            )
 
         result.makespan = max((event.end for event in result.events), default=0.0)
         busy = {agent_id: 0.0 for agent_id in streams}
