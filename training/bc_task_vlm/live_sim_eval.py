@@ -1680,7 +1680,9 @@ def run_trajectory_partial(
     multiplier = float(getattr(args, "duration_multiplier", 1.0))
     global _DURATION_JITTER, _DURATION_RNG, _UNIFORM_DURATIONS
     global _LENIENT_WAIT_DISCHARGE
-    _UNIFORM_DURATIONS = bool(getattr(args, "uniform_durations", False))
+    # Defaults True here too: programmatic callers that build their own args
+    # namespace must land in the same regime the corpus was validated in.
+    _UNIFORM_DURATIONS = bool(getattr(args, "uniform_durations", True))
     _LENIENT_WAIT_DISCHARGE = bool(getattr(args, "lenient_wait_discharge", False))
     _DURATION_JITTER = float(getattr(args, "duration_jitter", 0.0))
     # Per trajectory, so the same trajectory gets the same perturbed schedule
@@ -2789,10 +2791,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--uniform-durations",
-        action="store_true",
-        help="Lock-step: every call costs one tick, so both agents advance "
-             "together and only a wait+release can order them. Removes the "
-             "timing dimension instead of testing it.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="DEFAULT ON. Lock-step: every call costs one tick, so both agents "
+             "advance together and only a wait+release can order them. This is "
+             "the regime the corpus was validated in -- under the variable "
+             "floors only 1055/1550 trajectories survive the concurrent "
+             "validator, so evaluating there scores plans against timings they "
+             "were never checked under. Pass --no-uniform-durations to test the "
+             "timing dimension deliberately.",
     )
     partial.add_argument(
         "--duration-jitter",
