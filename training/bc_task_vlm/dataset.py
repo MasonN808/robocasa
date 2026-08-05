@@ -576,6 +576,55 @@ def _find_latest_same_agent_observation(
     )
 
 
+def _order_raw_steps_as_executed(
+    *,
+    task_name: str,
+    trajectory_id: str,
+    raw_steps: list[dict[str, Any]],
+    plan_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """``raw_steps`` permuted into the order the sim actually ran them.
+
+    ``original_trajectory.json`` is always stored in file order, but the sweep
+    runs the plan in concurrent-executor order (``--step-order concurrent``), so
+    ``plan.json`` and ``metadata.json`` come back permuted. Zipping the three
+    positionally would pair each raw step with a different step's execution
+    result and its images. ``plan.json`` carries the source index of every call,
+    which is what makes the join possible; a file-order render is the identity
+    permutation and takes the same path.
+
+    Examples are then built in EXECUTED order, which is the order the model sees
+    at evaluation time.
+    """
+
+    raw_by_step: dict[Any, dict[str, Any]] = {}
+    for raw_step in raw_steps:
+        step_index = raw_step.get("step")
+        if step_index in raw_by_step:
+            raise ValueError(
+                f"Duplicate raw step index {step_index} in "
+                f"{task_name}/{trajectory_id}."
+            )
+        raw_by_step[step_index] = raw_step
+
+    ordered: list[dict[str, Any]] = []
+    for position, plan_step in enumerate(plan_steps):
+        source = plan_step.get("metadata", {}).get("step_index")
+        if source not in raw_by_step:
+            raise ValueError(
+                f"Plan step {position} of {task_name}/{trajectory_id} names "
+                f"source step {source!r}, which is not in the trajectory."
+            )
+        ordered.append(raw_by_step[source])
+
+    if len(ordered) != len(raw_steps):
+        raise ValueError(
+            f"Plan for {task_name}/{trajectory_id} covers {len(ordered)} of "
+            f"{len(raw_steps)} steps."
+        )
+    return ordered
+
+
 def _validate_alignment(
     *,
     task_name: str,
@@ -584,24 +633,31 @@ def _validate_alignment(
     plan_steps: list[dict[str, Any]],
     executed_steps: list[dict[str, Any]],
 ) -> None:
+    """Checks the three files agree, with ``raw_steps`` already in run order."""
+
     if not (len(raw_steps) == len(plan_steps) == len(executed_steps)):
         raise ValueError(
             f"Step count mismatch for {task_name}/{trajectory_id}: "
             f"raw={len(raw_steps)} plan={len(plan_steps)} executed={len(executed_steps)}."
         )
+    source_indices = [
+        plan_step.get("metadata", {}).get("step_index") for plan_step in plan_steps
+    ]
+    if sorted(source_indices, key=lambda v: (v is None, v)) != list(
+        range(len(plan_steps))
+    ):
+        raise ValueError(
+            f"Plan for {task_name}/{trajectory_id} is not a permutation of the "
+            f"trajectory's steps: {source_indices}."
+        )
     for index, (raw_step, plan_step, executed_step) in enumerate(
         zip(raw_steps, plan_steps, executed_steps, strict=True)
     ):
-        if raw_step.get("step") != index:
+        source = source_indices[index]
+        if raw_step.get("step") != source:
             raise ValueError(
-                f"Unexpected raw step index in {task_name}/{trajectory_id}: "
-                f"expected {index}, got {raw_step.get('step')}."
-            )
-        plan_index = plan_step.get("metadata", {}).get("step_index")
-        if plan_index != index:
-            raise ValueError(
-                f"Unexpected plan step index in {task_name}/{trajectory_id}: "
-                f"expected {index}, got {plan_index}."
+                f"Raw/plan step mismatch in {task_name}/{trajectory_id} at "
+                f"position {index}: raw={raw_step.get('step')} plan={source}."
             )
         executed_index = executed_step.get("step_index")
         if executed_index != index:
@@ -609,10 +665,19 @@ def _validate_alignment(
                 f"Unexpected executed step index in {task_name}/{trajectory_id}: "
                 f"expected {index}, got {executed_index}."
             )
+        # Written since the reorder landed; absent in older renders, where the
+        # executed position and the source index are the same number anyway.
+        executed_source = executed_step.get("source_step_index")
+        if executed_source is not None and executed_source != source:
+            raise ValueError(
+                f"Plan/metadata source mismatch in {task_name}/{trajectory_id} "
+                f"at position {index}: plan={source} metadata={executed_source}."
+            )
         if raw_step.get("tool") != plan_step.get("tool"):
             raise ValueError(
-                f"Tool mismatch at {task_name}/{trajectory_id} step {index}: "
-                f"raw={raw_step.get('tool')} plan={plan_step.get('tool')}."
+                f"Tool mismatch at {task_name}/{trajectory_id} position {index} "
+                f"(source step {source}): raw={raw_step.get('tool')} "
+                f"plan={plan_step.get('tool')}."
             )
 
 
@@ -852,9 +917,16 @@ def _build_centralized_examples_for_trajectory(
     plan_steps = _load_json(trajectory_dir / "plan.json")
     metadata = _load_json(trajectory_dir / "metadata.json")
 
-    raw_steps = list(original_trajectory["steps"])
     executed_steps = list(metadata["steps"])
     trajectory_id = str(original_trajectory["trajectory_id"])
+    # The stored trajectory is in file order; the sim ran it in concurrent
+    # order. Line the raw steps up with the run before anything zips them.
+    raw_steps = _order_raw_steps_as_executed(
+        task_name=task_name,
+        trajectory_id=trajectory_id,
+        raw_steps=list(original_trajectory["steps"]),
+        plan_steps=plan_steps,
+    )
 
     _validate_alignment(
         task_name=task_name,
