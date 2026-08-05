@@ -71,8 +71,25 @@ _WAIT_TOOL = "wait_for_signal"
 
 
 def duration_of(tool_name: str, model: str) -> float:
-    """Virtual-clock cost of one completed call under `model`."""
+    """Virtual-clock cost of one completed call under `model`.
 
+    Observation is FREE. It is instrumentation, not authored work: the model
+    never writes get_image in tick format -- every observation in the corpus
+    was injected afterwards by the image pass, two per action. Charging them
+    made a plan's coordination depend on how many actions each agent happened
+    to take, because an agent's lock-step clock advances once per call IT
+    makes. Agents with different action counts drifted apart, releases landed
+    before their waiters blocked, and 47 of 1550 corpus trajectories that were
+    valid as written became deadlocks purely by being photographed.
+
+    `_apply` already treats these tools as having no symbolic effect; this is
+    the scheduling half of the same statement. Nothing outside `replay()` reads
+    this function -- live sim keeps its own `_tool_duration`, and neither the
+    sim executor nor the training pipeline has a clock at all.
+    """
+
+    if tool_name in OBSERVATION_TOOL_NAMES:
+        return 0.0
     if model == LOCK_STEP:
         return 1.0
     return _EXECUTOR_FLOORS.get(tool_name, _EXECUTOR_DEFAULT_FLOOR)

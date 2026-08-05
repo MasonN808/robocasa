@@ -84,7 +84,28 @@ All probes: PrepareCoffee + AddSugarCubes, validity 100% in every cell.
 | `verbalized-k 2` | 18 | $0.0318 | 8,953 | 15:57 | 53.1 |
 | medium + k=2 + 12 workers | 18 | $0.0354 | 10,382 | 12:08 | 40.4 |
 
-### Recommendation: `--thinking-level medium`, and nothing else
+### RECOMMENDATION: `--thinking-level low`
+
+`low` disables reasoning entirely (0 reasoning tokens) and is **~11x cheaper
+and ~2x faster** than uncapped. The worry that it would wreck coordination on
+hard tasks was tested and is WRONG:
+
+| probe | tasks | yield | $/traj |
+|---|---|---|---|
+| uncapped (266947) | the 4 hard ones | 17/20 | ~$0.08 |
+| **low** (268197) | the 4 hard ones | **19/20** | **$0.0154** |
+| low (268097) | the 2 easy ones | 18/20 | $0.0060 |
+
+Yield on the HARD tail was *higher* than uncapped. The 8/10 on PrepareCoffee at
+`low` looks like variance rather than a pattern -- 20-run samples cannot rule
+out recurrence, but there is no systematic degradation.
+
+Data quality never depended on the thinking budget anyway: **the concurrent gate
+guarantees it**. A weaker model produces fewer successes, not worse records, so
+the only thing at risk is yield -- and yield is cheap to buy back by requesting
+more runs when each run costs a fifth as much.
+
+### Superseded: `--thinking-level medium`
 
 **-28% cost, -27% wall, validity untouched.** The uncapped run was spending
 ~6k reasoning tokens per trajectory that bought no correctness.
@@ -111,7 +132,20 @@ It also brings failure modes the base path does not have:
 is noise. The latency differences are large and consistent; the small cost
 differences between verbalized variants are not meaningful.
 
-### Actual scale-out cost, for future budgeting
+### Actual corpus cost
+
+| | trajectories | cost | $/traj |
+|---|---|---|---|
+| main run 267262 | 1543 | $124.41 | $0.0806 |
+| top-up 268019 | +35 | **$42.10** | **$1.20** |
+| total | 1578 | $166.51 | |
+
+**The hard tail costs 15x the average.** The top-up bought 35 trajectories for
+a third of what the entire 1543-trajectory run cost, because every run it
+retried had already exhausted 5 attempts once. Do not chase the last few
+percent: accept per-task counts in the high 20s.
+
+### Earlier budgeting note
 
 Job 267262 (53 tasks x 30, uncapped, base): **1543 trajectories, 100% valid,
 $124.41**, 3.0% of runs exhausted retries. A pre-hoc estimate of $50-70 from
