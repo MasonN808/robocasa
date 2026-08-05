@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 from types import SimpleNamespace
 
 from training.bc_task_vlm import dataset as dataset_module
@@ -20,17 +22,34 @@ from training.bc_task_vlm.dataset import (
 )
 
 
-DATASET_ROOT = (
-    Path(__file__).resolve().parents[1]
-    / "data_generation/task_level/data/image/20260404T191734Z"
-)
-SOURCE_TRAJECTORY_DIR = DATASET_ROOT / "hot_dog_setup" / "traj_000028"
+# A real rendered trajectory, vendored into the repo. These tests used to copy
+# from a generated dataset directory (data/image/<timestamp>/), which was deleted
+# when that vintage was superseded -- every test here then failed on a missing
+# file rather than on anything about the code. The fixture is checked in so the
+# suite does not depend on which corpus happens to be on disk.
+#
+# It is a --step-order concurrent render, so plan.json is a genuine permutation
+# of the trajectory's steps and these tests exercise the reordered path.
+FIXTURE_ROOT = Path(__file__).resolve().parent / "data" / "render_fixture"
+FIXTURE_TASK = "add_lemon_to_fish"
+FIXTURE_TRAJECTORY_ID = "traj_000000"
+SOURCE_TRAJECTORY_DIR = FIXTURE_ROOT / FIXTURE_TASK / FIXTURE_TRAJECTORY_ID
 
 
 class CentralizedExampleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # The fixture's image paths point at the render that produced it, which
+        # is not part of the repo. These tests are about example construction,
+        # not about pixels being on disk.
+        patcher = unittest.mock.patch.dict(
+            os.environ, {"ROBOCASA_VALIDATE_IMAGE_PATHS": "false"}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _build_single_trajectory_dataset_root(self) -> Path:
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        trajectory_dir = temp_root / "hot_dog_setup" / "traj_000028"
+        trajectory_dir = temp_root / FIXTURE_TASK / FIXTURE_TRAJECTORY_ID
         trajectory_dir.mkdir(parents=True, exist_ok=True)
         for file_name in ("original_trajectory.json", "plan.json", "metadata.json"):
             shutil.copy2(SOURCE_TRAJECTORY_DIR / file_name, trajectory_dir / file_name)
@@ -40,12 +59,12 @@ class CentralizedExampleTests(unittest.TestCase):
         dataset_root = self._build_single_trajectory_dataset_root()
         examples = build_centralized_examples(
             dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
+            task_names=[FIXTURE_TASK],
         )
 
         self.assertTrue(examples)
         self.assertTrue(
-            all(example.trajectory_id == "traj_000028" for example in examples)
+            all(example.trajectory_id == FIXTURE_TRAJECTORY_ID for example in examples)
         )
         self.assertEqual(
             {example.agent_id for example in examples},
@@ -96,7 +115,7 @@ class CentralizedExampleTests(unittest.TestCase):
         dataset_root = self._build_single_trajectory_dataset_root()
         examples = build_centralized_examples(
             dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
+            task_names=[FIXTURE_TASK],
             sft_format="plain",
         )
 
@@ -123,8 +142,8 @@ class CentralizedExampleTests(unittest.TestCase):
                     "output_root": str(manifest_root),
                     "sources": [
                         {
-                            "repo_id": "example/hot_dog_setup",
-                            "tasks": ["hot_dog_setup"],
+                            "repo_id": "example/fixture",
+                            "tasks": [FIXTURE_TASK],
                             "num_episodes": 1,
                             "shard_output_root": str(shard_root),
                         }
@@ -137,28 +156,28 @@ class CentralizedExampleTests(unittest.TestCase):
 
         examples = build_centralized_examples(
             dataset_root=manifest_root,
-            task_names=["hot_dog_setup"],
+            task_names=[FIXTURE_TASK],
         )
         fingerprint = build_example_cache_fingerprint(
             dataset_root=manifest_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
         )
 
-        self.assertEqual(list_available_task_names(manifest_root), ["hot_dog_setup"])
+        self.assertEqual(list_available_task_names(manifest_root), [FIXTURE_TASK])
         self.assertEqual(
             list_task_trajectory_ids(
                 dataset_root=manifest_root,
-                task_name="hot_dog_setup",
+                task_name=FIXTURE_TASK,
             ),
-            ["traj_000028"],
+            [FIXTURE_TRAJECTORY_ID],
         )
         self.assertTrue(examples)
         self.assertTrue(
-            all(example.trajectory_id == "traj_000028" for example in examples)
+            all(example.trajectory_id == FIXTURE_TRAJECTORY_ID for example in examples)
         )
         self.assertEqual(
             [entry["trajectory_id"] for entry in fingerprint["trajectories"]],
-            ["traj_000028"],
+            [FIXTURE_TRAJECTORY_ID],
         )
 
     def test_centralized_examples_round_trip_through_cache(self):
@@ -166,16 +185,16 @@ class CentralizedExampleTests(unittest.TestCase):
         cache_dir = dataset_root / ".cache"
         centralized_examples = build_centralized_examples(
             dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
+            task_names=[FIXTURE_TASK],
         )
         fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
         )
         cache_path = build_example_cache_path(
             cache_dir=cache_dir,
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
         )
 
         save_examples_to_cache(
@@ -202,11 +221,11 @@ class CentralizedExampleTests(unittest.TestCase):
         cache_dir = dataset_root / ".cache"
         centralized_examples = build_centralized_examples(
             dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
+            task_names=[FIXTURE_TASK],
         )
         fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
         )
         legacy_fingerprint = json.loads(json.dumps(fingerprint))
         legacy_fingerprint["builder_dependencies"]["dataset.py"] = {
@@ -216,7 +235,7 @@ class CentralizedExampleTests(unittest.TestCase):
         cache_path = build_example_cache_path(
             cache_dir=cache_dir,
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
         )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(
@@ -256,12 +275,12 @@ class CentralizedExampleTests(unittest.TestCase):
 
         tool_call_fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
             sft_format="tool_call",
         )
         plain_fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
             sft_format="plain",
         )
 
@@ -274,16 +293,16 @@ class CentralizedExampleTests(unittest.TestCase):
         cache_dir = dataset_root / ".cache"
         centralized_examples = build_centralized_examples(
             dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
+            task_names=[FIXTURE_TASK],
         )
         fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
         )
         cache_path = build_example_cache_path(
             cache_dir=cache_dir,
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
         )
         save_examples_to_cache(
             cache_path=cache_path,
@@ -291,14 +310,14 @@ class CentralizedExampleTests(unittest.TestCase):
             examples=centralized_examples,
         )
 
-        metadata_path = dataset_root / "hot_dog_setup" / "traj_000028" / "metadata.json"
+        metadata_path = dataset_root / FIXTURE_TASK / FIXTURE_TRAJECTORY_ID / "metadata.json"
         metadata_path.write_text(
             metadata_path.read_text(encoding="utf-8") + "\n",
             encoding="utf-8",
         )
         updated_fingerprint = build_example_cache_fingerprint(
             dataset_root=dataset_root,
-            task_name="hot_dog_setup",
+            task_name=FIXTURE_TASK,
         )
 
         cached_examples = load_examples_from_cache(

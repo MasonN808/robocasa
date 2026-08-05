@@ -92,7 +92,13 @@ _RAW_STEPS = [
 
 
 def test_partial_history_is_agent_private(monkeypatch, tmp_path):
-    by_step = _build_examples(monkeypatch, tmp_path, _RAW_STEPS)
+    # Pinned to "global" numbering because this test is about WHICH steps an
+    # agent sees, not how they are numbered. The builder's default moved from
+    # "global" to "local" (commit 8881b4b) and the renumbering silently broke
+    # the assertion below, which looks like a privacy regression and is not.
+    by_step = _build_examples(
+        monkeypatch, tmp_path, _RAW_STEPS, partial_step_index_mode="global"
+    )
 
     # agent_1's example never contains agent_0's private navigate_to_fixture.
     agent1_history_tools = [s["tool"] for s in by_step[4].history_steps]
@@ -100,6 +106,21 @@ def test_partial_history_is_agent_private(monkeypatch, tmp_path):
     assert by_step[4].history_steps == [
         {"step": 2, "agent": "agent_0", "tool": "communicate", "args": {"to": "agent_1", "message": "doing X"}}
     ]
+
+
+def test_partial_history_is_agent_private_under_the_default_numbering(
+    monkeypatch, tmp_path
+):
+    """The privacy property must not depend on partial_step_index_mode."""
+
+    by_step = _build_examples(monkeypatch, tmp_path, _RAW_STEPS)
+
+    assert "navigate_to_fixture" not in [s["tool"] for s in by_step[4].history_steps]
+    history = by_step[4].history_steps
+    assert [(s["agent"], s["tool"]) for s in history] == [("agent_0", "communicate")]
+    # "local" renumbers by position in this agent's own history, so the joint
+    # index 2 is gone -- that is the point of the mode.
+    assert [s["step"] for s in history] == [0]
 
     # agent_0's later example sees its own prior actions plus the delivered
     # message from agent_1, but never agent_1's private pick_up_object.
@@ -109,7 +130,11 @@ def test_partial_history_is_agent_private(monkeypatch, tmp_path):
 
 
 def test_partial_history_message_delivery_timing(monkeypatch, tmp_path):
-    by_step = _build_examples(monkeypatch, tmp_path, _RAW_STEPS)
+    # "global" keeps the joint index, which is what identifies the step being
+    # asserted about here. See the note in test_partial_history_is_agent_private.
+    by_step = _build_examples(
+        monkeypatch, tmp_path, _RAW_STEPS, partial_step_index_mode="global"
+    )
 
     # The step-2 message must not appear in agent_1's history before it was
     # sent, only from the first agent_1 example emitted after step 2.

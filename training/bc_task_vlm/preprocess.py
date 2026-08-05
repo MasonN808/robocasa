@@ -149,7 +149,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--partial-step-index-mode",
         choices=("global", "local", "none"),
-        default="global",
+        # "local" everywhere else since commit 8881b4b, which missed this file:
+        # preprocessing without the flag built "global" prompts while main.py
+        # built "local", so the two entry points disagreed.
+        default="local",
         help=(
             "With --partial-history: 'global' keeps the leaky joint index, "
             "'local' renumbers per agent, 'none' omits step indices."
@@ -611,7 +614,7 @@ def _build_examples_for_tasks(
     train_get_image: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "global",
+    partial_step_index_mode: str = "local",
     partial_observation_mode: str = "consume_once",
     example_filter: Callable[[str], bool] | None = None,
 ) -> list[Any]:
@@ -641,10 +644,7 @@ def _build_examples_for_tasks(
                 train_get_image=train_get_image,
                 causal_single_cache=causal_single_cache,
                 partial_history=partial_history,
-        partial_step_index_mode=partial_step_index_mode,
-        partial_observation_mode=partial_observation_mode,
                 partial_step_index_mode=partial_step_index_mode,
-        partial_observation_mode=partial_observation_mode,
                 partial_observation_mode=partial_observation_mode,
             )
             cache_path = build_example_cache_path(
@@ -716,15 +716,8 @@ def _build_examples_for_tasks(
                         train_get_image=train_get_image,
                         causal_single_cache=causal_single_cache,
                         partial_history=partial_history,
-        partial_step_index_mode=partial_step_index_mode,
-        partial_observation_mode=partial_observation_mode,
                         partial_step_index_mode=partial_step_index_mode,
-        partial_observation_mode=partial_observation_mode,
                         partial_observation_mode=partial_observation_mode,
-                partial_observation_mode=partial_observation_mode,
-                partial_step_index_mode=partial_step_index_mode,
-        partial_observation_mode=partial_observation_mode,
-                partial_observation_mode=partial_observation_mode,
                     )
                     if (
                         cache_allowed
@@ -765,7 +758,7 @@ def main() -> None:
     train_get_image = getattr(args, "train_get_image", False)
     causal_single_cache = getattr(args, "causal_single_cache", False)
     partial_history = getattr(args, "partial_history", False)
-    partial_step_index_mode = getattr(args, "partial_step_index_mode", "global")
+    partial_step_index_mode = getattr(args, "partial_step_index_mode", "local")
     partial_observation_mode = getattr(
         args, "partial_observation_mode", "consume-once"
     ).replace("-", "_")

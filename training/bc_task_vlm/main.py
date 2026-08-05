@@ -1038,7 +1038,11 @@ def _build_examples_for_tasks(
     predict_agent: bool = False,
     train_get_image: bool = False,
     train_reasoning: bool = False,
-    predict_task_complete: bool = True,
+    # False everywhere else -- argparse, and all three dataset.py signatures.
+    # Both call sites pass config.predict_task_complete explicitly, so this
+    # stale True was never reached, but it is exactly the entry-point-dependent
+    # default that commit 8881b4b set out to remove.
+    predict_task_complete: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
     partial_step_index_mode: str = "local",

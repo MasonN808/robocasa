@@ -84,6 +84,11 @@ def test_causal_single_cache_is_prefix_derived_and_agent_private(
             tool_schemas=[],
             predict_agent=True,
             train_get_image=True,
+            # by_step[7] below is the synthetic terminal task_complete example,
+            # which only exists when task_complete is supervised. It used to
+            # ride along with predict_agent; commit 31b7b71 split it out and the
+            # default is now off, so this test has to ask for it explicitly.
+            predict_task_complete=True,
             causal_single_cache=True,
         )
 
