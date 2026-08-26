@@ -62,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--validation-trajectory-fraction", type=float, default=0.1)
     parser.add_argument("--validation-min-trajectories-per-task", type=int, default=1)
+    parser.add_argument("--validation-split-seed", type=int, default=42)
     parser.add_argument(
         "--use-example-cache",
         action=argparse.BooleanOptionalAction,
@@ -357,6 +358,7 @@ def _build_examples(args: argparse.Namespace, dataset_root: Path):
             min_validation_trajectories_per_task=(
                 args.validation_min_trajectories_per_task
             ),
+            seed=args.validation_split_seed,
         )
         train_trajectory_ids_by_task = trajectory_split.train_trajectory_ids_by_task
         val_trajectory_ids_by_task = trajectory_split.validation_trajectory_ids_by_task
@@ -477,6 +479,7 @@ def main() -> None:
         "validation_min_trajectories_per_task": (
             args.validation_min_trajectories_per_task
         ),
+        "validation_split_seed": args.validation_split_seed,
         "train_trajectory_ids_by_task": train_trajectory_ids_by_task,
         "val_trajectory_ids_by_task": val_trajectory_ids_by_task,
         "train_example_format": "centralized",

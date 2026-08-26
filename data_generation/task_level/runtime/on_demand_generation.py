@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 import os
 import threading
 from typing import Any
@@ -117,13 +118,17 @@ def generate_single_run(
 
     # Each attempt rebuilds the full prompt so retries can incorporate repair
     # feedback without mutating saved outputs from prior attempts.
+    attempt_number_offset = runtime_config.attempt_number_offset_for_run(run_index)
+    retry_constraints: list[str] = []
     for attempt_index in range(runtime_config.max_retries):
-        attempts_run = attempt_index + 1
+        local_attempt_number = attempt_index + 1
+        attempt_number = attempt_number_offset + local_attempt_number
+        attempts_run = local_attempt_number
         _runtime_support._raise_if_task_cancelled(runtime_config)
         # Variation keys give retries a stable way to ask for distinct traces.
         variation_key = _runtime_support.format_trajectory_variation_key(
             run_index,
-            attempt_index,
+            attempt_number - 1,
         )
         prompt = sampling_strategy.build_prompt(
             task_definition=task_definition,
@@ -137,7 +142,7 @@ def generate_single_run(
                 runtime_config,
                 run_index=run_index,
             ),
-            "attempt_number": attempt_index + 1,
+            "attempt_number": attempt_number,
             "prompt": prompt,
         }
         if attempt_prompts is not None:
@@ -156,7 +161,7 @@ def generate_single_run(
             trajectory_progress.set_postfix_str(
                 _progress._trajectory_generation_status(
                     runtime_config,
-                    attempt_number=attempt_index + 1,
+                    attempt_number=attempt_number,
                     previous_invalid_summary=previous_invalid_summary,
                 )
             )
@@ -179,6 +184,7 @@ def generate_single_run(
                 raw_response=response_payload,
                 task_definition=task_definition,
                 runtime_config=runtime_config,
+                variation_key=variation_key,
             )
             if len(sampled_candidates) == 1:
                 # Reuse the single invalid candidate as a tiny negative example on retries.
@@ -196,7 +202,7 @@ def generate_single_run(
                 prompt=prompt,
                 raw_response=response_payload,
                 usage=usage,
-                attempt_number=attempt_index + 1,
+                attempt_number=attempt_number,
             )
             accumulated_cost_text = (
                 accumulated_cost_tracker.add_observed_cost(
@@ -271,12 +277,12 @@ def generate_single_run(
                             invalid_validation,
                             source="on_demand",
                             trajectory_index=run_index,
-                            attempt_number=attempt_index + 1,
+                            attempt_number=attempt_number,
                             retryable=(
                                 len(accumulated_valid_results)
                                 + len(valid_results_this_attempt)
                                 < target_candidate_count
-                                and attempt_index + 1 < runtime_config.max_retries
+                                and local_attempt_number < runtime_config.max_retries
                             ),
                         ),
                         error_events_lock=error_events_lock,
@@ -305,17 +311,28 @@ def generate_single_run(
                         trajectory_progress.set_postfix_str(
                             _progress._trajectory_retry_status(
                                 runtime_config,
-                                attempt_number=attempt_index + 1,
+                                attempt_number=attempt_number,
                                 tool_call_count=tool_call_count,
                                 invalid_summary=invalid_summary,
                             )
                         )
                     if invalid_validations:
                         first_invalid = invalid_validations[0]
+                        retry_constraints.append(
+                            _runtime_support._compact_retry_constraint(
+                                _runtime_support._validation_error_type(first_invalid)
+                                or "TrajectoryValidationError",
+                                first_invalid.get("error"),
+                                first_invalid.get("error_details"),
+                            )
+                        )
                         retry_feedback = (
                             _runtime_support._build_retry_feedback_text_from_validation(
                                 first_invalid,
                                 candidate=retry_feedback_candidate,
+                                allowed_tool_specs=validator.allowed_tool_specs,
+                                prior_constraints=retry_constraints,
+                                feedback_style=runtime_config.retry_feedback_style,
                             )
                         )
                     continue
@@ -353,10 +370,10 @@ def generate_single_run(
                     "observed_cost_usd"
                 ] = total_observed_cost_usd
                 aggregate_generation_usage["successful_attempt_number"] = (
-                    attempt_index + 1
+                    local_attempt_number
                 )
                 aggregate_generation_usage["retry_costs_included"] = (
-                    attempt_index + 1 > 1
+                    local_attempt_number > 1
                 )
                 split_generation_usages = (
                     _runtime_support._split_generation_usage_across_candidates(
@@ -396,6 +413,18 @@ def generate_single_run(
                             task_definition=task_definition,
                         )
                     )
+                    if task_instance.physical_configuration is not None:
+                        from data_generation.task_level.scene_sampling import (
+                            physical_configuration_signature,
+                        )
+                        trajectory_record["physical_configuration"] = deepcopy(
+                            task_instance.physical_configuration
+                        )
+                        trajectory_record["physical_configuration_signature"] = (
+                            physical_configuration_signature(
+                                task_instance.physical_configuration
+                            )
+                        )
                     sampling_metadata = (
                         _runtime_support._sampling_metadata_for_candidate(
                             runtime_config=runtime_config,
@@ -423,7 +452,7 @@ def generate_single_run(
                         validator=validator,
                         seen_signatures=seen_signatures,
                         seen_signatures_lock=seen_signatures_lock,
-                        attempt_number=attempt_index + 1,
+                        attempt_number=attempt_number,
                     )
                 )
             for trajectory_record in trajectory_records:
@@ -435,7 +464,7 @@ def generate_single_run(
                         source="on_demand",
                         trajectory_id=trajectory_record["trajectory_id"],
                         trajectory_index=run_index,
-                        attempt_number=attempt_index + 1,
+                        attempt_number=attempt_number,
                     ),
                     error_events_lock=error_events_lock,
                 )
@@ -477,7 +506,7 @@ def generate_single_run(
             )
             _progress._update_completed_trajectory_progress(
                 trajectory_progress,
-                attempt_number=attempt_index + 1,
+                attempt_number=attempt_number,
                 max_retries=runtime_config.max_retries,
                 trajectory_count=len(trajectory_records),
                 successful_trajectory_count=successful_trajectory_count,
@@ -497,9 +526,19 @@ def generate_single_run(
             if not runtime_config.disable_validation and isinstance(
                 exc, TrajectoryValidationError
             ):
+                retry_constraints.append(
+                    _runtime_support._compact_retry_constraint(
+                        exc.error_type,
+                        str(exc),
+                        exc.details,
+                    )
+                )
                 retry_feedback = _runtime_support._build_retry_feedback_text(
                     exc,
                     candidate=retry_feedback_candidate,
+                    allowed_tool_specs=validator.allowed_tool_specs,
+                    prior_constraints=retry_constraints,
+                    feedback_style=runtime_config.retry_feedback_style,
                 )
             _errors._append_error_event(
                 error_events,
@@ -512,9 +551,9 @@ def generate_single_run(
                         else "generation"
                     ),
                     trajectory_index=run_index,
-                    attempt_number=attempt_index + 1,
+                    attempt_number=attempt_number,
                     retryable=(
-                        attempt_index + 1 < runtime_config.max_retries
+                        local_attempt_number < runtime_config.max_retries
                         and not _runtime_support._is_non_retryable_generation_error(exc)
                     ),
                 ),
@@ -533,7 +572,7 @@ def generate_single_run(
                 trajectory_progress.set_postfix_str(
                     _progress._trajectory_retry_status(
                         runtime_config,
-                        attempt_number=attempt_index + 1,
+                        attempt_number=attempt_number,
                         tool_call_count=tool_call_count,
                         invalid_summary=invalid_summary,
                     )

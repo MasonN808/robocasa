@@ -7,7 +7,15 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
-from robocasa.utils.occupancy_grid import OccupancyGrid
+from robocasa.utils.occupancy_grid import (
+    OccupancyGrid,
+    _is_countertop_appliance,
+    _is_small_reference_fixture,
+)
+from robocasa.utils.placement import (
+    get_front_alignment_metrics,
+    is_in_front_workspace_corridor,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +58,19 @@ def _make_mock_fixture(
 class TestOccupancyGridUnit(unittest.TestCase):
     """Unit tests using mock fixtures."""
 
+    def test_stovetop_uses_countertop_appliance_approach_semantics(self):
+        stovetop = _make_mock_fixture((0.0, 0.0, 0.9), name="stovetop_left_group")
+        self.assertTrue(_is_countertop_appliance(stovetop))
+
+    def test_only_seat_references_use_small_fixture_lateral_extension(self):
+        stool = _make_mock_fixture((0.0, 0.0, 0.0), name="stool_2_room")
+        chair = _make_mock_fixture((0.0, 0.0, 0.0), name="dining_chair")
+        sink = _make_mock_fixture((0.0, 0.0, 0.0), name="sink_island_group")
+
+        self.assertTrue(_is_small_reference_fixture(stool))
+        self.assertTrue(_is_small_reference_fixture(chair))
+        self.assertFalse(_is_small_reference_fixture(sink))
+
     def test_grid_construction_bounds(self):
         """Grid should have correct dimensions for a simple layout."""
         f1 = _make_mock_fixture((0.0, 0.0, 0.0), size=(1.0, 1.0, 0.9))
@@ -84,6 +105,84 @@ class TestOccupancyGridUnit(unittest.TestCase):
         # Position should be near fixture (within ~1.5 cell sizes)
         dist = np.linalg.norm(pos_xy - np.array([0.0, 0.0]))
         self.assertLess(dist, 2.0)
+
+    def test_parent_placement_avoids_exclusive_child_working_region(self):
+        """A broad parent target must not borrow a child's front work pose."""
+        parent = _make_mock_fixture(
+            (0.0, 0.0, 0.0), size=(2.0, 0.5, 0.9), name="counter"
+        )
+        child = _make_mock_fixture(
+            (0.0, 0.0, 0.9), size=(0.4, 0.3, 0.3), name="cabinet"
+        )
+        grid = OccupancyGrid({"counter": parent, "cabinet": child}, cell_size=0.05)
+
+        result = grid.find_placement(
+            parent,
+            prohibited_working_fixtures=[child],
+        )
+
+        self.assertIsNotNone(result)
+        pos_xy, _yaw = result
+        metrics = get_front_alignment_metrics(child, pos_xy)
+        self.assertFalse(
+            metrics
+            and metrics["on_front_face"]
+            and metrics["within_span"]
+            and metrics["front_gap"] <= 0.75
+        )
+
+    def test_explicit_child_target_can_use_its_working_region(self):
+        """Reserved child poses remain legal when that child is the target."""
+        child = _make_mock_fixture(
+            (0.0, 0.0, 0.0), size=(0.4, 0.3, 0.9), name="cabinet"
+        )
+        grid = OccupancyGrid({"cabinet": child}, cell_size=0.05)
+
+        result = grid.find_placement(child, require_front=True)
+
+        self.assertIsNotNone(result)
+        pos_xy, _yaw = result
+        metrics = get_front_alignment_metrics(child, pos_xy)
+        self.assertTrue(metrics and metrics["on_front_face"] and metrics["within_span"])
+
+    def test_countertop_appliance_samples_across_reserved_corridor_width(self):
+        """Explicit appliance navigation may use the free side of its corridor."""
+        appliance = _make_mock_fixture(
+            (0.0, 0.0, 0.0), size=(0.1, 0.1, 0.3), name="coffee_machine"
+        )
+        grid = OccupancyGrid({"coffee_machine": appliance}, cell_size=0.05)
+
+        result = grid.find_placement(
+            appliance,
+            robot_positions=[np.array([-0.25, -0.45])],
+        )
+
+        self.assertIsNotNone(result)
+        pos_xy, _yaw = result
+        self.assertGreaterEqual(
+            np.linalg.norm(pos_xy - np.array([-0.25, -0.45])),
+            grid._MIN_ROBOT_SEPARATION,
+        )
+        self.assertGreater(pos_xy[0], 0.05)
+
+    def test_front_corridor_does_not_reserve_side_or_back_poses(self):
+        """The new directional rule must not recreate an all-sides radius."""
+        parent = _make_mock_fixture(
+            (0.0, 0.0, 0.0), size=(0.4, 0.4, 0.9), name="counter"
+        )
+        child = _make_mock_fixture(
+            (0.0, 0.0, 0.9), size=(2.0, 2.0, 0.3), name="toaster_oven"
+        )
+        grid = OccupancyGrid({"counter": parent, "cabinet": child}, cell_size=0.05)
+
+        result = grid.find_placement(
+            parent,
+            prohibited_working_fixtures=[child],
+        )
+
+        self.assertIsNotNone(result)
+        pos_xy, _yaw = result
+        self.assertFalse(is_in_front_workspace_corridor(child, pos_xy))
 
     def test_corner_counter_front_prefers_kitchen_side_face(self):
         """Corner counters should not use the modeled dining-side front first."""

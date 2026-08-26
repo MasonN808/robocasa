@@ -128,19 +128,74 @@ def build_task_response_schema(
     if min_steps < 1:
         raise ValueError("min_steps must be at least 1.")
 
-    tool_arg_names: list[str] = []
-    tool_arg_schema_types: dict[str, str] = {}
-    for tool_spec in allowed_tool_specs.values():
-        # Preserve the tool registry order so schema rendering stays stable.
-        for field_name in _iter_declared_tool_arg_names(tool_spec):
-            schema_type = _resolve_tool_arg_schema_type(field_name, tool_spec)
-            if field_name not in tool_arg_schema_types:
-                tool_arg_schema_types[field_name] = schema_type
-            elif tool_arg_schema_types[field_name] != schema_type:
-                raise ValueError(
-                    f"Conflicting schema types were configured for tool arg {field_name}."
+    def arg_property(field_name: str, tool_spec: dict[str, Any]) -> dict[str, Any]:
+        property_schema = _build_symbolic_field_schema(
+            field_name,
+            agent_ids,
+            _resolve_tool_arg_schema_type(field_name, tool_spec),
+        )
+        allowed_ids_key = _allowed_ids_key_for_arg_name(field_name)
+        allowed_values = tool_spec.get(allowed_ids_key) if allowed_ids_key else None
+        declared_values = tool_spec.get("allowed_arg_values", {})
+        if not allowed_values and isinstance(declared_values, dict):
+            allowed_values = declared_values.get(field_name)
+        if isinstance(allowed_values, (list, tuple)) and allowed_values:
+            if property_schema.get("type") == "ARRAY":
+                property_schema["items"]["enum"] = list(allowed_values)
+            else:
+                property_schema["enum"] = list(allowed_values)
+        return property_schema
+
+    def args_schema(tool_spec: dict[str, Any]) -> dict[str, Any]:
+        required = list(tool_spec.get("tool_args", ()))
+        declared = list(_iter_declared_tool_arg_names(tool_spec))
+        any_of_groups = tool_spec.get("tool_arg_any_of", ())
+        if not any_of_groups:
+            return {
+                "type": "OBJECT",
+                "required": required,
+                "properties": {
+                    name: arg_property(name, tool_spec) for name in declared
+                },
+            }
+
+        # Each alternative gets its own closed args object. This prevents a
+        # model from mixing aliases (or attaching another tool's arguments).
+        alternatives: list[dict[str, Any]] = []
+        for group in any_of_groups:
+            for selected_name in group:
+                branch_names = [
+                    name
+                    for name in declared
+                    if name not in group or name == selected_name
+                ]
+                alternatives.append(
+                    {
+                        "type": "OBJECT",
+                        "required": [*required, selected_name],
+                        "properties": {
+                            name: arg_property(name, tool_spec)
+                            for name in branch_names
+                        },
+                    }
                 )
-        _append_unique_field_names(tool_arg_names, _iter_declared_tool_arg_names(tool_spec))
+        return {"anyOf": alternatives}
+
+    step_variants = []
+    for tool_name, tool_spec in allowed_tool_specs.items():
+        step_variants.append(
+            {
+                "type": "OBJECT",
+                "required": ["step", "agent", "tool", "args", "reasoning"],
+                "properties": {
+                    "step": {"type": "INTEGER"},
+                    "agent": _build_symbolic_field_schema("agent", agent_ids),
+                    "tool": {"type": "STRING", "enum": [tool_name]},
+                    "args": args_schema(tool_spec),
+                    "reasoning": {"type": "STRING"},
+                },
+            }
+        )
 
     return {
         "type": "OBJECT",
@@ -149,39 +204,7 @@ def build_task_response_schema(
             "steps": {
                 "type": "ARRAY",
                 "minItems": min_steps,
-                "items": {
-                    "type": "OBJECT",
-                    "required": [
-                        "step",
-                        "agent",
-                        "tool",
-                        "args",
-                        "reasoning",
-                    ],
-                    "properties": {
-                        "step": {"type": "INTEGER"},
-                        "agent": _build_symbolic_field_schema(
-                            "agent",
-                            agent_ids,
-                        ),
-                        "tool": {
-                            "type": "STRING",
-                            "enum": list(allowed_tool_specs),
-                        },
-                        "args": {
-                            "type": "OBJECT",
-                            "properties": {
-                                field_name: _build_symbolic_field_schema(
-                                    field_name,
-                                    agent_ids,
-                                    tool_arg_schema_types[field_name],
-                                )
-                                for field_name in tool_arg_names
-                            },
-                        },
-                        "reasoning": {"type": "STRING"},
-                    },
-                },
+                "items": {"anyOf": step_variants},
             },
         },
     }

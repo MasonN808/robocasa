@@ -115,6 +115,10 @@ from data_generation.task_level.generation.raw import progress as raw_progress
 from data_generation.task_level.runtime.client import load_dotenv_file
 from robocasa.utils.trajectory_pruning import build_trajectory_pruning_config
 
+
+DEFAULT_MAP_DPI = 60
+DEFAULT_MAP_RENDERER = "raster"
+
 BarColumn = raw_progress.BarColumn
 Console = raw_progress.Console
 MofNCompleteColumn = raw_progress.MofNCompleteColumn
@@ -218,6 +222,8 @@ def _executor_cache_key(
     gl_backend: str,
     render_width: int = 512,
     render_height: int = 512,
+    map_dpi: int = DEFAULT_MAP_DPI,
+    map_renderer: str = DEFAULT_MAP_RENDERER,
     pruning_signature: str = "",
 ) -> tuple[Any, ...]:
     """Build the simulator reuse key for one worker-local executor."""
@@ -234,6 +240,8 @@ def _executor_cache_key(
         gl_backend,
         render_width,
         render_height,
+        map_dpi,
+        map_renderer,
         pruning_signature,
     )
 
@@ -251,6 +259,8 @@ def _get_or_create_cached_executor(
     gl_backend: str,
     render_width: int = 512,
     render_height: int = 512,
+    map_dpi: int = DEFAULT_MAP_DPI,
+    map_renderer: str = DEFAULT_MAP_RENDERER,
     update_fxtr_cfg_dict: dict[str, dict[str, Any]] | None = None,
     trajectory_object_names: list[str] | tuple[str, ...] | None = None,
     trajectory_object_types: list[str] | tuple[str, ...] | None = None,
@@ -278,6 +288,8 @@ def _get_or_create_cached_executor(
         gl_backend=gl_backend,
         render_width=render_width,
         render_height=render_height,
+        map_dpi=map_dpi,
+        map_renderer=map_renderer,
         pruning_signature=pruning_signature,
     )
     cached_entry = _WORKER_EXECUTOR_CACHE.get(cache_slot)
@@ -309,6 +321,8 @@ def _get_or_create_cached_executor(
         gl_backend=gl_backend,
         render_width=render_width,
         render_height=render_height,
+        map_dpi=map_dpi,
+        map_renderer=map_renderer,
     )
     _WORKER_EXECUTOR_CACHE[cache_slot] = (cache_key, executor)
     return executor
@@ -1103,6 +1117,8 @@ def run_one(
     gl_backend: str = "osmesa",
     render_width: int = 512,
     render_height: int = 512,
+    map_dpi: int = DEFAULT_MAP_DPI,
+    map_renderer: str = DEFAULT_MAP_RENDERER,
     step_order: str = "concurrent",
 ) -> dict:
     """Execute a single trajectory and return summary info."""
@@ -1110,6 +1126,11 @@ def run_one(
 
     with open(traj_file) as f:
         trajectory = json.load(f)
+    from data_generation.task_level.tasks.shared.validation_contract import (
+        require_current_validation,
+    )
+
+    require_current_validation(trajectory, source=str(traj_file))
 
     task_name = trajectory.get("composite_task", "Kitchen")
     pruning_config = build_trajectory_pruning_config(trajectory, layout=layout)
@@ -1139,6 +1160,8 @@ def run_one(
                 gl_backend=gl_backend,
                 render_width=render_width,
                 render_height=render_height,
+                map_dpi=map_dpi,
+                map_renderer=map_renderer,
                 update_fxtr_cfg_dict=pruning_config["update_fxtr_cfg_dict"],
                 trajectory_object_names=pruning_config["trajectory_object_names"],
                 trajectory_object_types=pruning_config["trajectory_object_types"],
@@ -1160,6 +1183,8 @@ def run_one(
                 gl_backend=gl_backend,
                 render_width=render_width,
                 render_height=render_height,
+                map_dpi=map_dpi,
+                map_renderer=map_renderer,
             )
             used_pruning_fallback = True
     else:
@@ -1175,6 +1200,8 @@ def run_one(
             gl_backend=gl_backend,
             render_width=render_width,
             render_height=render_height,
+            map_dpi=map_dpi,
+            map_renderer=map_renderer,
         )
 
     executor.restore_baseline_state()
@@ -1247,6 +1274,8 @@ def run_trajectory_entry(
     gl_backend: str = "osmesa",
     render_width: int = 512,
     render_height: int = 512,
+    map_dpi: int = DEFAULT_MAP_DPI,
+    map_renderer: str = DEFAULT_MAP_RENDERER,
     step_order: str = "concurrent",
 ) -> dict[str, Any]:
     """Execute one discovered trajectory across every requested scene combo."""
@@ -1273,12 +1302,16 @@ def run_trajectory_entry(
         task_name = str(entry["task_dir_name"])
         traj_idx = int(entry["traj_idx"])
         traj_file = Path(entry["traj_file"])
-        combo_count = len(combos)
+        entry_combos = (
+            (tuple(entry["scene_combo"]),)
+            if entry.get("scene_combo") is not None else combos
+        )
+        combo_count = len(entry_combos)
         results: list[dict[str, Any]] = []
         diagnostic_lines: list[str] = []
         log_lines: list[str] = []
 
-        for combo_offset, (layout, style, seed) in enumerate(combos):
+        for combo_offset, (layout, style, seed) in enumerate(entry_combos):
             run_num = entry_index * combo_count + combo_offset + 1
             traj_output_dir, combo_label = _resolve_run_output_dir(
                 output_root,
@@ -1310,6 +1343,8 @@ def run_trajectory_entry(
                         gl_backend=gl_backend,
                         render_width=render_width,
                         render_height=render_height,
+                        map_dpi=map_dpi,
+                        map_renderer=map_renderer,
                         step_order=step_order,
                     )
                 elapsed_seconds = time.time() - started_at
@@ -1376,11 +1411,15 @@ def _build_trajectory_crash_results(
     task_name = str(entry["task_dir_name"])
     traj_idx = int(entry["traj_idx"])
     traj_file = Path(entry["traj_file"])
-    combo_count = len(combos)
+    entry_combos = (
+        (tuple(entry["scene_combo"]),)
+        if entry.get("scene_combo") is not None else combos
+    )
+    combo_count = len(entry_combos)
     results: list[dict[str, Any]] = []
     log_lines: list[str] = []
 
-    for combo_offset, (layout, style, seed) in enumerate(combos):
+    for combo_offset, (layout, style, seed) in enumerate(entry_combos):
         run_num = entry_index * combo_count + combo_offset + 1
         combo_label = _resolve_combo_label(
             combo_count=combo_count,
@@ -1482,6 +1521,8 @@ def execute_sweep(
     gl_backend: str = "osmesa",
     render_width: int = 512,
     render_height: int = 512,
+    map_dpi: int = DEFAULT_MAP_DPI,
+    map_renderer: str = DEFAULT_MAP_RENDERER,
     step_order: str = "concurrent",
     cancellation_controller: SweepCancellationController | None = None,
 ) -> list[dict[str, Any]]:
@@ -1543,6 +1584,8 @@ def execute_sweep(
                     gl_backend=gl_backend,
                     render_width=render_width,
                     render_height=render_height,
+                    map_dpi=map_dpi,
+                    map_renderer=map_renderer,
                     step_order=step_order,
                     progress_reporter=(
                         partial(
@@ -1638,6 +1681,8 @@ def execute_sweep(
                                 gl_backend=gl_backend,
                                 render_width=render_width,
                                 render_height=render_height,
+                                map_dpi=map_dpi,
+                                map_renderer=map_renderer,
                                 step_order=step_order,
                                 progress_reporter=progress_reporter,
                             )
@@ -2273,6 +2318,16 @@ def main() -> None:
         default=[42],
         help="Environment seeds (default: 42)",
     )
+    parser.add_argument(
+        "--scene-compatibility-cache",
+        type=Path,
+        default=None,
+        help=(
+            "Select one certified compatible scene per trajectory instead of "
+            "executing the layouts/styles/seeds Cartesian product."
+        ),
+    )
+    parser.add_argument("--scene-sampling-seed", type=int, default=20260819)
     parser.add_argument("--robots", type=int, default=2)
     parser.add_argument("--placement", choices=["grid"], default="grid")
     parser.add_argument("--cell-size", type=float, default=0.05)
@@ -2293,6 +2348,21 @@ def main() -> None:
             "Offscreen render height in pixels. Lower values reduce VRAM and "
             "render time."
         ),
+    )
+    parser.add_argument(
+        "--map-dpi",
+        type=int,
+        default=DEFAULT_MAP_DPI,
+        help=(
+            "Placement-map DPI (default: 60, matching live evaluation). "
+            "The former legacy path used 300 DPI and produced 6000x4800 maps."
+        ),
+    )
+    parser.add_argument(
+        "--map-renderer",
+        choices=("legacy", "raster"),
+        default=DEFAULT_MAP_RENDERER,
+        help="Placement-map renderer (default: raster, matching live evaluation).",
     )
     parser.add_argument(
         "--step-order",
@@ -2408,6 +2478,8 @@ def main() -> None:
         parser.error("--render-width must be greater than 0.")
     if args.render_height <= 0:
         parser.error("--render-height must be greater than 0.")
+    if args.map_dpi <= 0:
+        parser.error("--map-dpi must be greater than 0.")
     if (args.num_shards is None) != (args.shard_index is None):
         parser.error("--num-shards and --shard-index must be provided together.")
     if args.num_shards is not None and args.num_shards <= 0:
@@ -2435,6 +2507,35 @@ def main() -> None:
         parser.error(str(exc))
 
     combos = list(itertools.product(args.layouts, args.styles, args.seeds))
+    if args.scene_compatibility_cache is not None:
+        from data_generation.task_level.scene_sampling import (
+            load_compatibility_cache,
+            sample_compatible_scene,
+        )
+        cache = load_compatibility_cache(args.scene_compatibility_cache)
+        for entry in entries:
+            trajectory = json.loads(Path(entry["traj_file"]).read_text())
+            physical_signature = trajectory.get(
+                "physical_configuration_signature"
+            )
+            if not physical_signature:
+                parser.error(
+                    f"{entry['traj_file']} lacks physical_configuration_signature; "
+                    "certified random-scene rendering requires new-format data"
+                )
+            task = trajectory.get("composite_task") or trajectory.get("task")
+            scene = sample_compatible_scene(
+                cache,
+                task=task,
+                physical_configuration_signature=physical_signature,
+                sampling_seed=args.scene_sampling_seed,
+                sample_index=int(entry["traj_idx"]),
+            )
+            entry["scene_combo"] = (
+                scene["layout"], scene["style"], scene["seed"]
+            )
+        # Each entry now carries exactly one independently sampled scene.
+        combos = [(0, 0, 0)]
     total_runs = len(entries) * len(combos)
     concurrent_workers = min(args.workers, len(entries))
     resolved_gl_backend = args.gl_backend or ("egl" if args.gpu_ids else "osmesa")
@@ -2470,6 +2571,7 @@ def main() -> None:
             print(f"Using GL backend: {resolved_gl_backend}")
             print(f"GPU allocation by worker slot: {gpu_allocation}")
         print(f"Render size: {args.render_width}x{args.render_height}")
+        print(f"Map rendering: {args.map_renderer}@{args.map_dpi}dpi")
         print(f"Step order: {args.step_order}")
         if len(combos) > 1:
             print(f"  layouts: {args.layouts}")
@@ -2480,7 +2582,11 @@ def main() -> None:
     if args.dry_run:
         if not args.quiet:
             for entry in entries:
-                for layout, style, seed in combos:
+                entry_combos = (
+                    [tuple(entry["scene_combo"])]
+                    if entry.get("scene_combo") is not None else combos
+                )
+                for layout, style, seed in entry_combos:
                     task_name = entry["task_dir_name"]
                     traj_idx = entry["traj_idx"]
                     out, combo_label = _resolve_run_output_dir(
@@ -2520,6 +2626,8 @@ def main() -> None:
             gl_backend=resolved_gl_backend,
             render_width=args.render_width,
             render_height=args.render_height,
+            map_dpi=args.map_dpi,
+            map_renderer=args.map_renderer,
             step_order=args.step_order,
             cancellation_controller=cancellation_controller,
         )
@@ -2543,6 +2651,8 @@ def main() -> None:
         "procs_per_gpu": args.procs_per_gpu,
         "render_width": args.render_width,
         "render_height": args.render_height,
+        "map_dpi": args.map_dpi,
+        "map_renderer": args.map_renderer,
         "step_order": args.step_order,
         "results": results,
     }

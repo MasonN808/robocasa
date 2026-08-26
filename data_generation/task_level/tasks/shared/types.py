@@ -24,6 +24,7 @@ class TaskPromptBuilder(Protocol):
         variation_key: str,
         task_instance: TaskInstance | None = None,
         retry_feedback: str | None = None,
+        prompt_style: str = "legacy",
     ) -> str:
         """Builds one task prompt, optionally including retry feedback."""
 
@@ -46,6 +47,11 @@ class TaskInstance:
     task_goal: str | None = None
     extra_execution_rules: tuple[str, ...] = ()
     work_partition: dict[str, Any] | None = None
+    coordinator_id: str | None = None
+    # Model-hidden physical initialization identity used to select a certified
+    # rendering/evaluation scene. Coordinator and communication choices are
+    # intentionally absent.
+    physical_configuration: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -65,3 +71,4 @@ class TaskDefinition:
     # Tick-format alternative: rows of simultaneous actions rather than a
     # flat step list. Selected per run, so both live on the definition.
     tick_response_schema: dict[str, Any] | None = None
+    explicit_blocked_tick_response_schema: dict[str, Any] | None = None

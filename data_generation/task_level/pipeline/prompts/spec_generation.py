@@ -244,6 +244,10 @@ Goal condition `kind` values (use exactly these, nothing else):
   True when exactly `count` of the listed objects are currently at
   `location`. Use this for exact allocation/count requirements such as
   "exactly one chocolate in the glass" or "two yogurts on each plate".
+- `object_count_at_locations`: {object_ids: [id, ...], locations: [id, ...], count}.
+  True when exactly `count` of the listed objects are currently anywhere
+  in the listed location set. Use this when a native goal explicitly allows
+  interchangeable objects to satisfy one exact count across alternative targets.
 - `object_at_location_one_of`: {object_id, locations: [id, ...],
   exclusive?: bool}. True when the object is at any one of the listed
   locations. Only set `exclusive: true` when the number of distinct
@@ -433,6 +437,7 @@ Follow these rules when writing the spec:
 
 17. Do not invent new `kind` values. Goals may use only
     `object_at_location`, `object_count_at_location`,
+    `object_count_at_locations`,
     `object_at_location_one_of`, `machine_flag_true`,
     `machine_flag_equals`, `fixture_part_state`, or
     `fixture_control_state`. Preconditions may use only
@@ -651,7 +656,8 @@ Core rules:
    placement of that same object. Do not operate parts/controls while holding.
 11. Use only supported kinds:
    goals: `object_at_location`, `object_count_at_location`,
-   `object_at_location_one_of`, `machine_flag_true`, `machine_flag_equals`,
+   `object_count_at_locations`, `object_at_location_one_of`,
+   `machine_flag_true`, `machine_flag_equals`,
    `fixture_part_state`, `fixture_control_state`.
    preconditions: `object_must_remain_at_location`,
    `fixture_part_state_required_for_pickup`,

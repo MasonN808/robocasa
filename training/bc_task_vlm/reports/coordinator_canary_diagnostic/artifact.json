@@ -1,0 +1,151 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Coordinator-protocol canary: why acceptance fell",
+    "description": "Diagnostic of 106 requested trajectories generated with Gemini 3 Flash and the new tick/coordinator protocol.",
+    "generatedAt": "2026-08-08T22:00:00Z",
+    "sources": [
+      {
+        "id": "canary-summaries",
+        "label": "Canary task summaries and validation-error logs",
+        "path": "tick_coordinator_protocol_canary/*/{summary.json,summary_errors.json}",
+        "query": {
+          "language": "python",
+          "description": "Aggregate all 53 task summary files and classify every validation error event by its first matching protocol/error signature.",
+          "tables_used": ["summary.json", "summary_errors.json"],
+          "filters": ["53 verified tasks", "2 requested trajectories per task", "maximum 10 attempts per trajectory", "Gemini 3 Flash", "structured_random", "thinking level low"],
+          "metric_definitions": [
+            "Final acceptance = saved trajectories / requested trajectories = 57 / 106.",
+            "First-attempt acceptance = trajectories accepted on attempt 1 / requested trajectories = 19 / 106.",
+            "Failure share = error events in category / all 607 failed validation attempts."
+          ]
+        }
+      }
+    ],
+    "cards": [
+      {
+        "id": "final-acceptance",
+        "dataset": "headline",
+        "sourceId": "canary-summaries",
+        "description": "A requested trajectory counts as accepted if any of at most 10 attempts passed validation and was saved.",
+        "metrics": [{"label": "Final acceptance", "field": "final_acceptance", "format": "percent"}]
+      },
+      {
+        "id": "first-pass",
+        "dataset": "headline",
+        "sourceId": "canary-summaries",
+        "description": "Accepted without validator feedback or a retry.",
+        "metrics": [{"label": "First-attempt acceptance", "field": "first_attempt_acceptance", "format": "percent"}]
+      },
+      {
+        "id": "protocol-share",
+        "dataset": "headline",
+        "sourceId": "canary-summaries",
+        "description": "Share of all failed attempts explained by the four largest coordination/protocol categories.",
+        "metrics": [{"label": "Top 4 protocol failures", "field": "top4_protocol_share", "format": "percent"}]
+      },
+      {
+        "id": "exhausted",
+        "dataset": "headline",
+        "sourceId": "canary-summaries",
+        "description": "Requested trajectories that still failed after all 10 attempts.",
+        "metrics": [{"label": "Exhausted after 10 tries", "field": "exhausted", "format": "number"}]
+      }
+    ],
+    "charts": [
+      {
+        "id": "failure-drivers",
+        "title": "Validation failures by primary category",
+        "subtitle": "The dominant problems are coordination-protocol compliance, not physical task semantics.",
+        "question": "Which rejection reasons explain the low acceptance rate?",
+        "rationale": "A sorted horizontal bar chart makes the many labeled categories and their relative magnitudes easy to compare.",
+        "intent": "comparison",
+        "type": "horizontalBar",
+        "dataset": "failure_categories",
+        "sourceId": "canary-summaries",
+        "encodings": {
+          "x": {"field": "count", "type": "quantitative", "label": "Failed attempts"},
+          "y": {"field": "category", "type": "nominal", "label": "Primary category"},
+          "tooltip": [
+            {"field": "count", "type": "quantitative", "label": "Failures"},
+            {"field": "share", "type": "quantitative", "label": "Share", "format": "percent"}
+          ]
+        },
+        "surface": {"palette": {"kind": "sequential"}, "legend": {"show": false}, "valueLabels": {"show": true}},
+        "layout": "full"
+      }
+    ],
+    "tables": [
+      {
+        "id": "canary-design",
+        "title": "Recommended prompt/model canary",
+        "subtitle": "Fix the prompt before using stronger models to diagnose remaining capability limits.",
+        "dataset": "experiment",
+        "sourceId": "canary-summaries",
+        "defaultSort": {"field": "order", "direction": "asc"},
+        "density": "spacious",
+        "columns": [
+          {"field": "stage", "label": "Stage", "type": "text"},
+          {"field": "comparison", "label": "Comparison", "type": "text"},
+          {"field": "purpose", "label": "What it tells us", "type": "text"}
+        ]
+      }
+    ],
+    "blocks": [
+      {"id": "title", "type": "markdown", "body": "# Coordinator-protocol canary: why acceptance fell"},
+      {"id": "summary", "type": "markdown", "sourceId": "canary-summaries", "body": "## Executive Summary\n\nThe 53-task canary saved **57 of 106 requested trajectories (53.8%)**, but only **19 (17.9%)** passed on their first attempt. The important diagnosis is that this is mostly self-inflicted protocol complexity: same-tick wait/release, finished-agent tail behavior, premature global-completion claims, and overly strict proposal grounding account for **440 of 607 failures (72.5%)**.\n\nThe right next move is to compress the global contract to eight invariants, move tool syntax into schemas and task facts into generated constraints, relax proposal grounding to ownership-distinguishing object IDs, and add generated serialization hints for shared targets. Then compare models on the same hard-task subset. A stronger model tested against the current 80-ish-directive prompt would mostly measure tolerance for prompt clutter."},
+      {"id": "metrics", "type": "metric-strip", "cardIds": ["final-acceptance", "first-pass", "protocol-share", "exhausted"]},
+      {"id": "drivers-heading", "type": "markdown", "body": "## Where the attempts fail\n\nRetries do help—the number of active failures declines from 87 after attempt 1 to 49 after attempt 10—but they do not solve a persistent hard tail. The top four categories are all consequences of the newly explicit coordination protocol. Traditional physical-planning errors such as navigation and symbolic placement are only a small minority."},
+      {"id": "drivers", "type": "chart", "chartId": "failure-drivers"},
+      {"id": "prompt", "type": "markdown", "body": "## Why the prompt is causing this\n\nA representative generated prompt contains **24 top-level Important rules** plus a dynamic Simple execution rules section—about **80 bullet-like directives** in total. The same ideas recur in multiple forms: opening communication, navigation, give-space semantics, exact arguments, and waiting/release behavior. On retries, the model also sees the rejected full trajectory and corrective text.\n\nThis creates two failure modes. First, important state transitions are buried among lower-level syntax reminders. Second, overlapping prose descriptions are not as precise as one compact state machine. For example, AddSugarCubes produced a correct opening handshake and parallel pickups, then both agents placed onto `cake_plate` simultaneously, both announced portion completion after the goal was already achieved, and both waited forever for each other's cube. That output looks like an attempt to satisfy many local instructions without preserving one coherent schedule."},
+      {"id": "eight-rules", "type": "markdown", "body": "## Replace the prose forest with eight invariants\n\n1. Output canonical ticks; invoke every unblocked agent exactly once per tick.\n2. Use the exact two-tick sampled-leader handshake before physical work.\n3. Follow the sampled hidden assignment and any generated shared-resource ordering constraint.\n4. Maintain legal physical state: navigate before fixture actions, hold at most one object, and act only on reachable/current resources.\n5. Treat a tick as atomic: never use the same object or exclusive workspace concurrently.\n6. Handover is one fixed automaton: request → next-tick wait → holder finishes/departs → later release → following-tick resume.\n7. Communicate only coordination changes; an early finisher says `portion_complete` once, waits next tick on a real outstanding dependency, and never claims global completion. Stop immediately when the FSM goal is reached.\n8. Use exact tool schemas and symbolic IDs; emit JSON only.\n\nThese are global invariants, not the entire prompt. Exact argument schemas should remain machine-structured beside each tool, and task-specific preconditions should be short generated facts. They should not be restated as additional global rules."},
+      {"id": "validator", "type": "markdown", "body": "## Two validator/generator changes matter most\n\n**Relax proposal grounding.** Today the proposal can be rejected for omitting a shared destination such as `cake_plate`, even when it clearly assigns `sugar_cube_1` and `sugar_cube_2`. Grounding should require the IDs that distinguish ownership—the primary manipulated objects—not every shared target or support already stated in the task goal.\n\n**Generate serialization hints from the sampled partition.** If both assignments write to one target (plate, tray, bowl) or traverse one exclusive fixture, generate one concise ordering constraint for the trajectory generator, such as “agent_0 places first; agent_1 requests, waits, then resumes after a later release.” This is generation-only guidance; it need not leak a forced work partition into SFT or evaluation context.\n\nAlso make retry feedback surgical: name the violated transition and show only the relevant tick window as diagnosis, while still requesting a complete corrected trajectory. Repeating the full rule set and full rejected trajectory increases context without teaching the repair."},
+      {"id": "models-heading", "type": "markdown", "body": "## Use stronger models as a second-stage canary\n\nThe repository already supports Google GenAI and Azure OpenAI generation. Configured candidates include Gemini 3.1 Pro and GPT-5.4 Mini via Azure; Gemini 3.5 Flash pricing is also configured. Anthropic is not currently a generation backend, so testing it would require adding and validating an adapter before it is a fair run.\n\nUse the same 14 zero-success tasks plus a small easy control set, two trajectories per task/model, identical sampled partitions/seeds, and at least five attempts. Report first-attempt acceptance, final acceptance, failures by category, tokens, latency, and cost. The key interaction is **prompt version × model**, not model alone."},
+      {"id": "experiment-table", "type": "table", "tableId": "canary-design"},
+      {"id": "decision", "type": "markdown", "body": "## Decision rule\n\nIf Gemini 3 Flash improves sharply under the compact prompt, prompt/validator design was the main bottleneck and it remains the economical generator. If all models still fail the same scheduler transitions, the protocol or validator is still poorly specified. If stronger models materially outperform Flash only after simplification—and their accepted trajectories remain diverse—use the cheapest model that reaches the target acceptance rate, or route only the hard-task subset to the stronger model.\n\nA sensible gate is **≥50% first-attempt acceptance and ≥90% final acceptance within five attempts** on the hard-task canary before restarting full generation."},
+      {"id": "caveats", "type": "markdown", "body": "## Caveats\n\nFailure categories are mutually exclusive labels assigned by the first matching error signature; one rejected trajectory can contain additional problems that are not counted separately. The current canary used up to ten attempts, so final acceptance is not a pure single-sample model-quality metric. No new paid model calls were launched for this diagnosis."}
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-08T22:00:00Z",
+    "status": "ready",
+    "datasets": {
+      "headline": [{"requested": 106, "saved": 57, "final_acceptance": 0.5377358491, "first_attempt_saved": 19, "first_attempt_acceptance": 0.179245283, "failed_attempts": 607, "top4_protocol_failures": 440, "top4_protocol_share": 0.7248764415, "exhausted": 49}],
+      "failure_categories": [
+        {"rank": 1, "category": "Same-tick wait / release", "count": 182, "share": 0.2998352554, "family": "coordination protocol"},
+        {"rank": 2, "category": "Finished-agent tail protocol", "count": 108, "share": 0.1779242175, "family": "coordination protocol"},
+        {"rank": 3, "category": "Premature global completion", "count": 78, "share": 0.1285008237, "family": "coordination protocol"},
+        {"rank": 4, "category": "Proposal missing required IDs", "count": 72, "share": 0.1186161449, "family": "coordination protocol"},
+        {"rank": 5, "category": "Tick invocation / block state", "count": 49, "share": 0.0807248764, "family": "scheduler protocol"},
+        {"rank": 6, "category": "Deadlock / unmatched wait", "count": 42, "share": 0.0691927512, "family": "scheduler protocol"},
+        {"rank": 7, "category": "Other (mostly handover sequencing)", "count": 33, "share": 0.0543657331, "family": "mixed"},
+        {"rank": 8, "category": "Resource collision", "count": 24, "share": 0.0395387149, "family": "physical concurrency"},
+        {"rank": 9, "category": "Navigation / location", "count": 11, "share": 0.018121911, "family": "physical planning"},
+        {"rank": 10, "category": "Tool args / symbolic placement", "count": 6, "share": 0.0098846787, "family": "tool semantics"},
+        {"rank": 11, "category": "Post-goal / task completeness", "count": 2, "share": 0.0032948929, "family": "termination"}
+      ],
+      "experiment": [
+        {"order": 1, "stage": "Prompt ablation", "comparison": "Current prompt vs compact 8-rule prompt on Gemini 3 Flash", "purpose": "Isolate prompt/validator complexity before paying for stronger models."},
+        {"order": 2, "stage": "Capability bake-off", "comparison": "Gemini 3 Flash vs Gemini 3.1 Pro vs GPT-5.4 Mini", "purpose": "Measure whether stronger reasoning improves scheduling after the contract is clean."},
+        {"order": 3, "stage": "Optional adapter", "comparison": "Best existing backend vs Anthropic model", "purpose": "Only worthwhile after implementing equivalent structured-output, retry, usage, and cost handling."}
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "canary-summaries",
+      "label": "Canary task summaries and validation-error logs",
+      "path": "tick_coordinator_protocol_canary/*/{summary.json,summary_errors.json}",
+      "query": {
+        "language": "python",
+        "description": "Aggregate all 53 task summary files and classify every validation error event by its first matching protocol/error signature.",
+        "tables_used": ["summary.json", "summary_errors.json"],
+        "filters": ["53 verified tasks", "2 requested trajectories per task", "maximum 10 attempts per trajectory", "Gemini 3 Flash", "structured_random", "thinking level low"],
+        "metric_definitions": ["Final acceptance = 57 / 106.", "First-attempt acceptance = 19 / 106.", "Failure share = category count / 607."]
+      }
+    }
+  ]
+}

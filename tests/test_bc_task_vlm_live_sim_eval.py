@@ -8,6 +8,7 @@ import pytest
 from training.bc_task_vlm import live_sim_eval
 from training.bc_task_vlm.divergence_analysis import analyze
 from training.bc_task_vlm.live_sim_eval import (
+    FsmMirror,
     OVERHEAD_VIEWS,
     ROUTER_VIEWS,
     SCOUT_VIEWS,
@@ -22,6 +23,230 @@ from training.bc_task_vlm.live_sim_eval import (
     _write_metrics,
     canonical_views_for_tool,
 )
+from data_generation.task_level.subatomic_tool_specs import build_model_tool_specs
+from training.bc_task_vlm.communication_profiles import apply_communication_profile
+from training.bc_task_vlm.prompting import build_partial_user_prompt, format_history_steps
+from training.bc_task_vlm.tool_calling import build_tool_schemas
+
+
+def test_global_get_image_contract_names_exact_views_in_prompt_and_schema():
+    specs = build_model_tool_specs(include_get_image=True)
+    prompt = build_partial_user_prompt(
+        composite_task="ToyTask",
+        task_instruction="Move the object.",
+        agent_id="agent_0",
+        history_steps=[],
+        observation_views=[],
+        allowed_tool_specs=specs,
+        coordinator_id="agent_0",
+        initial_state={"agents": {}, "objects": {}, "fixtures": {}},
+    )
+    assert "get_image.views must be a non-empty list" in prompt
+    assert "agentview_center" in prompt
+    assert "fridge_interior are invalid" in prompt
+    assert "Communication tick 1" in prompt
+    assert "Communication tick 2" in prompt
+    assert "Do not repeat" not in prompt
+
+    schemas = build_tool_schemas(
+        agent_ids=("agent_0", "agent_1"), allowed_tool_specs=specs
+    )
+    get_image = next(
+        item for item in schemas if item["function"]["name"] == "get_image"
+    )
+    views = get_image["function"]["parameters"]["properties"]["views"]
+    assert views["items"]["enum"] == [
+        "top_view",
+        "room_view",
+        "map",
+        "wrist",
+        "agentview_center",
+        "agentview_left",
+        "agentview_right",
+    ]
+
+
+def test_rejection_history_normalizes_missing_agent():
+    agent = live_sim_eval.AgentRuntime("agent_1")
+    live_sim_eval._handle_rejection(
+        agent=agent,
+        agents={"agent_1": agent},
+        step={"tool": "communicate", "args": {"message": "bad"}},
+        reason="opening protocol violation",
+        clock=0.0,
+        mode=live_sim_eval.REJECTION_MODE_REPORT_FAILED,
+        multiplier=1.0,
+        record={},
+    )
+
+    assert agent.private_history[0]["agent"] == "agent_1"
+    assert "agent=agent_1" in format_history_steps(agent.private_history)
+
+
+def _communication_prompt(mode: str) -> tuple[str, dict]:
+    specs = apply_communication_profile(
+        build_model_tool_specs(include_get_image=True), mode
+    )
+    prompt = build_partial_user_prompt(
+        composite_task="ToyTask",
+        task_instruction="Move the object.",
+        agent_id="agent_0",
+        history_steps=[],
+        observation_views=[],
+        allowed_tool_specs=specs,
+        coordinator_id="agent_0",
+        initial_state={"agents": {}, "objects": {}, "fixtures": {}},
+        communication_mode=mode,
+    )
+    return prompt, specs
+
+
+def test_full_communication_profile_is_exact_default_contract():
+    canonical = build_model_tool_specs(include_get_image=True)
+    projected = apply_communication_profile(canonical, "full")
+    assert projected == canonical
+    assert projected is not canonical
+
+    default_prompt, _ = _communication_prompt("full")
+    explicit_prompt = build_partial_user_prompt(
+        composite_task="ToyTask",
+        task_instruction="Move the object.",
+        agent_id="agent_0",
+        history_steps=[],
+        observation_views=[],
+        allowed_tool_specs=canonical,
+        coordinator_id="agent_0",
+        initial_state={"agents": {}, "objects": {}, "fixtures": {}},
+    )
+    assert default_prompt == explicit_prompt
+
+
+def test_non_full_communication_prompts_and_tools_are_isolated():
+    canonical = build_model_tool_specs(include_get_image=True)
+    minimal_prompt, minimal = _communication_prompt("minimal")
+    unguided_prompt, unguided = _communication_prompt("unguided")
+    none_prompt, none = _communication_prompt("none")
+
+    for prompt in (minimal_prompt, unguided_prompt, none_prompt):
+        assert "Coordinator for this episode" not in prompt
+        assert "Communication tick 1" not in prompt
+        assert "coordination_phase" not in prompt
+        assert "Before ANY non-communicate action" not in prompt
+    assert "Communicate with the other agent to complete" in minimal_prompt
+    assert "The wait call is private" in minimal_prompt
+    assert "Communication with the other agent is possible" in unguided_prompt
+    assert "cannot exchange messages" in none_prompt
+    assert "communicate" in minimal and "wait_for_signal" in minimal
+    assert "communicate" in unguided and "wait_for_signal" in unguided
+    assert "communicate" not in none and "wait_for_signal" in none
+    assert "coordination_phase" not in str(minimal)
+    assert "coordination_phase" not in str(unguided)
+    assert "rest of the episode" in none["wait_for_signal"]["description"]
+    assert canonical == build_model_tool_specs(include_get_image=True)
+
+
+def test_non_full_fsm_removes_initial_communication_gate_and_none_rejects_messages():
+    call = {
+        "agent": "agent_0",
+        "tool": "open_hinged_part",
+        "args": {"target_id": "fridge", "part_id": "door"},
+    }
+    full = FsmMirror(
+        composite_task="AddLemonToFish",
+        trajectory={"composite_task": "AddLemonToFish", "steps": []},
+    )
+    assert "MissingInitialCommunication" in full.validate_cycle_preconditions([call])["agent_0"]
+
+    minimal = FsmMirror(
+        composite_task="AddLemonToFish",
+        trajectory={"composite_task": "AddLemonToFish", "steps": []},
+        communication_mode="minimal",
+    )
+    assert minimal.validate_cycle_preconditions([call]) == {}
+
+    none = FsmMirror(
+        composite_task="AddLemonToFish",
+        trajectory={"composite_task": "AddLemonToFish", "steps": []},
+        communication_mode="none",
+    )
+    message = {
+        "agent": "agent_0",
+        "tool": "communicate",
+        "args": {"to": "agent_1", "message": "hello"},
+    }
+    assert "UnsupportedTool" in none.validate_cycle_preconditions([message])["agent_0"]
+
+
+def test_live_wait_validation_rejects_self_sender_and_non_symbolic_about():
+    mirror = FsmMirror(
+        composite_task="AddLemonToFish",
+        trajectory={"composite_task": "AddLemonToFish", "steps": []},
+        communication_mode="none",
+    )
+    malformed = {
+        "step": 0,
+        "agent": "agent_1",
+        "tool": "wait_for_signal",
+        "args": {"from": "agent_1", "about": "the other agent is working"},
+    }
+    assert "other agent" in mirror.validate_wait_call(malformed)
+
+    malformed["args"] = {"from": "agent_0", "about": "not_a_symbol"}
+    assert "exact symbolic" in mirror.validate_wait_call(malformed)
+
+    malformed["args"] = {"from": "agent_0", "about": "fridge"}
+    assert mirror.validate_wait_call(malformed) is None
+
+
+def test_live_fsm_accepts_valid_global_tool_omitted_by_task_spec():
+    # AddLemonToFish historically omitted close_hinged_part because closing the
+    # fridge is irrelevant to its goal. The model now sees a global interface,
+    # so a physically and symbolically valid close must not be called
+    # "unsupported" merely for being unnecessary.
+    mirror = FsmMirror(
+        composite_task="AddLemonToFish",
+        trajectory={
+            "composite_task": "AddLemonToFish",
+            "steps": [],
+        },
+    )
+    mirror.runtime_state.communicated_agents = {"agent_0", "agent_1"}
+    open_call = {
+        "agent": "agent_0",
+        "tool": "open_hinged_part",
+        "args": {"target_id": "fridge", "part_id": "door"},
+    }
+    assert mirror.validate_cycle_preconditions([open_call]) == {}
+    mirror.commit(open_call)
+    close_call = {
+        "agent": "agent_0",
+        "tool": "close_hinged_part",
+        "args": {"target_id": "fridge", "part_id": "door"},
+    }
+    assert mirror.validate_cycle_preconditions([close_call]) == {}
+    mirror.commit(close_call)
+    assert mirror.runtime_state.fixtures["fridge"]["parts"]["door"]["state"] == "closed"
+
+
+def test_live_fsm_rejects_unresolvable_global_placement_before_commit():
+    mirror = FsmMirror(
+        composite_task="HotDogSetup",
+        trajectory={"composite_task": "HotDogSetup", "steps": []},
+    )
+    mirror.runtime_state.communicated_agents = {"agent_0", "agent_1"}
+    mirror.runtime_state.agents["agent_0"].held_object = "hotdog_bun"
+    mirror.runtime_state.objects["hotdog_bun"]["location"] = "held_by_agent_0"
+    mirror.runtime_state.agents["agent_0"].location = "dining_table"
+    call = {
+        "agent": "agent_0",
+        "tool": "place_next_to",
+        "args": {
+            "object_id": "hotdog_bun",
+            "reference_fixture_id": "dining_table",
+        },
+    }
+    errors = mirror.validate_cycle_preconditions([call])
+    assert "adjacent symbolic support location" in errors["agent_0"]
 
 
 def test_canonical_views_follow_tool_kind():
@@ -518,6 +743,7 @@ def test_generate_once_reuses_cached_files_without_rendering(monkeypatch, tmp_pa
         task_metadata=SimpleNamespace(
             composite_task="BeverageOrganization",
             dataset_name="beverage_organization",
+            task_goal="Organize the beverages.",
         ),
         tool_specs={},
         tool_schemas=[],
@@ -571,6 +797,7 @@ def test_live_generation_feature_includes_collator_metadata(monkeypatch, tmp_pat
         task_metadata=SimpleNamespace(
             composite_task="BeverageOrganization",
             dataset_name="beverage_organization",
+            task_goal="Organize the beverages.",
         ),
         tool_specs={},
         tool_schemas=[],
@@ -938,3 +1165,40 @@ def test_model_policy_dispatch_uses_generate_interface():
         object.__new__(live_sim_eval.VllmPolicy)
     )
     assert not live_sim_eval._uses_model_generation(StepPolicy())
+
+
+def test_dagger_prefix_policy_normalizes_stored_calls_for_qwen_parser():
+    class Delegate:
+        def generate(self, _feature):
+            raise AssertionError("delegate should not run before the prefix is exhausted")
+
+    row = {
+        "diagnostic": {
+            "full_trajectory": [
+                {
+                    "agent": "agent_0",
+                    "legal": True,
+                    "executed": True,
+                    "proposal": {
+                        "tool": "communicate",
+                        "args": {"to": "agent_1", "message": "ready"},
+                    },
+                }
+            ]
+        },
+        "expert_review": {
+            "correction": {
+                "branch_before_event_position": 1,
+                "resync_ticks": [],
+                "post_correction_ticks": [],
+            }
+        },
+    }
+    policy = live_sim_eval.DaggerPrefixPolicy(Delegate(), row)
+
+    decoded = policy.generate({"agent_id": "agent_0"})
+
+    assert live_sim_eval.parse_first_qwen_tool_call(decoded) == {
+        "name": "communicate",
+        "arguments": {"to": "agent_1", "message": "ready"},
+    }

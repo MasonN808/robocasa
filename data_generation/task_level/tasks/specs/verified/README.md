@@ -54,6 +54,7 @@ records every original source path.
 | `portionhotdogs` | `PortionHotDogs` | `bowls/portionhotdogs.json` | bowls<br>plates | bowls/portionhotdogs.json<br>plates/portionhotdogs.json | deduplicated overlapping verified variants |
 | `portionyogurt` | `PortionYogurt` | `bowls/portionyogurt.json` | bowls<br>plates | bowls/portionyogurt.json<br>plates/portionyogurt.json | deduplicated overlapping verified variants |
 | `preparecheesestation` | `PrepareCheeseStation` | `buffet_station_setup/preparecheesestation.json` | buffet_station_setup | buffet_station_setup/preparecheesestation.json | canonical |
+| `preparesandwichstation` | `PrepareSandwichStation` | `preparesandwichstation.json` | buffet_station_setup | preparesandwichstation.json | promoted after two 12/12 all-configuration canaries; omission from flat inventory was undocumented |
 | `preparecocktailstation` | `PrepareCocktailStation` | `beverages_drinkware/preparecocktailstation.json` | beverages_drinkware | beverages_drinkware/preparecocktailstation.json | canonical |
 | `preparecoffee` | `PrepareCoffee` | `beverages_drinkware/preparecoffee.json` | beverages_drinkware | beverages_drinkware/preparecoffee.json | canonical |
 | `preparedrinkstation` | `PrepareDrinkStation` | `beverages_drinkware/preparedrinkstation.json` | beverages_drinkware | beverages_drinkware/preparedrinkstation.json | canonical |

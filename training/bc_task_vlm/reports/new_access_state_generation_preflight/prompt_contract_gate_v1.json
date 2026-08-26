@@ -1,0 +1,806 @@
+{
+  "valid": true,
+  "task_count": 53,
+  "prompt_contract_version": "state_grounded_global_tools_no_index_v4_canonical_cabinet_workspace",
+  "generation_prompt_style": "simplified_v3",
+  "generation_tick_format": true,
+  "partial_step_index_mode": "none",
+  "failures": [],
+  "tasks": [
+    {
+      "task": "AddLemonToFish",
+      "run_index": 8,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "657c2f50d7afe36e3f12c8e56b9af3aa5954e6a129d0f25491f362e10614b446",
+      "sft_prompt_sha256": "3a189e88f0e38f5a04a13c52aaa5516b543335b532ca586c0307bed6c5bfb4c7",
+      "eval_prompt_sha256": "3a189e88f0e38f5a04a13c52aaa5516b543335b532ca586c0307bed6c5bfb4c7",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "AddSugarCubes",
+      "run_index": 0,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "33b216c29c1ea8b13970399ba8f5dbdf5bce2e8b36b872d3f107212738e9ef8c",
+      "sft_prompt_sha256": "5f4739e54be608d636e288ca1cb190be67ad9c786d9451e76aec77c1954bf532",
+      "eval_prompt_sha256": "5f4739e54be608d636e288ca1cb190be67ad9c786d9451e76aec77c1954bf532",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "AlcoholServingPrep",
+      "run_index": 9,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "2a1a7d45772d634890eec872ceb055bf4016034d5a6ae2f889c024897410c9e1",
+      "sft_prompt_sha256": "6371594f6d6b0040c736a468a098ae7a627328e9e0a4068936b01d250f01fb89",
+      "eval_prompt_sha256": "6371594f6d6b0040c736a468a098ae7a627328e9e0a4068936b01d250f01fb89",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "AlignSilverware",
+      "run_index": 5,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "feeb36d273a6542cbeebce3a8a3da6f0df1d206cb0110bf7d77ec4f78b3eb983",
+      "sft_prompt_sha256": "fff8b5b9b77e34707926649eb265dc66260f2701b3a8496e303f5bc83192f71d",
+      "eval_prompt_sha256": "fff8b5b9b77e34707926649eb265dc66260f2701b3a8496e303f5bc83192f71d",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "ArrangeBreadBowl",
+      "run_index": 9,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "33122a8b09c892400131f75e2849a6adf8008dc97c30df11f75639649d8aab40",
+      "sft_prompt_sha256": "628f4e394af90598db2e1fddb98a2e1adae33caacf2e921066ff8a4654fc1cc6",
+      "eval_prompt_sha256": "628f4e394af90598db2e1fddb98a2e1adae33caacf2e921066ff8a4654fc1cc6",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "ArrangeDrinkware",
+      "run_index": 3,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "b940e6eea6dac15013baf74afc64c23bd4d0af5b9134f9bb24418ca64fc6520f",
+      "sft_prompt_sha256": "b443cc1d56e95a373707181cb0c6c471701aea7931a7de35143e92caca357a66",
+      "eval_prompt_sha256": "b443cc1d56e95a373707181cb0c6c471701aea7931a7de35143e92caca357a66",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "ArrangeTea",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "c8032affa25f24080fda34d0ea9c6519f81c8b141f85fec90e34958a92f75d8f",
+      "sft_prompt_sha256": "c0d334bfda86e7cbd74c5ea1af30df956fe496c8a5524b4548d3437875b089a0",
+      "eval_prompt_sha256": "c0d334bfda86e7cbd74c5ea1af30df956fe496c8a5524b4548d3437875b089a0",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "BeverageOrganization",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "d90a7f536d13fabdcb7813cab648442095f9ad6008bdca98785761c1a904fde5",
+      "sft_prompt_sha256": "ecd00b215d3506b0af578a49be77b7c4f52bfd0df955995653581d8dc80342fe",
+      "eval_prompt_sha256": "ecd00b215d3506b0af578a49be77b7c4f52bfd0df955995653581d8dc80342fe",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "BowlAndCup",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "614b077e7738c4e72da4dbb202b526aa66f7c61ef1a6c703bfc579eaacf98112",
+      "sft_prompt_sha256": "52a9fa0edec273f32f09fe08dc1f75736aa6417e901532e4155db82083e24af0",
+      "eval_prompt_sha256": "52a9fa0edec273f32f09fe08dc1f75736aa6417e901532e4155db82083e24af0",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "CandleCleanup",
+      "run_index": 5,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "1ebcc80731eee50cb00d620905ebcbc60f61ce07518238226a6c16a73e190c18",
+      "sft_prompt_sha256": "d1960177a954c937d0ffceab812c1bcf4f509d44fcf6288353d92ee1188b57fc",
+      "eval_prompt_sha256": "d1960177a954c937d0ffceab812c1bcf4f509d44fcf6288353d92ee1188b57fc",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "CheeseMixing",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "961a0760f3fcf3e5a0ad74c4a95ba559a6b14467010e7c4b05e0f1a135cfcac2",
+      "sft_prompt_sha256": "6f05ff393347b07cb7f4d6799b1f5352305073bcb06a5f1505b8a60b23e2f95e",
+      "eval_prompt_sha256": "6f05ff393347b07cb7f4d6799b1f5352305073bcb06a5f1505b8a60b23e2f95e",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "ClusterItemsForClearing",
+      "run_index": 0,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "8e60c64e35cd33e2dd174064ab5b516825ef2093f097cf75988ef996be42153e",
+      "sft_prompt_sha256": "4b4cce74455fb0c59c3073722e5b3fff677fc085cb1d161dcb604887be192983",
+      "eval_prompt_sha256": "4b4cce74455fb0c59c3073722e5b3fff677fc085cb1d161dcb604887be192983",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "ColorfulSalsa",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "a005fce335382721aa7d0f79809f079cde191dc56343b1d31a58a2fb1a848516",
+      "sft_prompt_sha256": "0c4acb9e070d9f2d44f38fab0074fe7ea5fe0c8fd5b70ff4e9e0e84407e024fb",
+      "eval_prompt_sha256": "0c4acb9e070d9f2d44f38fab0074fe7ea5fe0c8fd5b70ff4e9e0e84407e024fb",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "CondimentCollection",
+      "run_index": 2,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "dfe51e3fa284fcf9b765d54d44b9b7b8adcc6e87d8ebed960d33edcd8816e228",
+      "sft_prompt_sha256": "0faa883625951cf27e58b9362fed9e2257034572c171da147ebac2c885ad548a",
+      "eval_prompt_sha256": "0faa883625951cf27e58b9362fed9e2257034572c171da147ebac2c885ad548a",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "CutBuffetPizza",
+      "run_index": 10,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "b9ba6c2024becaf3fe69cea32339b77961c9673c407e364749bd5fb95bab2bc2",
+      "sft_prompt_sha256": "e45c177359d07a930b13f411b368eed5b534a79fb45acb2c68a343965d074534",
+      "eval_prompt_sha256": "e45c177359d07a930b13f411b368eed5b534a79fb45acb2c68a343965d074534",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "DateNight",
+      "run_index": 2,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "af5c44214061b771a7bbdf41f05efb3a0ed47331fefaba2fd7afa1d4ede1c0b3",
+      "sft_prompt_sha256": "c2bd94a20d985563f9f36a9ee986789572c1d8d2d4b1d295fbd8feef3c961d08",
+      "eval_prompt_sha256": "c2bd94a20d985563f9f36a9ee986789572c1d8d2d4b1d295fbd8feef3c961d08",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "DeliverStraw",
+      "run_index": 0,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "19ddbd7b344f6dd48a408f0b72677a70e97c1edc2c8e28c67c7c09bc2f346427",
+      "sft_prompt_sha256": "0599c982108e34ae958605559b53699a267756cb8293442eb35d2104e64f2f17",
+      "eval_prompt_sha256": "0599c982108e34ae958605559b53699a267756cb8293442eb35d2104e64f2f17",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "DessertAssembly",
+      "run_index": 0,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "a6eb20eca8fa436510f3027c5cacaf0a3f3e3dc2492cc4f70b39b9640468f9d0",
+      "sft_prompt_sha256": "29b6b54804e7e4f75bee63cd6e449c89d075b869134839c3608c69a1e4d87eb5",
+      "eval_prompt_sha256": "29b6b54804e7e4f75bee63cd6e449c89d075b869134839c3608c69a1e4d87eb5",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "DisplayMeatVariety",
+      "run_index": 3,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "3def995430127519d0fbf42a9622b6c0c71e7838afa3e6d8ca656ae6362cb58f",
+      "sft_prompt_sha256": "4ba729110de77c647c11da3890aeebc7dc336435d955d57d897d0b45245a63a0",
+      "eval_prompt_sha256": "4ba729110de77c647c11da3890aeebc7dc336435d955d57d897d0b45245a63a0",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "DistributeChicken",
+      "run_index": 5,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "e582ee5e9fe92063aad1f50ce2708b3fac255f73a8bca74958edabf3b42ed674",
+      "sft_prompt_sha256": "c6b02a80692545b34d5049964871f14676c4bca9b05c337e9a5eb158afda5ec5",
+      "eval_prompt_sha256": "c6b02a80692545b34d5049964871f14676c4bca9b05c337e9a5eb158afda5ec5",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "GarnishCake",
+      "run_index": 0,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "6024443827224734d6e60d828518f8d8813cc9e581039a008dc7f210c11c9283",
+      "sft_prompt_sha256": "c3ac55c8b4272295248d55bf654dd3de37d7a8d30b950dce88de23e833ce181f",
+      "eval_prompt_sha256": "c3ac55c8b4272295248d55bf654dd3de37d7a8d30b950dce88de23e833ce181f",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "GarnishCupcake",
+      "run_index": 9,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "975805901c6fb4630106987d33fa2dd56a2346025861e658f05d48435d39952e",
+      "sft_prompt_sha256": "f18db10d088f9f4a1b83cfe8cd434b934a340730aaad6917080bbe87af466181",
+      "eval_prompt_sha256": "f18db10d088f9f4a1b83cfe8cd434b934a340730aaad6917080bbe87af466181",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "GarnishPancake",
+      "run_index": 9,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "cd39b0ef1118661ea7bc1e6e0251eb990ff921a44b65ed04121914d4c7309cf9",
+      "sft_prompt_sha256": "041687836ecd1c71b82325e5f7b756118e4a3976ead9b0f3f632af830d5a36b8",
+      "eval_prompt_sha256": "041687836ecd1c71b82325e5f7b756118e4a3976ead9b0f3f632af830d5a36b8",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "GatherMarinadeIngredients",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "cb7e164041f0f48fab7e42957d5c045e0b3a27c94bb37a0fb8899673cffdc137",
+      "sft_prompt_sha256": "358a154e89aa5e8275d157bacb41f7515795673f203fccadb4cd866ffabe736b",
+      "eval_prompt_sha256": "358a154e89aa5e8275d157bacb41f7515795673f203fccadb4cd866ffabe736b",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "HotDogSetup",
+      "run_index": 91,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "697102948031f8d2d2b5c904916ea41a9bdde7f07a298b5be5756f3cca3b96f2",
+      "sft_prompt_sha256": "34a67876b9c2ec9c0d5d8a337084bcf42549e080ac8f7efdc5a61dcc4ef58e57",
+      "eval_prompt_sha256": "34a67876b9c2ec9c0d5d8a337084bcf42549e080ac8f7efdc5a61dcc4ef58e57",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "LemonSeasoningFish",
+      "run_index": 9,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "bb6d24fb5f00e4691bdabe43ba4a5e0e2611bef6d05d6c2a11420be41589a6a9",
+      "sft_prompt_sha256": "20018f66668cc745e41936dc44b5812c0adac4f595fdaa67c04304d67f617253",
+      "eval_prompt_sha256": "20018f66668cc745e41936dc44b5812c0adac4f595fdaa67c04304d67f617253",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "LineUpCondiments",
+      "run_index": 29,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "8054025df4b8792a083be69bae9d5cfd88c60c5a665ffa8b86c7b15adc8ee682",
+      "sft_prompt_sha256": "8fae1a26dc543c8a68c783557d03fca0127fda1f7a7f2c6e3873f0dff39486ad",
+      "eval_prompt_sha256": "8fae1a26dc543c8a68c783557d03fca0127fda1f7a7f2c6e3873f0dff39486ad",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "MatchCupAndDrink",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "92c7eb59fcc6d3f34ba1bc1e58f4e975ce12fb7b887fc47e811fed121bf0d2e6",
+      "sft_prompt_sha256": "0535099a33191f7486050670dbc6ece5db07a5d25ccfda1c152f6931ca248cba",
+      "eval_prompt_sha256": "0535099a33191f7486050670dbc6ece5db07a5d25ccfda1c152f6931ca248cba",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "MeatSkewerAssembly",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "f514bdb424b1447faad3b0909d89dcbb1bf6095caf5526483dd3ffa980e48087",
+      "sft_prompt_sha256": "95633887e144a208d6a647e1dfffd13623d899aecbc2dd1f59ece49436f2036a",
+      "eval_prompt_sha256": "95633887e144a208d6a647e1dfffd13623d899aecbc2dd1f59ece49436f2036a",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "OrganizeCondiments",
+      "run_index": 0,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "680ac8f6a0e477a1e7230e419267d0997b7134e655c8bacf8d3e616cbd968f9a",
+      "sft_prompt_sha256": "bc45814296980936a1b3ec7ddc1e9673dc562c4fa84e3351dc6a50144c927332",
+      "eval_prompt_sha256": "bc45814296980936a1b3ec7ddc1e9673dc562c4fa84e3351dc6a50144c927332",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PlateStoreDinner",
+      "run_index": 0,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "61b5a60ff0e0386ac5d649cabcf5583d434a87c3c009cddac91b39d085a314fa",
+      "sft_prompt_sha256": "62b35ca6d64bcc96f95bec1eb2555ea0f1ecacf361bd76aff4f852e7a32b42b6",
+      "eval_prompt_sha256": "62b35ca6d64bcc96f95bec1eb2555ea0f1ecacf361bd76aff4f852e7a32b42b6",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PortionHotDogs",
+      "run_index": 0,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "aea60e2e38f36712584409570fd1689196db854afa891a54eb850d912f2fab9e",
+      "sft_prompt_sha256": "ff8e37b9b4cd77c8f1e5a51977e9a5bed5a4ac9709253ffd633ce00f0cc56364",
+      "eval_prompt_sha256": "ff8e37b9b4cd77c8f1e5a51977e9a5bed5a4ac9709253ffd633ce00f0cc56364",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PortionYogurt",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "faa250d93fdf7ecf4edf960e887560258ff6bfed7bfd50d48c4a3d2e149ef258",
+      "sft_prompt_sha256": "d9848fdf2ab3f0ee951b1d645affd30632960453a5ce0629c3f7ecc1f2e80b06",
+      "eval_prompt_sha256": "d9848fdf2ab3f0ee951b1d645affd30632960453a5ce0629c3f7ecc1f2e80b06",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PrepareCheeseStation",
+      "run_index": 18,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "9f60bef8ce33de3805a45a6ff2631147b21e0a8452d9ab272507b405f3095a0d",
+      "sft_prompt_sha256": "1e33eb86f39274fc4eb51f1bfacc505337a647a899fe52379ae4933b241a0bc1",
+      "eval_prompt_sha256": "1e33eb86f39274fc4eb51f1bfacc505337a647a899fe52379ae4933b241a0bc1",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PrepareCocktailStation",
+      "run_index": 22,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "e7d63489d1b97aa768a19d3b3b206162bb1bcf63cfdad24b5c1b19abc3921c65",
+      "sft_prompt_sha256": "8a1431524f22162807d4406c3a93775e959e85c982903ecf25bde56b39df2052",
+      "eval_prompt_sha256": "8a1431524f22162807d4406c3a93775e959e85c982903ecf25bde56b39df2052",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PrepareCoffee",
+      "run_index": 4,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "443bfbff9b937e25b731ed9f06cf2ffc1d8f01727bcbbbc6d6d84e7c3d8b79ae",
+      "sft_prompt_sha256": "b891e7559f0f18aa20acee3b4850ff2723df03f08ae490c3f73f0335680cca93",
+      "eval_prompt_sha256": "b891e7559f0f18aa20acee3b4850ff2723df03f08ae490c3f73f0335680cca93",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PrepareDrinkStation",
+      "run_index": 12,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "29d615a832b0e99ddfdc134cdc52329361628e865b028f6791553b187d9e27d5",
+      "sft_prompt_sha256": "7652417ab917bf8c6b1e70a0afad604747682ff955b67c027849a201b0b46bf2",
+      "eval_prompt_sha256": "7652417ab917bf8c6b1e70a0afad604747682ff955b67c027849a201b0b46bf2",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PrepareSandwichStation",
+      "run_index": 6,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "2ad03c5454ed0f259876872f434af112b2719bbf7ab9d917dced9ee82b592028",
+      "sft_prompt_sha256": "0a878632c845d3f79a68c639b6924f2a6528ed2e96c4e60733a1ca2727ce85a4",
+      "eval_prompt_sha256": "0a878632c845d3f79a68c639b6924f2a6528ed2e96c4e60733a1ca2727ce85a4",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PrepareSausageCheese",
+      "run_index": 10,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "14bac38d886e5b242b5be81298e67de891f6e21f3b9402fd5fc3959155037725",
+      "sft_prompt_sha256": "c310eb4d400fc1b64b664edd26c903f75014f77c9c3cdab9095ac3c49abead47",
+      "eval_prompt_sha256": "c310eb4d400fc1b64b664edd26c903f75014f77c9c3cdab9095ac3c49abead47",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "PrepareSoupServing",
+      "run_index": 14,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "86da98b82ce06a0112c4dba6125203630f9ed3296edcfd99fe64718867ce5bb1",
+      "sft_prompt_sha256": "af05ec5a6d97931a3af79b323788d7e790a36380a1ead97ccf49ccb6fbe41b5b",
+      "eval_prompt_sha256": "af05ec5a6d97931a3af79b323788d7e790a36380a1ead97ccf49ccb6fbe41b5b",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SeasoningSteak",
+      "run_index": 12,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "079022b456486d37ba1be85796fd88c415eb0c8d5d5a25625f91cec8049e5554",
+      "sft_prompt_sha256": "167456c954b93a143d445983ecabd2c3b03a428dc7adf2e10ff7e6f890cedb86",
+      "eval_prompt_sha256": "167456c954b93a143d445983ecabd2c3b03a428dc7adf2e10ff7e6f890cedb86",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "ServeMealJuice",
+      "run_index": 4,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "c3459634e5b054bc24b89fd90ba495ce5f7ae1e2dff835e57f440ff103bfe058",
+      "sft_prompt_sha256": "8a66069ef73d2b0a4cfc2c33a95eaef0654092f86c8344e65b38a70bc540106b",
+      "eval_prompt_sha256": "8a66069ef73d2b0a4cfc2c33a95eaef0654092f86c8344e65b38a70bc540106b",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "ServeSteak",
+      "run_index": 4,
+      "coordinator_id": "agent_0",
+      "generation_prompt_sha256": "c863027fcb0ac8e3425aa84afe5d69a430162852d0db1c77abcdf564776b8201",
+      "sft_prompt_sha256": "d1a4225b8f1cfe8c30913d2ecc1a7ced58e3c7460076c207900b74fb8a6723c2",
+      "eval_prompt_sha256": "d1a4225b8f1cfe8c30913d2ecc1a7ced58e3c7460076c207900b74fb8a6723c2",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SetBowlsForSoup",
+      "run_index": 3,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "f31cac504822335a4a7eb50fbd4ea59a75b2d9b1e2871718bf6ea0fb30489372",
+      "sft_prompt_sha256": "0f2459b2fd506c8e525fddb4d5b7110607c2f5d5115f208c9ec825da155b8c04",
+      "eval_prompt_sha256": "0f2459b2fd506c8e525fddb4d5b7110607c2f5d5115f208c9ec825da155b8c04",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SetupBowls",
+      "run_index": 3,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "2b97ceda5c697cf8dbe0d37f5d0bd98d9b057fa3d084fd5d1dd8c9e28dfa9d1a",
+      "sft_prompt_sha256": "0a3120eee914eafa932d6ea0b0c5bd13bedd9d4f502c7db4004a5e5031f5a888",
+      "eval_prompt_sha256": "0a3120eee914eafa932d6ea0b0c5bd13bedd9d4f502c7db4004a5e5031f5a888",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SetupButterPlate",
+      "run_index": 31,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "05ecee34de2cab9149d0488a637586ff73afa3be2eb448584367347b99cbf28c",
+      "sft_prompt_sha256": "9b9a155a60d9a27cd3602ef99a3737e8e8537b1a9f458c4b64f44e721f3d17a4",
+      "eval_prompt_sha256": "9b9a155a60d9a27cd3602ef99a3737e8e8537b1a9f458c4b64f44e721f3d17a4",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SetupSodaBowl",
+      "run_index": 5,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "2514c8b9035c5f54e223f218581fe46432677007d69d338af398118fcbe209a0",
+      "sft_prompt_sha256": "f8a2ea8d6f06e5e6b7c4331c7d169e568f89566fe8ac04a293fca1ac29653588",
+      "eval_prompt_sha256": "f8a2ea8d6f06e5e6b7c4331c7d169e568f89566fe8ac04a293fca1ac29653588",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SetUpSpiceStation",
+      "run_index": 27,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "efc8eaa6cf07e91015ec282f26144e5770fa372b0841f0c3765b3d5404afb0a7",
+      "sft_prompt_sha256": "af5b1058376c042d9d20f3c37092f7b7bd0332adb6992cbad874c2441977ac43",
+      "eval_prompt_sha256": "af5b1058376c042d9d20f3c37092f7b7bd0332adb6992cbad874c2441977ac43",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SetupWineGlasses",
+      "run_index": 7,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "a24d1101d48f18706040d173a2a59e033fd163a15e01b93f04c77a8fa3f0ac2c",
+      "sft_prompt_sha256": "1c649ae3e7ad2cae6620770e1f57a2f22cf2beb60732996fab1c680d283a73ef",
+      "eval_prompt_sha256": "1c649ae3e7ad2cae6620770e1f57a2f22cf2beb60732996fab1c680d283a73ef",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SpicyMarinade",
+      "run_index": 3,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "7ae6423883fa2d6c14a24ef2eb0e9a5001b9dbb35c9f90773d0b13d252fc7357",
+      "sft_prompt_sha256": "ea2680cb3282af9fc79a81d94dbebabcecb6b77e0e92490369adaa536ac3982c",
+      "eval_prompt_sha256": "ea2680cb3282af9fc79a81d94dbebabcecb6b77e0e92490369adaa536ac3982c",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "SweetenCoffee",
+      "run_index": 5,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "9a348372c43e4804f379bfcb37925348cd97d54d6d155579e9eba880deb7e408",
+      "sft_prompt_sha256": "317006ff28fb9cf93c9af5d43ebe9e30e7d20823226f5af5c944a80c41c429a5",
+      "eval_prompt_sha256": "317006ff28fb9cf93c9af5d43ebe9e30e7d20823226f5af5c944a80c41c429a5",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "TongBuffetSetup",
+      "run_index": 5,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "dc80435e8ef3fae8ea8cfbab4f28cd365b64e23c7363fa721c0ad3f03ab0e0d3",
+      "sft_prompt_sha256": "f98f23987aaa83f1475d4c82ed41bac2b31d69f3e93bb5b08ded26e73a0c0012",
+      "eval_prompt_sha256": "f98f23987aaa83f1475d4c82ed41bac2b31d69f3e93bb5b08ded26e73a0c0012",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    },
+    {
+      "task": "VeggieDipPrep",
+      "run_index": 1,
+      "coordinator_id": "agent_1",
+      "generation_prompt_sha256": "7fe7017eca2d0bb493a280abfdbee9758220722f7b6749af206b2d7ce90a0bfa",
+      "sft_prompt_sha256": "9a6786df73281859f09572f95a3b026fc3c874188d622dcda7b39abd759a8eb7",
+      "eval_prompt_sha256": "9a6786df73281859f09572f95a3b026fc3c874188d622dcda7b39abd759a8eb7",
+      "checks": {
+        "sft_eval_byte_identical": true,
+        "no_step_index": true,
+        "generation_simplified_v3_tick": true,
+        "generation_has_initial_state": true,
+        "generation_has_coordinator": true
+      }
+    }
+  ]
+}

@@ -9,7 +9,279 @@ of them being wrong. There is one implementation here so that cannot recur.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
+import re
+from typing import Any, Iterable, Mapping, MutableMapping, Sequence
+
+
+OPENING_PHASES = (
+    ("propose", "await_plan"),
+    ("await_confirmation", "confirm"),
+)
+
+
+def observation_transparent_tick_rows(
+    rows: Sequence[dict[str, Any]],
+    *,
+    observation_tools: Iterable[str] = ("get_image",),
+) -> list[dict[str, Any]]:
+    """Return the physical/coordination grid with observations made invisible.
+
+    Live execution serves an agent-local ``get_image`` inside the current
+    scheduling cycle: it changes that agent's context, but it cannot advance
+    waits, releases, physical ordering, or the shared clock.  Image injection
+    serializes those calls as extra rows so they remain SFT targets.  This
+    projection recovers the canonical grid that the concurrent FSM must judge.
+    """
+
+    observations = set(observation_tools)
+    projected: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        clean: dict[str, Any] = {}
+        for key, value in row.items():
+            if key == "tick":
+                continue
+            if isinstance(value, dict) and value.get("tool") in observations:
+                continue
+            clean[key] = deepcopy(value)
+        if not clean:
+            continue
+        projected.append({"tick": len(projected), **clean})
+    return projected
+
+
+def symbolic_id_mentioned(text: str, symbol: str) -> bool:
+    """Match an ID in communication text with underscores spoken as spaces.
+
+    Tool arguments remain exact. This only lets a natural-language plan say
+    ``glass cup`` for ``glass_cup`` without pretending the object was omitted.
+    """
+
+    pieces = [re.escape(piece) for piece in str(symbol).split("_") if piece]
+    if not pieces:
+        return False
+    pattern = r"[_\s-]+".join(pieces)
+    return re.search(
+        rf"(?<![A-Za-z0-9_]){pattern}(?![A-Za-z0-9_])",
+        str(text),
+        re.IGNORECASE,
+    ) is not None
+
+
+def proposal_grounding_ids(
+    assignment: Mapping[str, Sequence[str]],
+    known_ids: Iterable[str],
+) -> dict[str, tuple[str, ...]]:
+    """Return ownership-distinguishing IDs required in the opening plan."""
+
+    known = tuple(sorted(set(known_ids), key=lambda value: (-len(value), value)))
+    required: dict[str, list[str]] = {}
+    for agent_id, items in assignment.items():
+        agent_required: list[str] = []
+        manipulated: list[str] = []
+        for item in items or ():
+            mentions = [
+                (match.start(), symbol)
+                for symbol in known
+                for match in [re.search(
+                    rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])",
+                    item,
+                )]
+                if match is not None
+            ]
+            if mentions:
+                symbol = min(mentions)[1]
+                if symbol not in agent_required:
+                    agent_required.append(symbol)
+                if re.match(r"^(?:pick_up_object|place_[A-Za-z0-9_]+)\b", item):
+                    if symbol not in manipulated:
+                        manipulated.append(symbol)
+        # Manipulated objects distinguish ownership better than prerequisite
+        # fixtures such as an opened cabinet. Keep fixture/control anchors only
+        # for assignments with no manipulated object at all.
+        required[str(agent_id)] = manipulated or agent_required
+    return {agent: tuple(values) for agent, values in required.items()}
+
+
+def opening_protocol_error(
+    *,
+    agent_id: str,
+    call: Mapping[str, Any],
+    agent_ids: Sequence[str],
+    coordinator_id: str | None,
+    phase: int,
+    observation_tools: Iterable[str] = ("get_image",),
+) -> str | None:
+    """Shared offline/live verdict for one opening-protocol call."""
+
+    ordered = tuple(agent_ids)
+    if coordinator_id not in ordered or phase >= len(OPENING_PHASES):
+        return None
+    if call.get("tool") in set(observation_tools):
+        return None
+    follower = next(a for a in ordered if a != coordinator_id)
+    role_index = 0 if agent_id == coordinator_id else 1
+    expected = OPENING_PHASES[phase][role_index]
+    actual = (call.get("args") or {}).get("coordination_phase")
+    if call.get("tool") == "communicate" and actual == expected:
+        return None
+    return (
+        f"opening protocol phase {phase} requires {agent_id} to call communicate "
+        f"with coordination_phase={expected!r}; physical work starts only after "
+        "both confirmation calls commit"
+    )
+
+
+def wait_key(call: dict[str, Any]) -> tuple[str, str] | None:
+    """Return the exact sender/resource pair declared by a wait call."""
+
+    if call.get("tool") != "wait_for_signal":
+        return None
+    args = call.get("args") or {}
+    return str(args.get("from")), str(args.get("about"))
+
+
+def release_keys(call: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Return release events emitted by one communication call."""
+
+    if call.get("tool") != "communicate":
+        return ()
+    args = call.get("args") or {}
+    values = args.get("releases") or []
+    values = [values] if isinstance(values, str) else list(values)
+    sender = str(call.get("agent"))
+    return tuple((sender, str(value)) for value in values)
+
+
+def message_releases_wait(
+    call: dict[str, Any],
+    waiting_for: dict[str, Any] | tuple[str, str] | None,
+    *,
+    lenient: bool = False,
+) -> bool:
+    """Shared FSM/live rule for whether a message discharges one wait."""
+
+    if call.get("tool") != "communicate" or waiting_for is None:
+        return False
+    if lenient:
+        return True
+    if isinstance(waiting_for, tuple):
+        expected = waiting_for
+    else:
+        expected = (
+            str(waiting_for.get("from")), str(waiting_for.get("about"))
+        )
+    return expected in release_keys(call)
+
+
+@dataclass
+class SchedulerAgentState:
+    """Simulator-independent scheduling state for one logical agent."""
+
+    ready_at: float = 0.0
+    waiting_for: dict[str, Any] | None = None
+
+
+class ConcurrentScheduler:
+    """Shared eligibility, blocking, release, and cycle-boundary semantics.
+
+    Call generation and world transitions deliberately remain outside this
+    class. The offline FSM supplies recorded calls and symbolic transitions;
+    live evaluation supplies model calls and simulator transitions.
+    """
+
+    def __init__(
+        self,
+        agent_ids: Sequence[str],
+        *,
+        states: MutableMapping[str, Any] | None = None,
+    ) -> None:
+        self.agent_ids = tuple(agent_ids)
+        self.states: MutableMapping[str, Any] = states or {
+            agent_id: SchedulerAgentState() for agent_id in self.agent_ids
+        }
+        self.terminal = False
+
+    def blocked(self, agent_id: str) -> bool:
+        return self.states[agent_id].waiting_for is not None
+
+    def blocked_agents(self) -> list[str]:
+        return sorted(a for a in self.agent_ids if self.blocked(a))
+
+    def block(self, agent_id: str, call: dict[str, Any], *, clock: float) -> None:
+        key = wait_key({**call, "agent": agent_id})
+        if key is None:
+            raise ValueError("ConcurrentScheduler.block requires wait_for_signal")
+        holder, about = key
+        self.states[agent_id].waiting_for = {
+            "from": holder,
+            "about": about,
+            "declared_at": clock,
+        }
+
+    def deliver(
+        self,
+        call: dict[str, Any],
+        *,
+        clock: float,
+        resume_delay: float,
+        lenient: bool = False,
+    ) -> list[str]:
+        """Deliver one message and return agents woken for a later instant."""
+
+        woken: list[str] = []
+        recipient = (call.get("args") or {}).get("to")
+        for agent_id in self.agent_ids:
+            if recipient is not None and agent_id != recipient:
+                continue
+            state = self.states[agent_id]
+            if not message_releases_wait(
+                call, state.waiting_for, lenient=lenient
+            ):
+                continue
+            state.waiting_for = None
+            state.ready_at = max(state.ready_at, clock + resume_delay)
+            woken.append(agent_id)
+        return woken
+
+    def ready_agents(
+        self,
+        *,
+        clock: float,
+        has_work: Mapping[str, bool] | None = None,
+    ) -> list[str]:
+        """Agents eligible to be invoked at this instant."""
+
+        return sorted(
+            agent_id
+            for agent_id in self.agent_ids
+            if (has_work is None or has_work.get(agent_id, False))
+            and not self.blocked(agent_id)
+            and self.states[agent_id].ready_at <= clock
+            and self.states[agent_id].ready_at != float("inf")
+        )
+
+    def next_ready_time(
+        self, *, has_work: Mapping[str, bool] | None = None
+    ) -> float | None:
+        times = [
+            self.states[a].ready_at
+            for a in self.agent_ids
+            if (has_work is None or has_work.get(a, False))
+            and not self.blocked(a)
+            and self.states[a].ready_at != float("inf")
+        ]
+        return min(times) if times else None
+
+    def finish_cycle(self, *, goal_satisfied: bool) -> bool:
+        """Atomically end a cycle without pretending termination is a release."""
+
+        if goal_satisfied:
+            self.terminal = True
+        return self.terminal
 
 
 def schedule(

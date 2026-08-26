@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 import re
 import threading
-from typing import Any
+from typing import Any, Sequence
 
 from data_generation.task_level.generation.raw.config import (
     RETRY_PROGRESS_ERROR_MESSAGE_MAX_LENGTH,
@@ -113,6 +113,22 @@ def _retry_feedback_step_lines(
     if not isinstance(failing_step, int) or not isinstance(candidate, dict):
         return []
     steps = candidate.get("steps")
+    if not isinstance(steps, list) and isinstance(candidate.get("ticks"), list):
+        steps = []
+        for row in candidate["ticks"]:
+            if not isinstance(row, dict):
+                continue
+            for agent_id in sorted(key for key in row if key != "tick"):
+                action = row.get(agent_id)
+                if not isinstance(action, dict) or not action.get("tool"):
+                    continue
+                steps.append(
+                    {
+                        **action,
+                        "agent": agent_id,
+                        "step": len(steps),
+                    }
+                )
     if not isinstance(steps, list):
         return []
 
@@ -135,6 +151,30 @@ def _retry_feedback_step_lines(
     return lines
 
 
+def _retry_feedback_candidate_lines(
+    candidate: dict[str, Any] | None,
+) -> list[str]:
+    """Includes the complete latest rejection so the model can repair what it made."""
+
+    if not isinstance(candidate, dict):
+        return []
+    return [
+        "Latest rejected trajectory (complete):",
+        "```json",
+        json.dumps(candidate, indent=2, sort_keys=True),
+        "```",
+    ]
+
+
+def _semantic_retry_error(error_type: str | None) -> bool:
+    """Semantic validators know what failed, but not which valid repair is best."""
+
+    return bool(
+        error_type == "TrajectoryValidationError"
+        or (isinstance(error_type, str) and "SemanticValidationError" in error_type)
+    )
+
+
 # Targeted repair hints keyed by TrajectoryValidationError subclass name.
 # These are appended to the generic repair instructions so the model gets
 # error-specific guidance. Add a new entry when an error type starts appearing
@@ -147,7 +187,93 @@ _ERROR_TYPE_TARGETED_GUIDANCE: dict[str, list[str]] = {
         "- Only observation tools may appear after the goal is reached; do not pad with extra actions, re-checks, or re-placements.",
         "- Rework the plan so the final task action is exactly the one that satisfies the goal, then stop.",
     ],
+    "ResourceConflictSemanticValidationError": [
+        "- Drawers, fridges, front-facing appliances, sinks, and stoves may be exclusive and require one current user plus a completed handover. Cabinets and their parent counters are shared workspaces: different-object access may overlap, but two agents must not manipulate the same cabinet door or the same object in one tick.",
+        "- Any wait, matching release, and resumed action must occur on distinct ticks in that temporal order; the waiter remains blocked on the release tick.",
+    ],
+    "WaitSignalSemanticValidationError": [
+        "- A wait must precede its matching release, and a resumed action must follow the release; all three occur on distinct ticks.",
+        "- The waiter remains blocked on the release tick. Do not wait after give_space.",
+    ],
+    "CommunicationStepSemanticValidationError": [
+        "- communicate.to must be the other agent: agent_0 sends only to agent_1, and agent_1 sends only to agent_0.",
+    ],
 }
+
+
+def _compact_retry_constraint(
+    error_type: str,
+    message: str | None,
+    details: dict[str, Any] | None,
+) -> str:
+    """Turn one failure into a factual observation retained across retries.
+
+    This ledger deliberately avoids prescribing a repair.  A validator can say
+    what was invalid, but navigation, ownership, and scheduling often admit
+    several valid fixes and only the generator has the complete current plan.
+    """
+
+    details = details or {}
+    if details.get("missing_ids"):
+        required = details.get("required_by_agent") or {}
+        assignments = [
+            f"{agent} handles {', '.join(map(str, ids))}"
+            for agent, ids in required.items() if ids
+        ]
+        if assignments:
+            return "A prior opening proposal omitted required assignments: " + "; ".join(assignments) + "."
+        return "A prior opening proposal omitted required IDs: " + ", ".join(
+            str(value) for value in details["missing_ids"]
+        )
+    if error_type == "CommunicationStepSemanticValidationError":
+        return "A prior communication addressed its sender rather than the other agent."
+    if error_type == "WaitSignalSemanticValidationError":
+        return "A prior attempt violated the validator's wait/release ordering."
+    if error_type == "ResourceConflictSemanticValidationError":
+        return "A prior attempt placed both agents at the same exclusive fixture."
+    if error_type == "NavigationSemanticValidationError":
+        agent = details.get("agent") or "the agent"
+        expected = details.get("expected_location")
+        tool = details.get("tool") or "physical call"
+        ids = ", ".join(map(str, details.get("actual_ids") or ()))
+        return (
+            f"A prior attempt called {agent}'s {tool}({ids}) from the wrong location"
+            + (f"; the validator expected {expected}." if expected else ".")
+        )
+    if error_type == "PostGoalActionSemanticValidationError":
+        return "A prior attempt continued acting after the FSM goal was first satisfied."
+    if error_type == "TaskPreconditionSemanticValidationError":
+        held_receptacle = re.search(
+            r"receptacle_id=([A-Za-z0-9_]+) because \1 is currently held",
+            str(message or ""),
+        )
+        if held_receptacle:
+            receptacle = held_receptacle.group(1)
+            return f"A prior attempt used {receptacle} as a receptacle while it was being held."
+        return "A prior attempt violated this physical prerequisite: " + str(message or error_type).split("\n")[0]
+    pairs = details.get("wait_release_pairs") or []
+    unnecessary = [
+        pair for pair in pairs if not pair.get("resource_requires_handover", True)
+    ]
+    if unnecessary:
+        pair = unnecessary[0]
+        return f"A prior attempt used an unnecessary handover for roomy resource {pair.get('resource')}."
+    if details.get("action_issue") == "missing_ids":
+        agent = details.get("agent") or "the agent"
+        tool = details.get("tool") or "action"
+        missing = ", ".join(map(str, details.get("missing_action_ids") or ()))
+        return f"A prior assigned {agent} {tool} call omitted required IDs: {missing}."
+    if details.get("action_issue") == "duplicate":
+        agent = details.get("agent") or "the agent"
+        tool = details.get("tool") or "action"
+        return f"A prior attempt duplicated {agent}'s assigned {tool} call."
+    if "not assigned to it by the generation work partition" in str(message or ""):
+        agent = details.get("agent") or "that agent"
+        owner = details.get("assigned_agent") or "the assigned agent"
+        tool = details.get("tool") or "action"
+        ids = ", ".join(map(str, details.get("actual_ids") or ()))
+        return f"A prior attempt assigned {agent}'s {tool}({ids}) action to {owner}, violating the sampled work partition."
+    return "Prior validator observation: " + str(message or error_type).split("\n")[0][:240]
 
 
 def _targeted_guidance_lines(error_type: str | None) -> list[str]:
@@ -158,10 +284,254 @@ def _targeted_guidance_lines(error_type: str | None) -> list[str]:
     return list(_ERROR_TYPE_TARGETED_GUIDANCE.get(error_type, ()))
 
 
+def _specific_retry_guidance(
+    *,
+    error_type: str,
+    message: str | None,
+    details: dict[str, Any] | None,
+    repeated: bool,
+    prior_constraints: Sequence[str] = (),
+) -> list[str]:
+    """Concrete repair text using IDs from the actual failed trajectory."""
+
+    details = details or {}
+    lines: list[str] = []
+    if error_type == "NavigationSemanticValidationError":
+        agent = details.get("agent")
+        current = details.get("current_location") or "an unknown location"
+        expected = details.get("expected_location")
+        tool = details.get("tool")
+        ids = ", ".join(map(str, details.get("actual_ids") or ()))
+        ownership_correction = (
+            f"Remove {agent}'s {tool}({ids});"
+            if ids else None
+        )
+        if tool == "give_space":
+            if details.get("partner_needs_location"):
+                lines.append(
+                    f"- {agent} is now at {current}, but the partner needs {expected}. "
+                    f"Move give_space({expected}) to the last tick where {agent} is still "
+                    f"at {expected}, immediately before it leaves; remove this later remote call."
+                )
+            else:
+                lines.append(
+                    f"- {agent} is at {current}, so remove its unnecessary remote "
+                    f"give_space({expected}); the partner has no assigned work there."
+                )
+        elif expected and not (
+            ownership_correction
+            and any(
+                constraint.startswith(ownership_correction)
+                for constraint in prior_constraints
+            )
+        ):
+            lines.append(
+                f"- {agent} is at {current}. Immediately before the rejected {tool}, "
+                f"insert navigate_to_fixture(fixture_id={expected!r})."
+            )
+        elif expected:
+            lines.append(
+                f"- Do not insert navigation for {agent}'s rejected {tool}. "
+                "An earlier work-partition correction says this agent must remove that action."
+            )
+    if "not assigned to it by the generation work partition" in str(message or ""):
+        agent = details.get("agent") or "the acting agent"
+        owner = details.get("assigned_agent") or "the assigned partner"
+        tool = details.get("tool") or "action"
+        ids = ", ".join(map(str, details.get("actual_ids") or ()))
+        lines.append(
+            f"- Remove {agent}'s {tool}({ids}). Keep that action with {owner}; "
+            "do not navigate the wrong agent there to make the call executable."
+        )
+    own_last = details.get("own_last_physical_tick")
+    if own_last is not None and "portion_complete message" in str(message or ""):
+        agent = details.get("agent") or "the finished agent"
+        partner = details.get("partner") or "the partner"
+        lines.append(
+            f"- {agent}'s physical work ends at tick {own_last}. On its next invoked tick, "
+            "send one communicate(coordination_phase='portion_complete') saying only its "
+            f"own part is done. If {partner} still has work, its following call must be "
+            "wait_for_signal; then use blocked markers until the FSM goal is reached."
+        )
+    same_tick = details.get("same_tick_wait_release")
+    if same_tick:
+        pairs = details.get("wait_release_pairs") or []
+        if pairs:
+            for pair in pairs:
+                waiter = pair.get("waiter")
+                releaser = pair.get("releaser")
+                resource = pair.get("resource")
+                if not pair.get("resource_requires_handover", True):
+                    lines.append(
+                        f"- {resource} is roomy and does not require exclusive access. "
+                        f"Remove {waiter}'s wait for {resource} and remove {releaser}'s "
+                        "matching release; both agents may continue with their assigned work."
+                    )
+                else:
+                    lines.append(
+                        f"- For {resource}, {waiter}'s wait, {releaser}'s matching "
+                        "release, and the waiter's resumed action must occur on three "
+                        "different ticks, in that order. The waiter remains blocked "
+                        "during the release tick."
+                    )
+        else:
+            lines.append(
+                f"- Tick {details.get('tick')} makes {', '.join(map(str, same_tick))} wait "
+                "and receive its release together. Move the release to a later tick, keep "
+                "the waiter blocked in that release tick, and resume it one tick later."
+            )
+    if details.get("missing_ids"):
+        coordinator = details.get("coordinator") or "the coordinator"
+        required = details.get("required_by_agent") or {}
+        assignments = [
+            f"{agent} handles {', '.join(map(str, ids))}"
+            for agent, ids in required.items() if ids
+        ]
+        if assignments:
+            lines.append(
+                f"- Replace {coordinator}'s tick-0 proposal message with this literal "
+                "minimum text: \"" + "; ".join(assignments) + ".\""
+            )
+    if error_type in {"WaitSignalSemanticValidationError", "DeadlockSemanticValidationError"}:
+        lines.append(
+            "- Audit each wait: it is valid only if a matching later release arrives, "
+            "or the partner eventually satisfies the FSM goal while the waiter remains blocked."
+        )
+    if repeated and error_type == "ResourceConflictSemanticValidationError":
+        text = str(message or "")
+        agents = list(dict.fromkeys(re.findall(r"agent_\d+", text)))
+        resources = re.findall(r"'([A-Za-z0-9_]+)'", text)
+        resource = resources[0] if resources else "the exclusive fixture"
+        if len(agents) >= 2:
+            lines.append(
+                f"- Preserve the sampled action owners. At the failing point, determine from the state which of {agents[0]} and {agents[1]} currently holds {resource}; do not swap their assigned actions.",
+            )
+    if repeated and details.get("missing_ids"):
+        required = details.get("required_by_agent") or {}
+        assignments = [
+            f"{agent} handles {', '.join(map(str, ids))}"
+            for agent, ids in required.items() if ids
+        ]
+        if assignments:
+            lines.append(
+                "- Use this minimum opening proposal, without changing ownership: “"
+                + "; ".join(assignments) + ".”"
+            )
+    return lines
+
+
+def _focused_repair_lines(
+    *,
+    error_type: str,
+    failing_step: int | None,
+    details: dict[str, Any] | None,
+    candidate: dict[str, Any] | None,
+    allowed_tool_specs: dict[str, dict[str, Any]] | None,
+) -> list[str]:
+    """Builds validator-guided repair context, with a structural fallback."""
+
+    structural = (
+        not isinstance(candidate, dict)
+        or "StructureValidationError" in error_type
+        or "ResponseFormatValidationError" in error_type
+    )
+    if structural:
+        return [
+            "",
+            "Repair instructions:",
+            "- Regenerate the full trajectory from step 0 using the required schema.",
+            "- Do not continue or return a patch to the malformed attempt.",
+            "- Keep the whole trajectory symbolically consistent.",
+        ]
+
+    lines: list[str] = []
+    missing_ids = details.get("missing_ids") if isinstance(details, dict) else None
+    if isinstance(missing_ids, list) and missing_ids:
+        return [
+            "",
+            "Focused correction:",
+            "- The opening proposal omitted these required IDs: "
+            + ", ".join(str(value) for value in missing_ids)
+            + ".",
+            "- Explicitly assign those IDs in the coordinator's tick-0 proposal.",
+            "- Return the COMPLETE corrected trajectory, not a patch or continuation.",
+        ]
+    if isinstance(details, dict) and details.get("state_before_step") is not None:
+        lines.extend(
+            [
+                "",
+                "Symbolic state immediately before the failing step:",
+                json.dumps(details["state_before_step"], sort_keys=True),
+            ]
+        )
+
+    failing_tool = None
+    steps = candidate.get("steps")
+    if not isinstance(steps, list) and isinstance(candidate.get("ticks"), list):
+        steps = []
+        for row in candidate["ticks"]:
+            if not isinstance(row, dict):
+                continue
+            for agent_id in sorted(key for key in row if key != "tick"):
+                action = row.get(agent_id)
+                if isinstance(action, dict) and action.get("tool"):
+                    steps.append({**action, "agent": agent_id, "step": len(steps)})
+    if isinstance(steps, list) and isinstance(failing_step, int):
+        failing_payload = next(
+            (
+                step
+                for step in steps
+                if isinstance(step, dict) and step.get("step") == failing_step
+            ),
+            None,
+        )
+        if isinstance(failing_payload, dict):
+            failing_tool = failing_payload.get("tool")
+    if (
+        isinstance(failing_tool, str)
+        and isinstance(allowed_tool_specs, dict)
+        and failing_tool in allowed_tool_specs
+    ):
+        lines.extend(
+            [
+                "",
+                f"Exact allowed contract for {failing_tool}:",
+                json.dumps(allowed_tool_specs[failing_tool], sort_keys=True),
+            ]
+        )
+
+    correction_lines = [
+            "",
+            "Focused correction:",
+            "- Correct the identified failing step and any prerequisite or later step that must change because of it.",
+            "- Regenerate the full trajectory from step 0.",
+            "- Return the COMPLETE corrected trajectory, not a patch or continuation.",
+    ]
+    if isinstance(details, dict) and details.get("same_tick_wait_release"):
+        correction_lines.extend(
+            [
+                "- Keep the task goal and chosen object ownership, but rebuild the timing around the named resource.",
+                "- Do not copy the rejected wait/release tick unchanged.",
+            ]
+        )
+    else:
+        correction_lines.append(
+            "- Preserve valid portions unless changing them is necessary for the correction."
+        )
+    correction_lines.append(
+        "- Use only arguments declared by the selected tool's exact contract."
+    )
+    lines.extend(correction_lines)
+    return lines
+
+
 def _build_retry_feedback_text(
     exc: TrajectoryValidationError,
     *,
     candidate: dict[str, Any] | None = None,
+    allowed_tool_specs: dict[str, dict[str, Any]] | None = None,
+    prior_constraints: Sequence[str] = (),
+    feedback_style: str = "targeted",
 ) -> str:
     """Builds the compact retry block appended to the next generation prompt."""
 
@@ -177,23 +547,51 @@ def _build_retry_feedback_text(
         lines.append(f"- message: {str(exc).strip()}")
     if exc.details:
         lines.append(f"- details: {json.dumps(exc.details, sort_keys=True)}")
+    if prior_constraints:
+        lines.extend(["", "Earlier validator observations to audit (not repair instructions):"])
+        lines.extend(f"- {constraint}" for constraint in dict.fromkeys(prior_constraints))
+        repeated = [
+            constraint for constraint in dict.fromkeys(prior_constraints)
+            if prior_constraints.count(constraint) >= 2
+        ]
+        if repeated:
+            lines.extend([
+                "",
+                "Repeated-failure escalation:",
+                "- The same kind of violation has appeared more than once. Re-check the complete revised trajectory for it before returning.",
+            ])
+    else:
+        repeated = []
 
-    step_lines = _retry_feedback_step_lines(candidate, failing_step=exc.step)
-    if step_lines:
-        lines.extend(["", "Local bad example:", *step_lines])
+    # Repair is much easier when the model can see the complete plan it made.
+    # A two-step excerpt hid the ownership and wait/release context responsible
+    # for many later failures.
+    candidate_lines = _retry_feedback_candidate_lines(candidate)
+    if candidate_lines:
+        lines.extend(["", *candidate_lines])
 
     targeted_lines = _targeted_guidance_lines(exc.error_type)
+    if feedback_style == "targeted":
+        targeted_lines.extend(_specific_retry_guidance(
+            error_type=exc.error_type,
+            message=str(exc),
+            details=exc.details,
+            repeated=bool(repeated),
+            prior_constraints=prior_constraints,
+        ))
+    elif _semantic_retry_error(exc.error_type):
+        targeted_lines = []
     if targeted_lines:
         lines.extend(["", "Targeted guidance:", *targeted_lines])
 
     lines.extend(
-        [
-            "",
-            "Repair instructions:",
-            "- Regenerate the full trajectory from step 0.",
-            "- Do not continue or patch the previous attempt.",
-            "- Avoid the same validation failure and keep the whole trajectory symbolically consistent.",
-        ]
+        _focused_repair_lines(
+            error_type=exc.error_type,
+            failing_step=exc.step,
+            details=exc.details,
+            candidate=candidate,
+            allowed_tool_specs=allowed_tool_specs,
+        )
     )
     return "\n".join(lines)
 
@@ -202,6 +600,9 @@ def _build_retry_feedback_text_from_validation(
     validation: dict[str, Any],
     *,
     candidate: dict[str, Any] | None = None,
+    allowed_tool_specs: dict[str, dict[str, Any]] | None = None,
+    prior_constraints: Sequence[str] = (),
+    feedback_style: str = "targeted",
 ) -> str:
     """Builds retry feedback directly from a serialized validation payload."""
 
@@ -222,25 +623,48 @@ def _build_retry_feedback_text_from_validation(
         lines.append(f"- message: {error_message.strip()}")
     if isinstance(error_details, dict) and error_details:
         lines.append(f"- details: {json.dumps(error_details, sort_keys=True)}")
+    if prior_constraints:
+        lines.extend(["", "Earlier validator observations to audit (not repair instructions):"])
+        lines.extend(f"- {constraint}" for constraint in dict.fromkeys(prior_constraints))
+        repeated = [
+            constraint for constraint in dict.fromkeys(prior_constraints)
+            if prior_constraints.count(constraint) >= 2
+        ]
+        if repeated:
+            lines.extend([
+                "",
+                "Repeated-failure escalation:",
+                "- The same kind of violation has appeared more than once. Re-check the complete revised trajectory for it before returning.",
+            ])
+    else:
+        repeated = []
 
-    step_lines = _retry_feedback_step_lines(
-        candidate, failing_step=step if isinstance(step, int) else None
-    )
-    if step_lines:
-        lines.extend(["", "Local bad example:", *step_lines])
+    candidate_lines = _retry_feedback_candidate_lines(candidate)
+    if candidate_lines:
+        lines.extend(["", *candidate_lines])
 
     targeted_lines = _targeted_guidance_lines(error_type)
+    if feedback_style == "targeted":
+        targeted_lines.extend(_specific_retry_guidance(
+            error_type=error_type,
+            message=error_message if isinstance(error_message, str) else None,
+            details=error_details if isinstance(error_details, dict) else None,
+            repeated=bool(repeated),
+            prior_constraints=prior_constraints,
+        ))
+    elif _semantic_retry_error(error_type):
+        targeted_lines = []
     if targeted_lines:
         lines.extend(["", "Targeted guidance:", *targeted_lines])
 
     lines.extend(
-        [
-            "",
-            "Repair instructions:",
-            "- Regenerate the full trajectory from step 0.",
-            "- Do not continue or patch the previous attempt.",
-            "- Avoid the same validation failure and keep the whole trajectory symbolically consistent.",
-        ]
+        _focused_repair_lines(
+            error_type=error_type,
+            failing_step=step if isinstance(step, int) else None,
+            details=error_details if isinstance(error_details, dict) else None,
+            candidate=candidate,
+            allowed_tool_specs=allowed_tool_specs,
+        )
     )
     return "\n".join(lines)
 
@@ -358,6 +782,8 @@ def _sampling_metadata_for_candidate(
     if (
         sampled_candidate.probability is None
         and sampled_candidate.sampling_configuration is None
+        and sampled_candidate.sampling_seed is None
+        and sampled_candidate.sampling_attempt_number is None
     ):
         return None
 
@@ -370,6 +796,12 @@ def _sampling_metadata_for_candidate(
         sampling_metadata["probability"] = sampled_candidate.probability
     if sampled_candidate.sampling_configuration is not None:
         sampling_metadata["configuration"] = sampled_candidate.sampling_configuration
+    if sampled_candidate.sampling_seed is not None:
+        sampling_metadata["seed"] = sampled_candidate.sampling_seed
+    if sampled_candidate.sampling_attempt_number is not None:
+        sampling_metadata["attempt_number"] = (
+            sampled_candidate.sampling_attempt_number
+        )
     return sampling_metadata
 
 
@@ -608,9 +1040,8 @@ def _validate_candidate(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     wrote_ticks = _is_tick_format(candidate)
     if wrote_ticks:
-        # The model wrote in execution order and placed its own waits, so there
-        # is nothing to derive -- flatten it and let the FSM judge the result.
-        candidate = _flatten_tick_candidate(candidate)
+        # The concurrent FSM owns the canonical tick representation and does
+        # the only permitted flattening after invocation state is validated.
         # ...and judge it with the validator that actually RUNS the plan. The
         # linear one replays the flat list in written order, where two agents
         # never collide and no wait ever blocks, so it cannot see whether the
@@ -630,8 +1061,11 @@ def _validate_candidate(
             and isinstance(initial_state, dict)
             and isinstance(allowed_tool_specs, dict)
         ):
+            reference_candidate = (
+                validator.canonicalize(candidate) if wrote_ticks else candidate
+            )
             _validate_candidate_references_without_sim(
-                candidate,
+                reference_candidate,
                 initial_state=initial_state,
                 allowed_tool_specs=allowed_tool_specs,
             )
@@ -643,6 +1077,16 @@ def _validate_candidate(
             # steps cannot be turned back into them.
             normalized_candidate = dict(normalized_candidate)
             normalized_candidate["tick_rows"] = candidate["tick_rows"]
+        if wrote_ticks:
+            # The persisted form omits explicit blocked markers. Require that
+            # exact canonical representation to pass the same validator too;
+            # generation must never save a record postprocessing will reject.
+            persisted_validation = dict(validator.validate(normalized_candidate))
+            persisted_normalized = persisted_validation.pop(
+                "normalized_candidate", normalized_candidate
+            )
+            validation = persisted_validation
+            normalized_candidate = persisted_normalized
         return validation, normalized_candidate
     except TrajectoryValidationError as exc:
         if enforce_validation:
@@ -1219,6 +1663,25 @@ def _build_trajectory_records_from_sampled_candidates(
                 task_definition=task_definition,
             )
         )
+        trajectory_record["coordinator_id"] = task_instance.coordinator_id
+        if task_instance.physical_configuration is not None:
+            from data_generation.task_level.scene_sampling import (
+                physical_configuration_signature,
+            )
+            trajectory_record["physical_configuration"] = deepcopy(
+                task_instance.physical_configuration
+            )
+            trajectory_record["physical_configuration_signature"] = (
+                physical_configuration_signature(
+                    task_instance.physical_configuration
+                )
+            )
+        # Generation-only audit metadata. Preprocessing intentionally does not
+        # place this latent diversity scaffold in the model context.
+        if task_instance.work_partition is not None:
+            trajectory_record["generation_work_partition"] = deepcopy(
+                task_instance.work_partition
+            )
         sampling_metadata = _sampling_metadata_for_candidate(
             runtime_config=runtime_config,
             sampled_candidate=sampled_candidate,

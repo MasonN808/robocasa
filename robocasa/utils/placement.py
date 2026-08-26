@@ -31,6 +31,7 @@ MAX_FRONT_WORKING_LATERAL_OFFSET = _FRONT_WORKING_LATERAL_LIMITS[-1]
 _FRONT_WORKING_SIDE_CLEARANCE_RATIO = 0.25
 _FRONT_WORKING_SIDE_CLEARANCE_MIN = 0.10
 _FRONT_WORKING_SIDE_CLEARANCE_MAX = 0.18
+EXCLUSIVE_WORKSPACE_CORRIDOR_WIDTH = 0.465
 
 
 def is_ground_obstacle(name: str, fxtr: Fixture) -> bool:
@@ -297,6 +298,7 @@ def get_front_alignment_metrics(
     pos_xy: np.ndarray,
     span_margin: float = 0.05,
     target_xy: np.ndarray | None = None,
+    front_face: str | None = None,
 ) -> dict[str, float | bool | str] | None:
     """Return front-face alignment metrics for *pos_xy* relative to *fixture*."""
     aabb = get_fixture_aabb(fixture)
@@ -305,7 +307,8 @@ def get_front_alignment_metrics(
 
     fmin, fmax = aabb
     pos = np.asarray(pos_xy, dtype=float)[:2]
-    front_face = get_face_order(fixture, front_target_xy=target_xy)[0]
+    if front_face is None:
+        front_face = get_face_order(fixture, front_target_xy=target_xy)[0]
     side_clearance = get_front_working_side_clearance(front_face, fmin, fmax)
     front_target = get_face_target_point(
         front_face,
@@ -338,6 +341,48 @@ def get_front_alignment_metrics(
         "on_front_face": front_gap > 0.0,
         "front_gap": front_gap,
     }
+
+
+def is_in_front_workspace_corridor(
+    fixture: Fixture,
+    pos_xy: np.ndarray,
+    max_depth: float = 0.75,
+    margin: float = 1e-6,
+    front_face: str | None = None,
+    corridor_width: float | None = None,
+) -> bool:
+    """Whether *pos_xy* is in the fixture-width corridor before its front.
+
+    Unlike a radial/AABB dilation, this reserves no space beside or behind the
+    fixture.  The lateral interval is the fixture's full AABB width on its
+    inferred front face; ``max_depth`` only limits how far that rectangle
+    extends outward into the room.
+    """
+    aabb = get_fixture_aabb(fixture)
+    if aabb is None:
+        return False
+    fmin, fmax = aabb
+    pos = np.asarray(pos_xy, dtype=float)[:2]
+    front_face = front_face or get_face_order(fixture)[0]
+    lateral_axis, lateral_min, lateral_max = get_face_lateral_axis_and_span(
+        front_face, fmin, fmax
+    )
+    if corridor_width is not None:
+        center = (lateral_min + lateral_max) / 2.0
+        half_width = float(corridor_width) / 2.0
+        lateral_min = center - half_width
+        lateral_max = center + half_width
+    if not lateral_min - margin <= pos[lateral_axis] <= lateral_max + margin:
+        return False
+    if front_face == "neg_y":
+        gap = float(fmin[1] - pos[1])
+    elif front_face == "pos_y":
+        gap = float(pos[1] - fmax[1])
+    elif front_face == "neg_x":
+        gap = float(fmin[0] - pos[0])
+    else:
+        gap = float(pos[0] - fmax[0])
+    return bool(-margin < gap <= float(max_depth) + margin)
 
 
 def front_lateral_offset(

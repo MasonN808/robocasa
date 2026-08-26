@@ -95,6 +95,7 @@ def build_tick_response_schema(
     *,
     agent_ids: Sequence[str],
     allowed_tool_specs: dict[str, Any],
+    explicit_blocked_markers: bool = False,
 ) -> dict[str, Any]:
     """A response schema whose top level is ticks rather than steps."""
 
@@ -109,34 +110,85 @@ def build_tick_response_schema(
         allowed_tool_specs=allowed_tool_specs,
     )
     step_schema = _find_step_schema(flat)
-    action_schema = {
-        "type": "object",
-        "properties": {
-            key: value
-            for key, value in (step_schema.get("properties") or {}).items()
-            if key not in {"agent", "step"}
-        },
-        "required": [
-            name
-            for name in (step_schema.get("required") or [])
-            if name not in {"agent", "step"}
-        ],
-    }
+
+    def without_flat_fields(branch: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                key: deepcopy(value)
+                for key, value in (branch.get("properties") or {}).items()
+                if key not in {"agent", "step"}
+            },
+            "required": [
+                name
+                for name in (branch.get("required") or [])
+                if name not in {"agent", "step"}
+            ],
+        }
+
+    step_variants = step_schema.get("anyOf")
+    action_schema = (
+        {"anyOf": [without_flat_fields(branch) for branch in step_variants]}
+        if isinstance(step_variants, list)
+        else without_flat_fields(step_schema)
+    )
+    if explicit_blocked_markers:
+        blocked_schema = {
+            "type": "object",
+            "properties": {
+                "state": {"type": "string", "enum": ["blocked"]},
+            },
+            "required": ["state"],
+        }
+        if isinstance(action_schema.get("anyOf"), list):
+            action_schema = {
+                "anyOf": [*action_schema["anyOf"], blocked_schema]
+            }
+        else:
+            action_schema = {"anyOf": [action_schema, blocked_schema]}
+
+    def schema_for_agent(agent_id: str) -> dict[str, Any]:
+        """Constrain recipient-like arguments that depend on the row owner."""
+
+        specialized = deepcopy(action_schema)
+        other_agents = [value for value in agent_ids if value != agent_id]
+
+        def specialize_branch(branch: dict[str, Any]) -> None:
+            properties = branch.get("properties") or {}
+            tool_values = (properties.get("tool") or {}).get("enum") or []
+            if not tool_values:
+                return
+            tool = tool_values[0]
+            arg_roots = [properties.get("args") or {}]
+            while arg_roots:
+                root = arg_roots.pop()
+                if isinstance(root.get("anyOf"), list):
+                    arg_roots.extend(root["anyOf"])
+                    continue
+                arg_properties = root.get("properties") or {}
+                if tool == "communicate" and "to" in arg_properties:
+                    arg_properties["to"]["enum"] = other_agents
+                if tool == "wait_for_signal" and "from" in arg_properties:
+                    arg_properties["from"]["enum"] = other_agents
+
+        for branch in specialized.get("anyOf", [specialized]):
+            specialize_branch(branch)
+        return specialized
 
     row_properties: dict[str, Any] = {
         "tick": {"type": "integer", "description": "0-based instant; both agents act on it."},
     }
     for agent_id in agent_ids:
         row_properties[agent_id] = {
-            **deepcopy(action_schema),
+            **schema_for_agent(agent_id),
             "description": (
-                f"What {agent_id} does at this tick. Omit the field when "
-                f"{agent_id} does nothing -- it is blocked on a wait, or has "
-                f"no work available."
+                f"What {agent_id} does at this tick. This field is required "
+                f"whenever {agent_id} is not blocked by an earlier "
+                f"wait_for_signal; omit it only while that wait remains blocked."
             ),
         }
 
-    return {
+    schema = {
         "type": "object",
         "properties": {
             "ticks": {
@@ -144,12 +196,23 @@ def build_tick_response_schema(
                 "items": {
                     "type": "object",
                     "properties": row_properties,
-                    "required": ["tick"],
+                    "required": (
+                        ["tick", *agent_ids]
+                        if explicit_blocked_markers
+                        else ["tick"]
+                    ),
                 },
             }
         },
         "required": ["ticks"],
     }
+    if explicit_blocked_markers:
+        schema["properties"]["format"] = {
+            "type": "string",
+            "enum": ["explicit_blocked_v1"],
+        }
+        schema["required"].append("format")
+    return schema
 
 
 def _find_step_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -171,8 +234,11 @@ TICK_FORMAT_RULES: tuple[str, ...] = (
     "Because of that, the two agents must never act on the same object, or at "
     "the same exclusive fixture, on the same tick. Two robots cannot reach "
     "into one cabinet at once.",
-    "Omit an agent from a tick when it does nothing. An agent that is waiting "
-    "does nothing until it is released -- leave it out of those ticks.",
+    "Every unblocked agent must appear exactly once in every tick, including "
+    "after its assigned physical work is finished. The live scheduler invokes "
+    "every unblocked agent and has no implicit idle or finished action. Omit an "
+    "agent only while it is blocked by an earlier wait_for_signal; otherwise "
+    "give it a real, useful, non-conflicting tool call.",
     "wait_for_signal(from, about) blocks the calling agent until the other "
     "agent sends a communicate whose releases names the same id. Nothing else "
     "wakes it, so put the wait where the agent genuinely cannot proceed.",
@@ -188,7 +254,8 @@ TICK_FORMAT_RULES: tuple[str, ...] = (
     "`message` saying what is happening, and `releases` is an EXTRA field "
     "alongside it -- never a replacement for it. A communicate with releases "
     "and no message is rejected.",
-    "A WAIT IS HALF A PROTOCOL, AND YOU MUST WRITE BOTH HALVES. Every "
+    "A WAIT IS HALF A PROTOCOL, AND YOU MUST WRITE BOTH HALVES unless the "
+    "partner satisfies the global FSM goal on the very tick the wait begins. Every other "
     "wait_for_signal(from=X, about=R) you write obliges agent X to send "
     "communicate(to=<waiter>, message=\"...\", releases=[\"R\"]) on a LATER "
     "tick, naming R "
@@ -197,33 +264,35 @@ TICK_FORMAT_RULES: tuple[str, ...] = (
     "never moves again and every remaining tick of the plan is dead. Before "
     "you finish, go through your waits one by one and find the matching "
     "release for each.",
-    "Block on the VERY NEXT TICK after you ask. A blocked agent is invisible "
-    "-- it is simply absent from the rows -- so the request is the only thing "
-    "that tells the other agent a handover is owed. Ask, then wait, with "
-    "nothing in between: doing other work in the gap means you were not "
-    "actually stuck.",
-    "The whole handover must be in this time order: the waiter blocks FIRST, "
-    "and only then does the holder let go. A release only wakes an agent that "
-    "is ALREADY waiting, so a release -- or a give_space -- that comes before "
-    "the wait leaves the waiter blocked forever on a message that has come and "
-    "gone. And if the resource was already free when the wait started, nothing "
-    "was ever contested: delete that wait instead of writing it.",
-    "Release only what you have genuinely let go of, and release it "
-    "IMMEDIATELY. Before X sends releases=[\"R\"]: if R is a fixture, X must "
-    "already have called give_space on it or navigated somewhere else; if R "
-    "is an object, X must have put it down. That departure must be the call "
-    "RIGHT BEFORE the release -- no other messages or actions in between, "
-    "because every tick in that gap is a tick the other agent sits blocked on "
-    "something that is already free. Saying \"you can take it\" while still "
-    "standing at the fixture is not a handover at all.",
+    "TERMINAL WAIT EXCEPTION. If one agent has finished its assigned work and "
+    "the partner's action on the same tick as wait_for_signal satisfies the "
+    "global FSM goal, the episode ends atomically and no release is needed. "
+    "The waiter must still ask on the preceding tick and wait on the real "
+    "object or fixture used by the partner. Say only that YOUR assigned work "
+    "is finished; never announce that the GLOBAL task is complete before the "
+    "FSM goal action executes.",
+    "The other agent cannot see wait_for_signal. Immediately before waiting, "
+    "communicate the exact release keyword, for example: `When done, release "
+    "\"<X>\"`. On your very next call, use wait_for_signal(..., "
+    "about=\"<X>\")`. Do nothing between that message and the wait.",
+    "The waiter must begin waiting no later than the tick when the holder lets "
+    "go, and the matching release must come on a later tick. A release only "
+    "wakes an agent that is already waiting. If the release comes before the "
+    "wait, it is lost; if it comes in the wait tick, it takes effect too early.",
+    "Release only what you have genuinely let go of. Before X sends "
+    "releases=[\"R\"]: if R is a fixture, X must already have called "
+    "give_space on it or navigated somewhere else; if R is an object, X must "
+    "have put it down. The release may be reported later, but X must not "
+    "reoccupy or reuse R before reporting it. Saying \"you can take it\" while "
+    "still standing at the fixture is not a handover at all.",
     "Order what an agent says around what it is about to do. If you are about "
     "to be held up, ask BEFORE announcing that you are on your way: say "
     "\"tell me when the machine is free\", wait, and only then say \"heading "
     "over\". Announcing a move you cannot make yet is wrong.",
     "A handover has FOUR parts. agent_1 wants the cabinet that agent_0 is "
     "using:\n"
-    "    tick 3   agent_1: communicate(to=agent_0, \"tell me when the cabinet "
-    "is free\")     <- 1. ASK\n"
+    "    tick 3   agent_1: communicate(to=agent_0, \"When done, release "
+    "\\\"cab\\\".\")     <- 1. ASK\n"
     "    tick 4   agent_1: wait_for_signal(from=agent_0, about=\"cab\")"
     "                    <- 2. BLOCK, the very next tick\n"
     "    ticks 5-8  agent_0 carries on with its own work; agent_1 does not "
@@ -234,15 +303,14 @@ TICK_FORMAT_RULES: tuple[str, ...] = (
     "    tick 9   agent_0: give_space(fixture_id=\"cab\")"
     "                               <- 3a. LEAVE, only now\n"
     "    tick 10  agent_0: communicate(to=agent_1, message=\"the cabinet is "
-    "yours now\", releases=[\"cab\"])   <- 3b. REPORT, the very next tick\n"
+    "yours now\", releases=[\"cab\"])   <- 3b. REPORT on a later tick\n"
     "    tick 11  agent_1: navigate_to_fixture(fixture_id=\"cab\")"
     "                     <- 4. MOVE IN, the tick AFTER the release,\n"
     "                                                                        "
     "                          never on the same tick as it\n"
-    "Two adjacencies and one ordering. ASK then BLOCK are adjacent. LEAVE then "
-    "REPORT are adjacent, because the release is the report of the departure. "
-    "And the whole of part 2 precedes the whole of part 3: the waiter is "
-    "already blocked before the holder lets go. Everything else is free.",
+    "ASK then BLOCK are adjacent. LEAVE must happen before REPORT, but the "
+    "report may be later if the holder does not reuse the resource. The waiter "
+    "must already be blocked before the REPORT arrives.",
     "A released agent starts moving on the tick AFTER the release, not on the "
     "same one. The message has to arrive before it can be acted on, so put "
     "the waiter's next call one tick later than the communicate that freed "

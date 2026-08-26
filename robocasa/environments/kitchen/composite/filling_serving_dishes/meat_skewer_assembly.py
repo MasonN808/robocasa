@@ -84,6 +84,11 @@ class MeatSkewerAssembly(Kitchen):
                     size=(1.0, 0.35),
                     pos=("ref", "ref"),
                     rotation=(0),
+                    # Treat the stool-relative strip as a center-placement
+                    # preference. Full-footprint containment in this narrow
+                    # strip prevents the tray from being sampled in otherwise
+                    # usable scenes.
+                    ensure_object_boundary_in_range=False,
                 ),
             )
         )

@@ -1,0 +1,12 @@
+{
+  "accepted_stage_counts": {
+    "flash_low_direct": 360,
+    "flash_low_temp_0.3": 11,
+    "flash_low_temp_0.9": 3,
+    "flash_medium_direct": 10
+  },
+  "expected_configurations": 384,
+  "failures": [],
+  "gate_passed": true,
+  "valid_configurations": 384
+}

@@ -2,9 +2,70 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+import json
 from typing import Any, Iterable
 
+from data_generation.task_level.tasks.shared.prompting import format_concurrency_facts
+from training.bc_task_vlm.communication_profiles import get_communication_profile
 from training.bc_task_vlm.schema_utils import compact_json_dumps
+
+
+DEFAULT_PARTIAL_STEP_INDEX_MODE = "none"
+PROMPT_CONTRACT_VERSION = (
+    "state_grounded_global_tools_no_index_v9_unambiguous_garnish_cake_goal"
+)
+
+PHYSICAL_HANDOFF_RULES = (
+    "Physical workspace handoffs:\n"
+    "- give_space(X) frees X only after that tool call finishes. The partner "
+    "must not enter or use X in the same concurrent tick.\n"
+    "- An unblocked partner may enter or use X on the following tick without "
+    "calling wait_for_signal and without receiving a release.\n"
+    "- Use wait_for_signal only when the agent must actually block before X "
+    "becomes free. Once waiting, it remains blocked throughout a later matching "
+    "release tick and resumes only on the following tick. Never wait and receive "
+    "the matching release in the same tick.\n"
+)
+
+WORKSPACE_RULES = (
+    "Workspace relationships:\n"
+    "- A cabinet and its parent counter are one shared workspace. Navigate to "
+    "the parent counter for cabinet work. Cabinet tools may be used from that "
+    "counter, and different agents may use different objects there without a "
+    "handover. Do not open or close the cabinet during another agent's access "
+    "to its contents.\n"
+    "- If an agent is at an exclusive child appliance on a parent counter, it "
+    "may use that counter and objects on it without navigating again. This does "
+    "not move the agent: its location remains the exclusive child appliance.\n"
+)
+
+PHYSICAL_GIVE_SPACE_RULE = (
+    "Physical workspace handoffs:\n"
+    "- give_space(X) frees X only after that tool call finishes. The other "
+    "agent may enter or use X starting on the following tick, not during the "
+    "same tick.\n"
+)
+
+MINIMAL_COMMUNICATION_RULES = (
+    "Communication guidance:\n"
+    "- Communicate with the other agent to complete the task together.\n"
+    "- When you need to wait for X, first communicate a request naming the "
+    "exact symbolic ID X. On your next call, use wait_for_signal with about=X. "
+    "The wait call is private. A later message with releases=X wakes the "
+    "waiting agent.\n"
+)
+
+ACTIVE_OBSERVATION_RULES = (
+    "Camera observations:\n"
+    "- get_image.views must be a non-empty list containing only these exact "
+    "names: top_view, room_view, map, wrist, agentview_center, agentview_left, "
+    "agentview_right.\n"
+    "- Copy these names exactly. Do not invent view names from a direction, "
+    "task, scene, object, or fixture. For example, use "
+    '`get_image(views=["agentview_center", "wrist"])`. Names such as front, '
+    "back, overhead, left, right, counter, and fridge_interior are invalid.\n"
+)
 
 SYSTEM_PROMPT = (
     "You are a robot task planner. Predict exactly one next tool call for the "
@@ -110,6 +171,32 @@ def format_history_steps(history_steps: Iterable[dict[str, Any]]) -> str:
     return "\n".join(rendered_steps)
 
 
+def normalize_partial_history_steps(
+    history_steps: Iterable[dict[str, Any]],
+    *,
+    index_mode: str,
+) -> list[dict[str, Any]]:
+    """Return private history with the requested prompt-visible numbering.
+
+    Both offline SFT construction and closed-loop evaluation must call this
+    helper.  Applying the mode only to the ``Next ... index`` line is not
+    sufficient: it leaks global concurrency through historical indices and
+    produces a context the model never saw during training.
+    """
+
+    if index_mode not in {"global", "local", "none"}:
+        raise ValueError(
+            "partial history index_mode must be one of: global, local, none; "
+            f"got {index_mode!r}"
+        )
+    normalized = [deepcopy(step) for step in history_steps]
+    if index_mode == "global":
+        return normalized
+    for local_index, step in enumerate(normalized):
+        step["step"] = local_index if index_mode == "local" else None
+    return normalized
+
+
 def build_user_prompt(
     *,
     composite_task: str,
@@ -124,6 +211,9 @@ def build_user_prompt(
     predict_agent: bool = False,
     observation_owner: str | None = None,
     include_observation_owner: bool = False,
+    coordinator_id: str | None = None,
+    initial_state: dict[str, Any] | None = None,
+    communication_mode: str = "full",
 ) -> str:
     """Builds the text block that accompanies the current image observation.
 
@@ -145,15 +235,24 @@ def build_user_prompt(
         agent_rule = (
             "- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n"
         )
+    communication_profile = get_communication_profile(communication_mode)
+    initial_communication_rule = (
+        "- Before ANY non-communicate action, BOTH agents must each have sent "
+        "at least one communicate message; task actions are rejected until then.\n"
+        if communication_profile.require_initial_communication
+        else ""
+    )
     if sft_format == "plain":
         output_rules = (
             "Rules:\n"
             "- Predict exactly one next action.\n"
             "- Use symbolic IDs only, never concrete simulator IDs.\n"
+            "- Symbolic IDs are dictionary keys in the initial state; copy the "
+            "relevant object, fixture, part, or control key verbatim. Use a site "
+            "ID only when the state explicitly provides a named site.\n"
             f"{agent_rule}"
-            "- Before ANY non-communicate action, BOTH agents must each have sent "
-            "at least one communicate message; task actions are rejected until then.\n"
-            "- The tool must be one of the allowed tools listed above.\n"
+            f"{initial_communication_rule}"
+            "- The tool must be one of the available tool definitions.\n"
             "- Supply exactly the arguments required by the selected tool.\n"
             "- Prefer the most immediate executable next action.\n\n"
             "Output format:\n"
@@ -171,10 +270,12 @@ def build_user_prompt(
             "Rules:\n"
             "- Predict exactly one next tool call.\n"
             "- Use symbolic IDs only, never concrete simulator IDs.\n"
+            "- Symbolic IDs are dictionary keys in the initial state; copy the "
+            "relevant object, fixture, part, or control key verbatim. Use a site "
+            "ID only when the state explicitly provides a named site.\n"
             f"{agent_rule}"
-            "- Before ANY non-communicate action, BOTH agents must each have sent "
-            "at least one communicate message; task actions are rejected until then.\n"
-            "- The tool must be one of the allowed tools listed above.\n"
+            f"{initial_communication_rule}"
+            "- The tool must be one of the provided function schemas.\n"
             "- Supply exactly the arguments required by the selected tool.\n"
             "- Prefer the most immediate executable next action.\n"
             "- Do not emit markdown or narrative after the tool call."
@@ -183,6 +284,55 @@ def build_user_prompt(
         raise ValueError(f"Unsupported SFT format: {sft_format!r}")
 
     acting_agent_line = "" if predict_agent else f"Current acting agent: {agent_id}\n"
+    participation_line = {
+        "full": "",
+        "minimal": (
+            "You are one of two agents working together to complete the task.\n"
+        ),
+        "unguided": (
+            "You are one of two agents jointly completing the task. "
+            "Communication with the other agent is possible.\n"
+        ),
+        "none": (
+            "You are one of two agents jointly completing the task. The other "
+            "agent acts independently, but you cannot exchange messages. Choose "
+            "actions that contribute to the shared task goal.\n"
+        ),
+    }[communication_mode]
+    coordinator_line = (
+        f"Coordinator for this episode: {coordinator_id}\n"
+        if coordinator_id and communication_profile.require_opening_protocol
+        else ""
+    )
+    coordinator_rules = (
+        "\nCoordinator handshake:\n"
+        "- Opening coordination uses two communication ticks; optional ticks "
+        "containing only get_image do not count.\n"
+        "- Communication tick 1: the coordinator sends one concrete division "
+        "using exact symbolic IDs and coordination_phase=propose; the partner "
+        "sends coordination_phase=await_plan.\n"
+        "- Communication tick 2: the coordinator sends "
+        "coordination_phase=await_confirmation; the partner sends "
+        "coordination_phase=confirm.\n"
+        "- Physical work may begin only on the following tick.\n"
+        "- Never claim that the global task is complete; the FSM alone ends the "
+        "episode. If your own portion finishes first, send exactly one "
+        "coordination_phase=portion_complete message saying only that your part "
+        "is done and naming one exact release keyword X, for example `My portion "
+        "is done. Release \"X\" if you need me again`. On your very next call, "
+        "call wait_for_signal with about=X. The private wait call is not visible "
+        "to the partner, so the message must name the same X and say to release "
+        "it. Stay blocked until the "
+        "partner sends a later matching release.\n"
+        if coordinator_id and communication_profile.require_opening_protocol
+        else ""
+    )
+    communication_rules = {
+        "full": PHYSICAL_HANDOFF_RULES,
+        "minimal": MINIMAL_COMMUNICATION_RULES + PHYSICAL_GIVE_SPACE_RULE,
+        "unguided": PHYSICAL_GIVE_SPACE_RULE,
+        "none": PHYSICAL_GIVE_SPACE_RULE,
+    }[communication_mode]
     # next_step_index=None omits the line (step_index_mode="none");
     # step_index_label lets partial-observability prompts say "local turn
     # index" instead of the leaky joint "global step index".
@@ -195,18 +345,90 @@ def build_user_prompt(
         observation_owner_line = (
             f"Active observation owner: {observation_owner or 'none'}\n"
         )
+    tool_block = (
+        "Available tools:\n"
+        f"{format_allowed_tool_block(allowed_tool_specs)}\n\n"
+        if sft_format == "plain"
+        else ""
+    )
+    initial_state_block = (
+        "Symbolic initial state:\n"
+        f"{json.dumps(initial_state, indent=2, sort_keys=True)}\n\n"
+        f"{format_concurrency_facts(initial_state)}\n\n"
+        if initial_state is not None
+        else ""
+    )
+    active_observation_rules = (
+        ACTIVE_OBSERVATION_RULES if "get_image" in allowed_tool_specs else ""
+    )
     return (
         f"Task family: {composite_task}\n"
         f"Task instruction: {task_instruction}\n"
         f"{acting_agent_line}"
+        f"{participation_line}"
+        f"{coordinator_line}"
         f"{observation_owner_line}"
         f"{step_index_line}"
         f"Observation views attached in order: {observations_text}\n\n"
+        f"{initial_state_block}"
         "Previous executed symbolic action history:\n"
         f"{format_history_steps(history_steps)}\n\n"
-        "Available tools for this task:\n"
-        f"{format_allowed_tool_block(allowed_tool_specs)}\n\n"
+        f"{tool_block}"
+        f"{coordinator_rules}"
+        f"{active_observation_rules}"
+        f"\n{communication_rules}"
+        f"{WORKSPACE_RULES}"
         f"{output_rules}"
+    )
+
+
+def build_partial_user_prompt(
+    *,
+    composite_task: str,
+    task_instruction: str,
+    agent_id: str,
+    history_steps: list[dict[str, Any]],
+    observation_views: list[str],
+    allowed_tool_specs: dict[str, dict[str, Any]],
+    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
+    global_step_index: int | None = None,
+    coordinator_id: str | None = None,
+    initial_state: dict[str, Any] | None = None,
+    communication_mode: str = "full",
+) -> str:
+    """Build the canonical private-history prompt used by SFT and live eval.
+
+    Keeping index normalization here prevents the two callers from silently
+    drifting.  Production no-index runs use ``partial_step_index_mode=none``.
+    """
+
+    prompt_history = normalize_partial_history_steps(
+        history_steps,
+        index_mode=partial_step_index_mode,
+    )
+    if partial_step_index_mode == "local":
+        next_step_index: int | None = len(prompt_history)
+        step_index_label = "Next local agent turn index"
+    elif partial_step_index_mode == "none":
+        next_step_index = None
+        step_index_label = "Next global step index"
+    else:
+        next_step_index = global_step_index
+        step_index_label = "Next global step index"
+    return build_user_prompt(
+        composite_task=composite_task,
+        task_instruction=task_instruction,
+        agent_id=agent_id,
+        next_step_index=next_step_index,
+        step_index_label=step_index_label,
+        observation_views=observation_views,
+        history_steps=prompt_history,
+        allowed_tool_specs=allowed_tool_specs,
+        sft_format="tool_call",
+        predict_agent=False,
+        coordinator_id=coordinator_id,
+        initial_state=initial_state,
+        communication_mode=communication_mode,
     )
 
 

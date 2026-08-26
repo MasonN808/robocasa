@@ -57,8 +57,7 @@ MIN_SIGNAL_MESSAGE_WORDS = 4
 # else -- counters, islands, dining tables -- is roomy enough to share, so two
 # agents there only conflict if they touch the SAME object.
 EXCLUSIVE_FIXTURE_TYPES = frozenset({
-    "cab", "cabinet", "cabinet_single_door", "cabinet_double_door",
-    "cabinet_with_door", "drawer", "top_drawer",
+    "drawer", "top_drawer",
     "fridge", "microwave", "oven", "dishwasher", "stove", "sink",
     "toaster", "toaster_oven", "coffee_machine", "blender", "stand_mixer",
     "electric_kettle",

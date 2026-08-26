@@ -3,10 +3,72 @@ import unittest
 from data_generation.task_level.pipeline.sim_normalization import (
     FixtureSimulationMetadata,
     _normalize_token_for_fixture,
+    _resolve_symbolic_fixture_metadata,
 )
 
 
 class TestSimNormalization(unittest.TestCase):
+    def test_anchor_parent_wins_over_generic_counter_role(self):
+        payload = {
+            "initial_state": {
+                "fixtures": {
+                    "cab": {"fixture_type": "cabinet"},
+                    "counter": {"fixture_type": "counter"},
+                    "cabinet_parent_counter": {"fixture_type": "counter"},
+                },
+                "objects": {},
+                "agents": {},
+            },
+            "grounding": {
+                "symbols": {
+                    "cabinet_parent_counter": {
+                        "entity_type": "fixture",
+                        "resolver": "nearest_placeable_surface_to_fixture",
+                        "anchor_fixture_symbol": "cab",
+                        "preferred_fixture_types": ["counter"],
+                    }
+                }
+            },
+        }
+        snapshot = {
+            "scene": {
+                "objects": {},
+                "object_placements": {},
+                "fixture_refs": {
+                    "cab": "cab_1",
+                    "counter": "counter_2",
+                },
+                "fixtures": {
+                    "cab_1": {
+                        "fixture_type": "cabinet",
+                        "parent_fixture": "counter_1",
+                    },
+                    "counter_1": {"fixture_type": "counter"},
+                    "counter_2": {"fixture_type": "counter"},
+                },
+            },
+            "fixture_details": {
+                "cab_1": {
+                    "fixture_type": "cabinet",
+                    "parent_fixture": "counter_1",
+                },
+                "counter_1": {"fixture_type": "counter"},
+                "counter_2": {"fixture_type": "counter"},
+            },
+        }
+
+        resolved = _resolve_symbolic_fixture_metadata(
+            task_name="ExampleTask",
+            payload=payload,
+            snapshot=snapshot,
+            object_aliases={},
+        )
+
+        self.assertEqual(
+            resolved["cabinet_parent_counter"].concrete_id,
+            "counter_1",
+        )
+
     def test_normalize_timer_knob_to_time_control(self):
         fixture_metadata = {
             "toaster_oven": FixtureSimulationMetadata(

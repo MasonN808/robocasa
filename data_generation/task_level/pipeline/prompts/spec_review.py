@@ -41,6 +41,7 @@ and it supports only a small set of goal/precondition/effect kinds.
 Supported goal kinds:
 - `object_at_location`
 - `object_count_at_location`
+- `object_count_at_locations`
 - `object_at_location_one_of`
 - `machine_flag_true`
 - `machine_flag_equals`

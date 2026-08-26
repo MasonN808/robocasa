@@ -243,6 +243,7 @@ def _build_batch_trajectory_request(
     runtime_config: RuntimeConfig,
     task_definition: TaskDefinition,
     task_instance: TaskInstance,
+    retry_feedback: str | None = None,
 ) -> BatchTrajectoryRequest:
     sampling_strategy = _runtime_support._sampling_strategy_for_runtime(runtime_config)
     variation_key = _runtime_support.format_trajectory_variation_key(
@@ -258,6 +259,7 @@ def _build_batch_trajectory_request(
             runtime_config=runtime_config,
             task_instance=task_instance,
             variation_key=variation_key,
+            retry_feedback=retry_feedback,
         ),
         task_instance=task_instance,
     )
@@ -587,7 +589,17 @@ def generate_trajectories_batch(
         for trajectory_index in requested_run_indices
     }
     attempt_numbers = {
+        trajectory_index: (
+            runtime_config.attempt_number_offset_for_run(trajectory_index) + 1
+        )
+        for trajectory_index in requested_run_indices
+    }
+    local_attempt_numbers = {
         trajectory_index: 1 for trajectory_index in requested_run_indices
+    }
+    retry_feedback_by_index: dict[int, str] = {}
+    retry_constraints_by_index: dict[int, list[str]] = {
+        trajectory_index: [] for trajectory_index in requested_run_indices
     }
     pending_indices = list(requested_run_indices)
 
@@ -631,6 +643,7 @@ def generate_trajectories_batch(
                     runtime_config=runtime_config,
                     task_definition=task_definition,
                     task_instance=task_instances[trajectory_index],
+                    retry_feedback=retry_feedback_by_index.get(trajectory_index),
                 )
                 for trajectory_index in sorted(pending_indices)
             ]
@@ -729,6 +742,10 @@ def generate_trajectories_batch(
             # retries remain stable even if Vertex reorders output files.
             for batch_request in batch_requests:
                 _runtime_support._raise_if_task_cancelled(runtime_config)
+                retry_feedback_candidate: dict[str, Any] | None = None
+                request_validator = task_definition.validator_factory(
+                    batch_request.task_instance
+                )
                 row = rows_by_variation_key.get(batch_request.variation_key)
                 if row is None:
                     row_error: Exception = ResponseFormatValidationError(
@@ -749,7 +766,10 @@ def generate_trajectories_batch(
                                 raw_response=response_payload,
                                 task_definition=task_definition,
                                 runtime_config=runtime_config,
+                                variation_key=batch_request.variation_key,
                             )
+                            if len(sampled_candidates) == 1:
+                                retry_feedback_candidate = sampled_candidates[0].candidate
                             usage = build_generation_usage_metadata(
                                 (
                                     row.get("response", {}).get("usageMetadata")
@@ -788,9 +808,7 @@ def generate_trajectories_batch(
                                 prompt=batch_request.prompt,
                                 raw_response=response_payload,
                                 usage=usage,
-                                validator=task_definition.validator_factory(
-                                    batch_request.task_instance
-                                ),
+                                validator=request_validator,
                                 seen_signatures=seen_signatures,
                                 seen_signatures_lock=seen_signatures_lock,
                                 attempt_number=batch_request.attempt_number,
@@ -857,17 +875,43 @@ def generate_trajectories_batch(
                         ),
                         trajectory_index=batch_request.trajectory_index,
                         attempt_number=batch_request.attempt_number,
-                        retryable=batch_request.attempt_number
-                        < runtime_config.max_retries,
+                        retryable=local_attempt_numbers[
+                            batch_request.trajectory_index
+                        ] < runtime_config.max_retries,
                     ),
                     error_events_lock=error_events_lock,
                 )
 
-                if batch_request.attempt_number >= runtime_config.max_retries:
+                if (
+                    local_attempt_numbers[batch_request.trajectory_index]
+                    >= runtime_config.max_retries
+                ):
                     exhausted_errors[batch_request.trajectory_index] = row_error
                     failed_count += 1
                 else:
+                    if isinstance(row_error, TrajectoryValidationError):
+                        retry_constraints_by_index[
+                            batch_request.trajectory_index
+                        ].append(
+                            _runtime_support._compact_retry_constraint(
+                                row_error.error_type,
+                                str(row_error),
+                                row_error.details,
+                            )
+                        )
+                        retry_feedback_by_index[
+                            batch_request.trajectory_index
+                        ] = _runtime_support._build_retry_feedback_text(
+                            row_error,
+                            candidate=retry_feedback_candidate,
+                            allowed_tool_specs=request_validator.allowed_tool_specs,
+                            prior_constraints=retry_constraints_by_index[
+                                batch_request.trajectory_index
+                            ],
+                            feedback_style=runtime_config.retry_feedback_style,
+                        )
                     attempt_numbers[batch_request.trajectory_index] += 1
+                    local_attempt_numbers[batch_request.trajectory_index] += 1
                     next_pending_indices.append(batch_request.trajectory_index)
                     retryable_count += 1
 

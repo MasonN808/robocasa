@@ -34,11 +34,34 @@ mkdir -p /work/umass/shlomo_umass/dbenhamougol_umass/slurm_logs
 : "${SOURCE:?Set SOURCE to verbalized_sampling or structured_random}"
 : "${OBS:?Set OBS to centralized or partial}"
 REASONING=${REASONING:-0}
+PARTIAL_STEP_INDEX_MODE=${PARTIAL_STEP_INDEX_MODE:-local}
+SMOKE=${SMOKE:-0}
+RUN_SUFFIX=${RUN_SUFFIX:-}
+TWO_GPU_BENCHMARK_STEPS=${TWO_GPU_BENCHMARK_STEPS:-0}
+NUM_EPOCHS=${NUM_EPOCHS:-3}
+LEARNING_RATE=${LEARNING_RATE:-2e-4}
+
+# Non-default ablations must never reuse a baseline output/W&B name.  Keep a
+# caller-provided suffix, but also encode the two training knobs automatically.
+if [[ "${NUM_EPOCHS}" != "3" || "${LEARNING_RATE}" != "2e-4" ]]; then
+  lr_tag=${LEARNING_RATE//./p}
+  RUN_SUFFIX="${RUN_SUFFIX}-ep${NUM_EPOCHS}-lr${lr_tag}"
+fi
+
+case "${PARTIAL_STEP_INDEX_MODE}" in
+  none|local) ;;
+  *) echo "PARTIAL_STEP_INDEX_MODE must be none or local, got: ${PARTIAL_STEP_INDEX_MODE}" >&2; exit 1 ;;
+esac
 
 export PYTHON_BIN=/work/umass/shlomo_umass/dbenhamougol_umass/envs/robocasa-v3/bin/python
 export HF_HOME=/work/umass/shlomo_umass/hf_cache
 export WANDB_MODE=online
 export PYTHONUNBUFFERED=1
+
+# Fail before allocating model weights if online W&B authentication or API
+# connectivity is broken. A successful import alone is not enough: smoke and
+# full runs must be visible remotely, not left in an offline spool directory.
+"${PYTHON_BIN}" -c 'import wandb; assert wandb.login(), "wandb.login() failed"; print("W&B viewer:", wandb.Api().viewer)'
 
 case "${SOURCE}" in
   verbalized_sampling)
@@ -48,6 +71,26 @@ case "${SOURCE}" in
   structured_random)
     export DATA_ROOT=/work/umass/shlomo_umass/dbenhamougol_umass/data/structured_random_train_21
     src_tag=sr
+    ;;
+  tick30)
+    export DATA_ROOT=/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent
+    src_tag=tick30
+    ;;
+  tick100)
+    export DATA_ROOT=/work/umass/shlomo_umass/dbenhamougol_umass/tick_render100_structured_random_concurrent
+    src_tag=tick100
+    ;;
+  tick100_from150)
+    export DATA_ROOT=/work/umass/shlomo_umass/dbenhamougol_umass/tick_render100_from150_partition_none_concurrent
+    src_tag=tick100-from150
+    ;;
+  tick100_from150_v3)
+    export DATA_ROOT=/work/umass/shlomo_umass/dbenhamougol_umass/tick_render100_from150_partition_none_concurrent_v3
+    src_tag=tick100-from150-v3
+    ;;
+  tick30_revalidated_v3)
+    export DATA_ROOT=/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_revalidated_v3
+    src_tag=tick30-revalidated-v3
     ;;
   *) echo "Unknown SOURCE: ${SOURCE}" >&2; exit 1 ;;
 esac
@@ -62,10 +105,10 @@ case "${OBS}" in
     obs_args=(
       --partial-history
       --train-get-image
-      --partial-step-index-mode local
+      --partial-step-index-mode "${PARTIAL_STEP_INDEX_MODE}"
       --partial-observation-mode consume-once
     )
-    obs_tag=partial
+    obs_tag="partial-idx${PARTIAL_STEP_INDEX_MODE}"
     ;;
   *) echo "Unknown OBS: ${OBS}" >&2; exit 1 ;;
 esac
@@ -145,7 +188,50 @@ if [[ "${OBS}" == "partial" ]]; then
   NO_CKPT=0
 fi
 
+if [[ "${SOURCE}" == "tick30" && "${OBS}" == "partial" ]]; then
+  if [[ "${PARTIAL_STEP_INDEX_MODE}" == "none" ]]; then
+    export PREPROCESSED_DATA_DIR=/work/umass/shlomo_umass/dbenhamougol_umass/preprocessed/tick30_train47_toolcall_idxnone
+  else
+    export PREPROCESSED_DATA_DIR=/work/umass/shlomo_umass/dbenhamougol_umass/preprocessed/tick30_train47_toolcall_idxlocal
+  fi
+fi
+if [[ "${SOURCE}" == "tick100" && "${OBS}" == "partial" ]]; then
+  if [[ "${PARTIAL_STEP_INDEX_MODE}" != "none" ]]; then
+    echo "tick100 currently has only the validated no-index artifact" >&2
+    exit 1
+  fi
+  export PREPROCESSED_DATA_DIR=/work/umass/shlomo_umass/dbenhamougol_umass/preprocessed/tick100_train47_toolcall_idxnone
+fi
+if [[ "${SOURCE}" == "tick100_from150" && "${OBS}" == "partial" ]]; then
+  if [[ "${PARTIAL_STEP_INDEX_MODE}" != "none" ]]; then
+    echo "tick100_from150 currently has only the validated no-index artifact" >&2
+    exit 1
+  fi
+  export PREPROCESSED_DATA_DIR=/work/umass/shlomo_umass/dbenhamougol_umass/preprocessed/tick100_from150_train47_toolcall_idxnone
+fi
+if [[ "${SOURCE}" == "tick100_from150_v3" && "${OBS}" == "partial" ]]; then
+  if [[ "${PARTIAL_STEP_INDEX_MODE}" != "none" ]]; then
+    echo "tick100_from150_v3 forbids local and global step indices" >&2
+    exit 1
+  fi
+  export PREPROCESSED_DATA_DIR=/work/umass/shlomo_umass/dbenhamougol_umass/preprocessed/tick100_from150_v3_train47_toolcall_idxnone_schemafix
+fi
+if [[ "${SOURCE}" == "tick30_revalidated_v3" && "${OBS}" == "partial" ]]; then
+  if [[ "${PARTIAL_STEP_INDEX_MODE}" != "none" ]]; then
+    echo "tick30_revalidated_v3 forbids local and global step indices" >&2
+    exit 1
+  fi
+  export PREPROCESSED_DATA_DIR=/work/umass/shlomo_umass/dbenhamougol_umass/preprocessed/tick30_revalidated_v3_train47_toolcall_idxnone_schemafix
+fi
+
 run_name="qwen3vl-8b-v3-${src_tag}-${obs_tag}-${reason_tag}${tc_tag}"
+if [[ "${SMOKE}" == "1" ]]; then
+  run_name="${run_name}-smoke"
+fi
+if [[ "${TWO_GPU_BENCHMARK_STEPS}" -gt 0 ]]; then
+  run_name="${run_name}-2gpu-bench${TWO_GPU_BENCHMARK_STEPS}"
+fi
+run_name="${run_name}${RUN_SUFFIX}"
 export OUTPUT_DIR="training/bc_task_vlm/runs/${run_name}"
 export WANDB_RUN_NAME="${run_name}"
 
@@ -168,6 +254,27 @@ else
   export PER_DEVICE_BATCH_SIZE=8
   export GRAD_ACCUM=2
 fi
+if [[ "${SMOKE}" == "1" ]]; then
+  export NUM_PROCESSES=1
+  export PER_DEVICE_BATCH_SIZE=1
+  export GRAD_ACCUM=1
+  # This job allocation contains four GPUs, but a one-process smoke run must
+  # see only one of them. Otherwise Transformers wraps the VLM in DataParallel
+  # and independently shards image placeholders and flattened image features,
+  # producing false image-token/image-feature mismatch failures.
+  if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+    export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES%%,*}"
+  else
+    export CUDA_VISIBLE_DEVICES=0
+  fi
+fi
+if [[ "${TWO_GPU_BENCHMARK_STEPS}" -gt 0 ]]; then
+  # Preserve the production effective batch of 64:
+  # 2 ranks x 8 samples x 4 accumulation steps.
+  export NUM_PROCESSES=2
+  export PER_DEVICE_BATCH_SIZE=8
+  export GRAD_ACCUM=4
+fi
 # Recommended by the OOM message itself; costs nothing when memory is ample.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # The working partial-obs run allowed 5400s; 1800 is tight for a slow first
@@ -177,17 +284,31 @@ export ATTN_IMPLEMENTATION=flash_attention_2
 export IMAGE_RESOLUTION=512
 export MAX_LENGTH=8192
 
-export NUM_EPOCHS=3
+export NUM_EPOCHS
+export LEARNING_RATE
 export EVAL_STEPS=2000
 export SAVE_STEPS=2000
 export SAVE_TOTAL_LIMIT=2
 export EVAL_MAX_SAMPLES=512
 export EVAL_GENERATION_MAX_SAMPLES=0
+if [[ "${SMOKE}" == "1" ]]; then
+  export EVAL_STEPS=5
+  export SAVE_STEPS=5
+  export SAVE_TOTAL_LIMIT=1
+  export EVAL_MAX_SAMPLES=16
+fi
+if [[ "${TWO_GPU_BENCHMARK_STEPS}" -gt 0 ]]; then
+  export EVAL_STEPS="${TWO_GPU_BENCHMARK_STEPS}"
+  export SAVE_STEPS="${TWO_GPU_BENCHMARK_STEPS}"
+  export SAVE_TOTAL_LIMIT=1
+  export EVAL_MAX_SAMPLES=32
+fi
 
 echo "=== ${run_name} ==="
 echo "  DATA_ROOT=${DATA_ROOT}"
 echo "  obs=${obs_args[*]}"
 echo "  reasoning=${reason_args[*]:-none}  ckpt=${ckpt_args[*]:-default}"
+echo "  epochs=${NUM_EPOCHS}  learning_rate=${LEARNING_RATE}"
 
 source training/scripts/local/_launch_args.sh
 launch_args+=(
@@ -204,5 +325,12 @@ launch_args+=(
   --eval-generation-max-samples "${EVAL_GENERATION_MAX_SAMPLES}"
   --training-samples-cache-dir ".cache/bc_task_vlm/examples_${run_name}"
 )
+
+if [[ "${SMOKE}" == "1" ]]; then
+  launch_args+=(--max-steps 10)
+fi
+if [[ "${TWO_GPU_BENCHMARK_STEPS}" -gt 0 ]]; then
+  launch_args+=(--max-steps "${TWO_GPU_BENCHMARK_STEPS}")
+fi
 
 exec training/scripts/launch_multigpu.sh "${launch_args[@]}"

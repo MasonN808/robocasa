@@ -354,6 +354,14 @@ inside the cabinet and sufficiently far from the robot grippers.
 
 ## vLLM throughput mode
 
+Open-weight fixed-cohort evaluations now default to
+`fixed_live_sim_open_weight_vllm.sbatch`. It starts one pinned vLLM server and
+fans out multiple simulator clients through `live_sim_parallel_eval`; direct
+`--backend hf` is retained only as an explicit debugging/fallback path. Set
+`ADAPTER=/path/to/checkpoint` for an SFT LoRA, or omit it for the out-of-box
+base checkpoint. Both modes use the same server, tool-call parser, prompt
+contract, and client sharding.
+
 Run simulator clients in the documented RoboCasa environment and keep the
 vLLM server in a separate environment. On the local RTX 5090, the tested server
 command is:

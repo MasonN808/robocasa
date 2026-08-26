@@ -71,7 +71,6 @@ exec "${PYTHON_BIN}" -m training.bc_task_vlm.live_sim_eval \
   --partial-step-index-mode none \
   --partial-observation-mode consume-once \
   --concurrent-expert-replay \
-  --resource-locks objects \
   --sft-format tool_call \
   --no-forced-json \
   --manifest "${MANIFEST}" \

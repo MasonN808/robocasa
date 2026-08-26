@@ -45,6 +45,17 @@ def _objects_intersect(executor: SimToolExecutor, object_a: str, object_b: str) 
 
 
 class TestSimToolExecutor(unittest.TestCase):
+    def test_communicate_accepts_protocol_metadata_without_splitting_release(self):
+        executor = SimToolExecutor.__new__(SimToolExecutor)
+        result = executor.communicate(
+            to="agent_1",
+            message="The fridge is free.",
+            releases="fridge",
+            coordination_phase="portion_complete",
+        )
+        self.assertEqual(result.details["releases"], "fridge")
+        self.assertEqual(result.details["coordination_phase"], "portion_complete")
+
     def test_non_mutating_dispatch_preserves_visual_caches(self):
         executor = SimToolExecutor.__new__(SimToolExecutor)
         executor._camera_frame_cache = {"top_view": np.ones((1, 1, 3))}
@@ -1442,6 +1453,48 @@ class TestReceptacleCarrySemantics(unittest.TestCase):
 
 
 class TestFrontRetryUnit(unittest.TestCase):
+    @patch("robocasa.utils.sim_tool_executor._is_approach_center", return_value=True)
+    def test_pickup_from_countertop_appliance_matches_non_front_navigation(
+        self, _mock_is_approach_center
+    ):
+        executor = SimToolExecutor.__new__(SimToolExecutor)
+        executor.env = SimpleNamespace(objects={"pan": object()})
+        executor.runner = MagicMock()
+        executor.runner._fixtures = {"stove": object()}
+        executor._require_object = MagicMock()
+        executor._get_scene_object_location = MagicMock(return_value="stove")
+        executor._resolve_pick_source_target = MagicMock(
+            return_value=("stove", None, None)
+        )
+        executor._held_by_robot = MagicMock(return_value=None)
+        executor._fixture_is_drawer = MagicMock(return_value=False)
+        executor._fixture_requires_front_approach = MagicMock(return_value=False)
+        executor._surface_fixture_prefers_front_approach = MagicMock(
+            return_value=False
+        )
+        executor._robot_near_fixture = MagicMock(return_value=False)
+        executor._move_robot_near_fixture_with_retries = MagicMock(
+            return_value=True
+        )
+        executor._sync_held_object = MagicMock()
+        executor._get_object_pose = MagicMock(
+            return_value=(
+                np.zeros(3, dtype=float),
+                np.array([1.0, 0.0, 0.0, 0.0], dtype=float),
+            )
+        )
+        executor._held_pose_offset = MagicMock(return_value=np.zeros(3))
+        executor._set_support_parent = MagicMock()
+        executor._held_objects = {}
+        executor._held_object_offsets = {}
+
+        result = executor.pick_up_object("pan", "stove", robot_idx=1)
+
+        self.assertTrue(result.success)
+        executor._move_robot_near_fixture_with_retries.assert_called_once_with(
+            1, "stove", require_front=False
+        )
+
     def test_safe_compute_object_target_pos_forwards_support_site(self):
         executor = SimToolExecutor.__new__(SimToolExecutor)
         executor.runner = MagicMock()

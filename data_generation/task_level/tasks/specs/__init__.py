@@ -9,6 +9,58 @@ from pathlib import Path
 from typing import Any
 
 
+def derive_effective_allowed_tool_specs(
+    initial_state: dict[str, Any],
+    allowed_tool_specs: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Add fixture-relative placement anchors as valid navigation targets.
+
+    A fixture used by ``place_next_to`` may declare the nearby placement
+    surface through ``machine_state[fixture].adjacent_location_id``.  Both the
+    anchor and that surface are physically valid approach poses, so expose the
+    anchor to navigation without duplicating the relationship in every spec.
+    """
+
+    effective = {
+        str(tool_name): dict(tool_spec)
+        for tool_name, tool_spec in allowed_tool_specs.items()
+    }
+    navigation = effective.get("navigate_to_fixture")
+    next_to = effective.get("place_next_to")
+    if not isinstance(navigation, dict) or not isinstance(next_to, dict):
+        return effective
+
+    explicit_targets = navigation.get("allowed_fixture_ids")
+    reference_ids = next_to.get("allowed_reference_fixture_ids")
+    if not isinstance(explicit_targets, list) or not isinstance(reference_ids, list):
+        return effective
+
+    fixtures = initial_state.get("fixtures") or {}
+    machine_state = initial_state.get("machine_state") or {}
+    targets = list(explicit_targets)
+    derived_targets: list[str] = []
+    for reference_id in reference_ids:
+        if not isinstance(reference_id, str) or reference_id not in fixtures:
+            continue
+        reference_state = machine_state.get(reference_id)
+        if not isinstance(reference_state, dict):
+            continue
+        adjacent_id = reference_state.get("adjacent_location_id")
+        if not isinstance(adjacent_id, str) or adjacent_id not in fixtures:
+            continue
+        if reference_id not in targets:
+            targets.append(reference_id)
+            derived_targets.append(reference_id)
+
+    navigation["allowed_fixture_ids"] = targets
+    if derived_targets:
+        # Initial-position sampling historically consumes allowed_fixture_ids.
+        # Keep newly legal approach poses out of that independent distribution
+        # unless a task explicitly listed them as starts before derivation.
+        navigation["_derived_reference_fixture_ids"] = derived_targets
+    return effective
+
+
 @dataclass(frozen=True)
 class PreflightTokenEstimateSpec:
     """Serializable preflight token estimate for one task spec."""
@@ -80,6 +132,15 @@ class TaskSpec:
             missing = ", ".join(sorted(missing_fields))
             raise ValueError(f"Task spec is missing required fields: {missing}")
 
+        initial_state = dict(payload["initial_state"])
+        allowed_tool_specs = derive_effective_allowed_tool_specs(
+            initial_state,
+            {
+                str(tool_name): dict(tool_spec)
+                for tool_name, tool_spec in dict(payload["allowed_tool_specs"]).items()
+            },
+        )
+
         return cls(
             spec_version=int(payload["spec_version"]),
             composite_task=str(payload["composite_task"]),
@@ -90,11 +151,8 @@ class TaskSpec:
             preflight_token_estimate=PreflightTokenEstimateSpec.from_dict(
                 dict(payload["preflight_token_estimate"])
             ),
-            initial_state=dict(payload["initial_state"]),
-            allowed_tool_specs={
-                str(tool_name): dict(tool_spec)
-                for tool_name, tool_spec in dict(payload["allowed_tool_specs"]).items()
-            },
+            initial_state=initial_state,
+            allowed_tool_specs=allowed_tool_specs,
             task_goal=str(payload["task_goal"]),
             extra_execution_rules=tuple(
                 str(rule_text) for rule_text in payload["extra_execution_rules"]

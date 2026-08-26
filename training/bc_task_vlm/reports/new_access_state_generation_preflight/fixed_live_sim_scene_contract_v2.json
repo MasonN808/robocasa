@@ -1,0 +1,16 @@
+{
+  "valid": true,
+  "target_configuration_count": 768,
+  "unique_configuration_count": 768,
+  "compatible_scene_count_histogram": {
+    "30": 508,
+    "60": 260
+  },
+  "scene_policy_version": "certified_scenes_v1_no_layout18",
+  "scene_sampling_seed": 20260819,
+  "sampled_unique_scene_count": 60,
+  "sampled_scene_count_range": [
+    1,
+    30
+  ]
+}

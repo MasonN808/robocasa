@@ -40,6 +40,7 @@ SUPPORTED_GOAL_KINDS = frozenset(
     {
         "object_at_location",
         "object_count_at_location",
+        "object_count_at_locations",
         "object_at_location_one_of",
         "machine_flag_true",
         "machine_flag_equals",
@@ -233,11 +234,14 @@ def _collect_goal_consistency_errors(payload: dict[str, Any]) -> list[str]:
                 break
 
     for index, goal in enumerate(normalized_goal_conditions):
-        if goal.get("kind") == "object_count_at_location":
+        if goal.get("kind") in {
+            "object_count_at_location",
+            "object_count_at_locations",
+        }:
             object_ids = goal.get("object_ids")
             if not isinstance(object_ids, list) or not object_ids:
                 errors.append(
-                    f"goal_conditions[{index}]: object_count_at_location.object_ids must be a non-empty list"
+                    f"goal_conditions[{index}]: {goal.get('kind')}.object_ids must be a non-empty list"
                 )
                 continue
             normalized_object_ids = [
@@ -246,12 +250,22 @@ def _collect_goal_consistency_errors(payload: dict[str, Any]) -> list[str]:
             count = goal.get("count")
             if not isinstance(count, int) or count < 0:
                 errors.append(
-                    f"goal_conditions[{index}]: object_count_at_location.count must be a non-negative integer"
+                    f"goal_conditions[{index}]: {goal.get('kind')}.count must be a non-negative integer"
                 )
             elif count > len(normalized_object_ids):
                 errors.append(
-                    f"goal_conditions[{index}]: object_count_at_location.count={count} exceeds number of object_ids={len(normalized_object_ids)}"
+                    f"goal_conditions[{index}]: {goal.get('kind')}.count={count} exceeds number of object_ids={len(normalized_object_ids)}"
                 )
+            if goal.get("kind") == "object_count_at_locations":
+                locations = goal.get("locations")
+                if (
+                    not isinstance(locations, list)
+                    or not locations
+                    or not all(isinstance(location, str) for location in locations)
+                ):
+                    errors.append(
+                        f"goal_conditions[{index}]: object_count_at_locations.locations must be a non-empty list of strings"
+                    )
         if goal.get("kind") == "fixture_part_state":
             state = goal.get("state")
             if state not in _CANONICAL_PART_STATES:
@@ -757,7 +771,10 @@ def _check_referential_integrity(payload: dict[str, Any]) -> list[str]:
             errors.append(
                 f"goal_conditions[{index}]: object_id {obj_id!r} not in initial_state.objects"
             )
-        if goal.get("kind") == "object_count_at_location":
+        if goal.get("kind") in {
+            "object_count_at_location",
+            "object_count_at_locations",
+        }:
             for object_id in goal.get("object_ids") or []:
                 if object_id not in object_ids:
                     errors.append(

@@ -44,6 +44,7 @@ from robocasa.wrappers.enclosing_wall_render_wrapper import EnclosingWallRenderW
 from robocasa.models.fixtures.fixture import Fixture
 from robocasa.models.fixtures.fixture_utils import fixture_is_type
 from robocasa.utils.occupancy_grid import OccupancyGrid
+from data_generation.task_level.tasks.shared.constants import EXCLUSIVE_FIXTURE_TYPES
 from robocasa.utils.trajectory_runner_rendering import (
     DEFAULT_MULTI_ROBOT_COLORS,
     TrajectoryRunnerRenderingMixin,
@@ -56,6 +57,14 @@ _OBJECT_PLACEMENT_MARGIN = 0.01
 _OBJECT_PLACEMENT_STEP = 0.08
 _OBJECT_PLACEMENT_MAX_AXIS_SAMPLES = 7
 _SWEEP_VERBOSE_ENV_VAR = "ROBOCASA_SWEEP_VERBOSE"
+_COUNTERTOP_APPLIANCE_TYPES = frozenset({
+    "coffee_machine", "toaster", "toaster_oven", "blender", "stand_mixer",
+    "electric_kettle",
+})
+_HORIZONTAL_SUPPORT_TYPES = frozenset({
+    "counter", "counter_non_corner", "counter_non_dining", "dining_counter",
+    "island",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +193,86 @@ def _get_interactions(fixture: Fixture) -> list[str]:
         if non_door:
             interactions.append("turn_on")
     return interactions
+
+
+def _fixture_extents_3d(fixture: Fixture) -> tuple[np.ndarray, np.ndarray] | None:
+    """Return world-space 3-D bounds from a fixture's external sites."""
+    try:
+        points = np.asarray(
+            [np.asarray(point, dtype=float) for point in fixture.get_ext_sites(
+                all_points=True, relative=False
+            )],
+            dtype=float,
+        )
+    except Exception:
+        return None
+    if points.ndim != 2 or points.shape[0] == 0 or points.shape[1] < 3:
+        return None
+    return points[:, :3].min(axis=0), points[:, :3].max(axis=0)
+
+
+def _countertop_support_parent(
+    appliance_name: str,
+    appliance: Fixture,
+    fixtures: dict[str, Fixture],
+    fixture_types: dict[str, str],
+) -> str:
+    """Resolve the horizontal surface physically underneath an appliance.
+
+    This deliberately does not consider cabinets or drawers. Their existing
+    parent relationship describes a paired workspace and must remain intact.
+    """
+    appliance_bounds = _fixture_extents_3d(appliance)
+    if appliance_bounds is None:
+        raise RuntimeError(
+            f"Cannot resolve supporting surface for {appliance_name!r}: "
+            "appliance bounds are unavailable."
+        )
+    appliance_min, appliance_max = appliance_bounds
+    candidates: list[tuple[tuple[float, float, float], str]] = []
+    for surface_name, surface in fixtures.items():
+        if surface_name == appliance_name:
+            continue
+        if fixture_types.get(surface_name) not in _HORIZONTAL_SUPPORT_TYPES:
+            continue
+        surface_bounds = _fixture_extents_3d(surface)
+        if surface_bounds is None:
+            continue
+        surface_min, surface_max = surface_bounds
+        overlap_x = min(appliance_max[0], surface_max[0]) - max(
+            appliance_min[0], surface_min[0]
+        )
+        overlap_y = min(appliance_max[1], surface_max[1]) - max(
+            appliance_min[1], surface_min[1]
+        )
+        if overlap_x <= 1e-6 or overlap_y <= 1e-6:
+            continue
+        vertical_gap = float(appliance_min[2] - surface_max[2])
+        # Allow small mesh interpenetration and asset-dependent feet, but not
+        # an overhead or distant nearby fixture.
+        if not -0.08 <= vertical_gap <= 0.30:
+            continue
+        overlap_area = float(overlap_x * overlap_y)
+        center_distance = float(np.linalg.norm(
+            (appliance_min[:2] + appliance_max[:2]) / 2.0
+            - (surface_min[:2] + surface_max[:2]) / 2.0
+        ))
+        candidates.append(((abs(vertical_gap), -overlap_area, center_distance), surface_name))
+
+    if not candidates:
+        raise RuntimeError(
+            f"Cannot resolve supporting surface for countertop appliance "
+            f"{appliance_name!r}."
+        )
+    candidates.sort()
+    if len(candidates) > 1 and all(
+        abs(a - b) <= 1e-6 for a, b in zip(candidates[0][0], candidates[1][0])
+    ):
+        raise RuntimeError(
+            f"Ambiguous supporting surfaces for countertop appliance "
+            f"{appliance_name!r}: {candidates[0][1]!r} and {candidates[1][1]!r}."
+        )
+    return candidates[0][1]
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +701,33 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
         if fixture is None:
             return None
 
+        # Coffee-machine rotation does not reliably identify the usable side.
+        # Its pouring site and start button are the actual task-facing geometry.
+        interaction_positions: list[np.ndarray] = []
+        pouring_site = getattr(fixture, "_receptacle_pouring_site", None)
+        if pouring_site is not None:
+            pouring_site_name = pouring_site.get("name")
+            if isinstance(pouring_site_name, str):
+                pouring_position = self._lookup_named_world_xy(pouring_site_name)
+                if pouring_position is not None:
+                    interaction_positions.append(pouring_position)
+        start_button_names = getattr(fixture, "_start_button_names", None)
+        naming_prefix = getattr(fixture, "naming_prefix", "")
+        if isinstance(start_button_names, (list, tuple)):
+            for button_name in start_button_names:
+                if not isinstance(button_name, str):
+                    continue
+                full_name = (
+                    button_name
+                    if button_name.startswith(str(naming_prefix))
+                    else f"{naming_prefix}{button_name}"
+                )
+                button_position = self._lookup_named_world_xy(full_name)
+                if button_position is not None:
+                    interaction_positions.append(button_position)
+        if interaction_positions:
+            return np.mean(np.stack(interaction_positions), axis=0)
+
         explicit_handle_names: list[str] = []
         for attr_name in ("left_handle_name", "right_handle_name", "handle_name"):
             try:
@@ -804,6 +920,7 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
             ref_pos,
             robot_positions=robot_positions,
             require_front=require_front,
+            prohibited_working_fixtures=self._exclusive_children_for_parent(fxtr),
         )
 
         if result is not None:
@@ -919,7 +1036,32 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
             ref_pos,
             robot_positions=robot_positions,
             require_front=require_front,
+            prohibited_working_fixtures=self._exclusive_children_for_parent(fixture),
         )
+
+    def _exclusive_children_for_parent(self, parent_fixture: Fixture) -> list[Fixture]:
+        """Return exclusive child fixtures whose workspaces a parent may not borrow."""
+        if os.environ.get("ROBOCASA_RESERVE_EXCLUSIVE_CHILD_WORKSPACES", "1") == "0":
+            return []
+        scene = self.get_scene_description()
+        fixtures = scene.get("fixtures") or {}
+        parent_id = next(
+            (fixture_id for fixture_id, candidate in self._fixtures.items()
+             if candidate is parent_fixture),
+            None,
+        )
+        if parent_id is None:
+            return []
+        children: list[Fixture] = []
+        for fixture_id, state in fixtures.items():
+            if not isinstance(state, dict) or state.get("parent_fixture") != parent_id:
+                continue
+            if str(state.get("fixture_type", "")).lower() not in EXCLUSIVE_FIXTURE_TYPES:
+                continue
+            child = self._fixtures.get(fixture_id)
+            if child is not None:
+                children.append(child)
+        return children
 
     def _find_nearest_surface(self, pos_2d: np.ndarray) -> str | None:
         """Find the nearest counter / placeable surface to a 2-D position."""
@@ -1136,8 +1278,9 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
                     nearby.append(other_name)
             info.nearby_fixtures = nearby
 
-        # Compute parent fixture: which counter/surface each fixture sits on.
-        # Uses the same containment logic as env.get_fixture(ref=...).
+        # Compute parent fixture. Countertop appliances use the horizontal
+        # surface physically underneath them; cabinets/drawers retain the
+        # existing paired-workspace containment relationship.
         counter_fixtures = {
             name: fxtr
             for name, fxtr in self._fixtures.items()
@@ -1148,10 +1291,19 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
             )
         }
         for name, info in fixtures_info.items():
-            if info.fixture_type in ("counter", "dining_counter"):
+            if info.fixture_type in _HORIZONTAL_SUPPORT_TYPES:
                 continue  # counters don't have parent counters
             fxtr = self._fixtures.get(name)
             if fxtr is None or not hasattr(fxtr, "pos"):
+                continue
+            if info.fixture_type in _COUNTERTOP_APPLIANCE_TYPES:
+                info.parent_fixture = _countertop_support_parent(
+                    name,
+                    fxtr,
+                    self._fixtures,
+                    {fixture_name: fixture_info.fixture_type
+                     for fixture_name, fixture_info in fixtures_info.items()},
+                )
                 continue
             for cname, cfxtr in counter_fixtures.items():
                 if cname == name:
@@ -1686,8 +1838,13 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
         ignored_fixture_ids = (
             set() if ignored_fixture_ids is None else set(ignored_fixture_ids)
         )
+        target_bounds = _fixture_extents_3d(self._fixtures[target_fixture_id])
+        target_surface_z = (
+            float(target_bounds[1][2]) if target_bounds is not None else None
+        )
 
         object_obstacles = []
+        object_obstacle_ids: list[str] = []
         for other_id, other_obj in self.env.objects.items():
             if other_id == object_id or other_id in ignored:
                 continue
@@ -1705,24 +1862,41 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
                     other_radius,
                 )
             )
+            object_obstacle_ids.append(str(other_id))
 
         fixture_obstacles = []
+        fixture_obstacle_ids: list[str] = []
         for fixture_id, fixture in self._fixtures.items():
             if fixture_id == target_fixture_id or fixture_id in ignored_fixture_ids:
                 continue
+            # Drawers, cabinets, and other structural components entirely
+            # below a support surface cannot intersect an object resting on
+            # top of that surface. Some fixture assets expose broad collision
+            # envelopes that otherwise create false positive intersections
+            # across the entire countertop.
+            if target_surface_z is not None:
+                fixture_bounds = _fixture_extents_3d(fixture)
+                if (
+                    fixture_bounds is not None
+                    and float(fixture_bounds[1][2]) <= target_surface_z + 1e-3
+                ):
+                    continue
             fixture_pos = np.asarray(fixture.pos, dtype=float)
             try:
                 fixture_radius = float(fixture.horizontal_radius)
             except Exception:
                 fixture_radius = 0.0
             fixture_obstacles.append((fixture, fixture_pos, fixture_radius))
+            fixture_obstacle_ids.append(str(fixture_id))
 
         return {
             "object": obj,
             "obj_quat": metadata["quat_xyzw"],
             "obj_radius": float(metadata["xy_radius"]),
             "object_obstacles": object_obstacles,
+            "object_obstacle_ids": object_obstacle_ids,
             "fixture_obstacles": fixture_obstacles,
+            "fixture_obstacle_ids": fixture_obstacle_ids,
         }
 
     def _candidate_overlaps_scene(
@@ -1778,6 +1952,42 @@ class TrajectoryRunner(TrajectoryRunnerRenderingMixin):
                 continue
 
         return False
+
+    def _candidate_scene_overlap_labels(
+        self,
+        candidate_pos: np.ndarray,
+        collision_context: dict,
+    ) -> list[str]:
+        """Return labeled obstacles intersecting a candidate for diagnostics."""
+        obj = collision_context["object"]
+        obj_quat = collision_context["obj_quat"]
+        obj_radius = float(collision_context["obj_radius"])
+        labels: list[str] = []
+        object_ids = collision_context.get("object_obstacle_ids") or []
+        for index, (other_obj, other_pos, other_quat, other_radius) in enumerate(
+            collision_context["object_obstacles"]
+        ):
+            if np.linalg.norm(other_pos[:2] - candidate_pos[:2]) > obj_radius + other_radius + 0.30:
+                continue
+            try:
+                if OU.objs_intersect(obj, candidate_pos, obj_quat, other_obj, other_pos, other_quat):
+                    obstacle_id = object_ids[index] if index < len(object_ids) else str(index)
+                    labels.append(f"object:{obstacle_id}")
+            except Exception:
+                continue
+        fixture_ids = collision_context.get("fixture_obstacle_ids") or []
+        for index, (fixture, fixture_pos, fixture_radius) in enumerate(
+            collision_context["fixture_obstacles"]
+        ):
+            if np.linalg.norm(fixture_pos[:2] - candidate_pos[:2]) > obj_radius + fixture_radius + 0.30:
+                continue
+            try:
+                if OU.objs_intersect(obj, candidate_pos, obj_quat, fixture, fixture_pos, None):
+                    obstacle_id = fixture_ids[index] if index < len(fixture_ids) else str(index)
+                    labels.append(f"fixture:{obstacle_id}")
+            except Exception:
+                continue
+        return labels
 
     def _compute_object_target_pos(
         self,

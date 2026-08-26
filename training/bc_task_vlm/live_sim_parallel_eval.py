@@ -160,18 +160,75 @@ def _sha256(path: Path) -> str:
 
 
 def _selected_mapping(
-    manifest: dict[str, Any], tasks_value: str | None
+    manifest: dict[str, Any], tasks_value: str | None,
+    *,
+    cohort_split: str | None = None,
+    episodes_per_task: int | None = None,
+    cohort_mode: str = "sampled",
+    episodes_per_config: int = 1,
+    max_configs_per_task: int | None = None,
+    evaluation_seed: int | None = None,
 ) -> dict[str, list[str]]:
-    try:
-        raw_mapping = manifest["trajectory_ids_by_task"]
-    except KeyError as exc:
-        raise ParallelEvalError(
-            "manifest has no trajectory_ids_by_task mapping"
-        ) from exc
-    mapping = {
-        str(task): sorted(str(trajectory_id) for trajectory_id in ids)
-        for task, ids in raw_mapping.items()
-    }
+    manifest_type = manifest.get("manifest_type")
+    if manifest_type == "fixed_live_sim_configuration_targets":
+        if cohort_split is None:
+            raise ParallelEvalError(
+                "fixed_live_sim_configuration_targets requires --cohort-split"
+            )
+        try:
+            source = manifest["configurations"][cohort_split]
+        except KeyError as exc:
+            raise ParallelEvalError(f"manifest has no split {cohort_split!r}") from exc
+        from training.bc_task_vlm.fixed_cohort_selection import (
+            select_configuration_episodes,
+        )
+
+        resolved_seed = manifest.get("cohort_seed") if evaluation_seed is None else evaluation_seed
+        if resolved_seed is None:
+            raise ParallelEvalError(
+                "configuration cohort requires --evaluation-seed or cohort_seed"
+            )
+        count = 10 if episodes_per_task is None else episodes_per_task
+        mapping = {
+            str(task): [
+                str(row["episode_id"])
+                for row in select_configuration_episodes(
+                    configurations,
+                    task_name=str(task),
+                    split=cohort_split,
+                    mode=cohort_mode,
+                    evaluation_seed=int(resolved_seed),
+                    episodes_per_task=count,
+                    episodes_per_config=episodes_per_config,
+                    max_configs_per_task=max_configs_per_task,
+                )
+            ]
+            for task, configurations in source.items()
+        }
+    elif manifest_type == "fixed_live_sim":
+        if cohort_split is None:
+            raise ParallelEvalError("fixed_live_sim requires --cohort-split")
+        try:
+            raw_episodes = manifest["splits"][cohort_split]
+        except KeyError as exc:
+            raise ParallelEvalError(f"manifest has no split {cohort_split!r}") from exc
+        mapping = {}
+        for task, episodes in raw_episodes.items():
+            ordered = sorted(episodes, key=lambda row: int(row["episode_rank"]))
+            if episodes_per_task is not None:
+                ordered = [row for row in ordered if int(row["episode_rank"]) < episodes_per_task]
+            mapping[str(task)] = [str(row["trajectory_id"]) for row in ordered]
+    else:
+        try:
+            raw_mapping = manifest["trajectory_ids_by_task"]
+        except KeyError as exc:
+            raise ParallelEvalError(
+                "manifest has no trajectory_ids_by_task mapping"
+            ) from exc
+        mapping = {
+            str(task): sorted(str(trajectory_id) for trajectory_id in ids)
+            for task, ids in raw_mapping.items()
+        }
     if tasks_value is not None:
         requested = {task.strip() for task in tasks_value.split(",") if task.strip()}
         missing = requested - set(mapping)
@@ -185,6 +242,42 @@ def _selected_mapping(
     if not mapping:
         raise ParallelEvalError("no trajectories remain after task filtering")
     return mapping
+
+
+def _filter_dagger_mapping(
+    mapping: dict[str, list[str]], dagger_prefixes_path: Path
+) -> dict[str, list[str]]:
+    """Restrict worker ownership to accepted episodes present in DAgger JSONL."""
+
+    allowed: set[tuple[str, str]] = set()
+    with dagger_prefixes_path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+                diagnostic = row["diagnostic"]
+                replay = row.get("fsm_replay") or {}
+                if replay.get("fsm_replay_status") != "accepted":
+                    continue
+                allowed.add(
+                    (str(diagnostic["task_name"]), str(diagnostic["trajectory_id"]))
+                )
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise ParallelEvalError(
+                    f"invalid DAgger prefix row {line_number} in "
+                    f"{dagger_prefixes_path}: {exc}"
+                ) from exc
+    filtered = {
+        task: [trajectory_id for trajectory_id in ids if (task, trajectory_id) in allowed]
+        for task, ids in mapping.items()
+    }
+    filtered = {task: ids for task, ids in filtered.items() if ids}
+    if not filtered:
+        raise ParallelEvalError(
+            "no selected manifest trajectories have accepted DAgger prefixes"
+        )
+    return filtered
 
 
 def _task_weights(
@@ -247,7 +340,28 @@ def build_shard_manifest(
     """Return a self-describing manifest containing exactly one worker's keys."""
 
     shard = deepcopy(manifest)
-    shard["trajectory_ids_by_task"] = mapping
+    if shard.get("manifest_type") == "fixed_live_sim_configuration_targets":
+        for split_name, configurations in list(shard.get("configurations", {}).items()):
+            shard["configurations"][split_name] = {
+                task: rows
+                for task, rows in configurations.items()
+                if task in mapping
+            }
+    elif shard.get("manifest_type") == "fixed_live_sim":
+        for split_name in list(shard.get("splits", {})):
+            if split_name not in shard["splits"]:
+                continue
+            shard["splits"][split_name] = {
+                task: [
+                    episode
+                    for episode in episodes
+                    if task in mapping and episode["trajectory_id"] in mapping[task]
+                ]
+                for task, episodes in shard["splits"][split_name].items()
+                if task in mapping
+            }
+    else:
+        shard["trajectory_ids_by_task"] = mapping
     allowed = {
         (task, trajectory_id)
         for task, trajectory_ids in mapping.items()
@@ -345,7 +459,36 @@ def prepare_parallel_run(
     if not manifest_path.is_file():
         raise ParallelEvalError(f"manifest does not exist: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    selected = _selected_mapping(manifest, tasks_value)
+    cohort_split = _option_value(normalized, "--cohort-split")
+    episodes_value = _option_value(normalized, "--episodes-per-task")
+    episodes_per_task = int(episodes_value) if episodes_value is not None else None
+    cohort_mode = _option_value(normalized, "--cohort-mode") or "sampled"
+    episodes_per_config_value = _option_value(normalized, "--episodes-per-config")
+    episodes_per_config = (
+        int(episodes_per_config_value) if episodes_per_config_value is not None else 1
+    )
+    max_configs_value = _option_value(normalized, "--max-configs-per-task")
+    max_configs_per_task = int(max_configs_value) if max_configs_value is not None else None
+    evaluation_seed_value = _option_value(normalized, "--evaluation-seed")
+    evaluation_seed = int(evaluation_seed_value) if evaluation_seed_value is not None else None
+    selected = _selected_mapping(
+        manifest,
+        tasks_value,
+        cohort_split=cohort_split,
+        episodes_per_task=episodes_per_task,
+        cohort_mode=cohort_mode,
+        episodes_per_config=episodes_per_config,
+        max_configs_per_task=max_configs_per_task,
+        evaluation_seed=evaluation_seed,
+    )
+    dagger_prefixes_value = _option_value(normalized, "--dagger-prefixes")
+    if dagger_prefixes_value is not None:
+        dagger_prefixes_path = Path(dagger_prefixes_value).resolve()
+        if not dagger_prefixes_path.is_file():
+            raise ParallelEvalError(
+                f"DAGger prefixes do not exist: {dagger_prefixes_path}"
+            )
+        selected = _filter_dagger_mapping(selected, dagger_prefixes_path)
     shard_mappings = shard_task_mapping(manifest, selected, requested_workers)
     effective_workers = len(shard_mappings)
 

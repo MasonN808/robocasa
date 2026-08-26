@@ -348,6 +348,12 @@ def rebuild_tick_rows_with_image_observations(
     dilated: list[dict[str, dict[str, Any]]] = [
         {agent_id: _build_initial_observation_step(agent_id) for agent_id in agent_ids}
     ]
+    from data_generation.task_level.tasks.shared.scheduling import (
+        release_keys,
+        wait_key,
+    )
+
+    blocked: dict[str, tuple[str, str]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -369,25 +375,46 @@ def rebuild_tick_rows_with_image_observations(
             if action["tool"] != COMMUNICATE_TOOL_NAME
             and action["tool"] not in WAIT_TOOL_NAMES
         }
-        # An empty observe row is dropped rather than kept as a blank instant.
-        # That shortens the schedule for every agent by the same tick, so the
-        # alignment the dilation exists to protect is unaffected.
-        for timing in ("before", None, "after"):
-            if timing is None:
-                dilated.append(actions)
-                continue
-            if not bracketed:
-                continue
+        active_before = [a for a in agent_ids if a not in blocked]
+        if bracketed:
             dilated.append(
                 {
                     agent_id: _build_action_observation_step(
                         agent_id,
-                        tool_name=tool_name,
-                        timing=timing,
+                        tool_name=bracketed.get(agent_id, "concurrent_action"),
+                        timing="before",
                     )
-                    for agent_id, tool_name in bracketed.items()
+                    for agent_id in active_before
                 }
             )
+        dilated.append(actions)
+
+        # Update the scheduling state at the atomic row boundary. Releases wake
+        # agents for the following row, exactly as the canonical FSM does.
+        releases: list[tuple[str, str]] = []
+        for agent_id, action in actions.items():
+            call = {**action, "agent": agent_id}
+            key = wait_key(call)
+            if key is not None:
+                blocked[agent_id] = key
+            releases.extend(release_keys(call))
+        for waiter, key in list(blocked.items()):
+            if key in releases:
+                blocked.pop(waiter)
+
+        if bracketed:
+            active_after = [a for a in agent_ids if a not in blocked]
+            if active_after:
+                dilated.append(
+                    {
+                        agent_id: _build_action_observation_step(
+                            agent_id,
+                            tool_name=bracketed.get(agent_id, "concurrent_action"),
+                            timing="after",
+                        )
+                        for agent_id in active_after
+                    }
+                )
 
     return [
         {TICK_KEY: tick_index, **{a: dict(act) for a, act in actions.items()}}
@@ -473,11 +500,16 @@ def _normalized_signature_payload(trajectory: dict[str, Any]) -> dict[str, Any]:
 def _replace_validation_with_post_process_status(trajectory: dict[str, Any]) -> None:
     """Replaces stale validation metadata after post-processing rewrites the steps."""
 
+    from data_generation.task_level.tasks.shared.concurrent_fsm import (
+        VALIDATOR_CONTRACT_VERSION,
+    )
+
     validation = trajectory.get("validation")
     if not isinstance(validation, dict):
         return
     trajectory["validation"] = {
         "is_valid": False,
+        "validator_contract_version": VALIDATOR_CONTRACT_VERSION,
         "checks": [],
         "final_state": None,
         "error_type": POST_PROCESS_VALIDATION_ERROR_TYPE,
@@ -487,7 +519,7 @@ def _replace_validation_with_post_process_status(trajectory: dict[str, Any]) -> 
     }
 
 
-def _revalidate_tick_trajectory(trajectory: dict[str, Any]) -> None:
+def revalidate_tick_trajectory(trajectory: dict[str, Any]) -> None:
     """Replays the post-processed plan and records the real verdict, in place.
 
     Post-processing rewrites the steps, which is why the placeholder verdict
@@ -502,20 +534,32 @@ def _revalidate_tick_trajectory(trajectory: dict[str, Any]) -> None:
     from data_generation.task_level.tasks.shared.concurrent_fsm import (
         LOCK_STEP,
         ConcurrentTaskValidator,
+        VALIDATOR_CONTRACT_VERSION,
     )
     from data_generation.task_level.tasks.specs import load_task_spec
     from data_generation.task_level.tasks.specs.runtime import SpecDrivenTaskValidator
+    from data_generation.task_level.tasks.shared.types import TaskInstance
 
-    inner = SpecDrivenTaskValidator(load_task_spec(trajectory["composite_task"]))
-    inner.initial_state = deepcopy(trajectory["initial_state"])
+    task_instance = TaskInstance(
+        initial_state=deepcopy(trajectory["initial_state"]),
+        work_partition=deepcopy(trajectory.get("generation_work_partition")),
+        coordinator_id=trajectory.get("coordinator_id"),
+    )
+    inner = SpecDrivenTaskValidator(
+        load_task_spec(trajectory["composite_task"]), task_instance
+    )
     validator = ConcurrentTaskValidator(inner, models=(LOCK_STEP,))
-    candidate = {"agents": trajectory["agents"], "steps": trajectory["steps"]}
+    candidate = {
+        "agents": trajectory["agents"],
+        "tick_rows": trajectory[TICK_ROWS_KEY],
+    }
     signature = stable_json_sha256(_normalized_signature_payload(trajectory))
     try:
         validation = dict(validator.validate(candidate))
     except Exception as exc:  # noqa: BLE001 - the verdict is the output here
         trajectory["validation"] = {
             "is_valid": False,
+            "validator_contract_version": VALIDATOR_CONTRACT_VERSION,
             "checks": [],
             "final_state": None,
             "error_type": type(exc).__name__,
@@ -574,7 +618,12 @@ def post_process_trajectory(
             trajectory_id=trajectory_id,
         )
     if revalidate and isinstance(tick_rows, list):
-        _revalidate_tick_trajectory(updated_trajectory)
+        revalidate_tick_trajectory(updated_trajectory)
+        from data_generation.task_level.tasks.shared.validation_contract import (
+            require_current_validation,
+        )
+
+        require_current_validation(updated_trajectory, source="image post-processing")
     else:
         _replace_validation_with_post_process_status(updated_trajectory)
     return updated_trajectory

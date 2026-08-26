@@ -129,7 +129,7 @@ class TrajectoryAdapter:
         scene_objects = self.scene.get("objects", {})
         env_object_ids = set(self.scene.get("objects", {}).keys())
 
-        if not object_placements and not fixture_refs:
+        if not object_placements and not fixture_refs and not env_object_ids:
             log.warning("No sim ground truth available; falling back to heuristics")
             return
 
@@ -137,6 +137,34 @@ class TrajectoryAdapter:
         traj_objects = initial_state.get("objects", {})
         traj_fixtures = initial_state.get("fixtures", {})
         for symbol, obj_state in traj_objects.items():
+            grounding_spec = grounding_symbols.get(symbol) or {}
+            explicit_index = grounding_spec.get("index")
+            indexed_native_id = (
+                f"obj_{explicit_index}"
+                if grounding_spec.get("resolver") == "object_by_type"
+                and isinstance(explicit_index, int)
+                and explicit_index >= 0
+                else None
+            )
+            if (
+                indexed_native_id in env_object_ids
+                and indexed_native_id not in self._object_aliases.values()
+            ):
+                self._object_aliases[symbol] = indexed_native_id
+                self._resolution_log.append(
+                    ResolutionRecord(
+                        entity_type="object",
+                        requested_id=symbol,
+                        resolved_id=indexed_native_id,
+                        method="explicit_grounding_index",
+                        confidence=1.0,
+                        reason=(
+                            f"Grounding map index {explicit_index} selected native "
+                            f"numbered object {indexed_native_id!r}."
+                        ),
+                    )
+                )
+                continue
             resolved = self._implicit_container_candidate_for_symbol(
                 symbol,
                 requested_object_state=obj_state,
@@ -260,6 +288,16 @@ class TrajectoryAdapter:
                 continue
 
             # Strategy 2: match fixture_refs (task-registered only) by type
+            # Anchor-dependent symbols must reach pass 2. A generic role such
+            # as ``counter`` is otherwise liable to steal a more precise
+            # ``cabinet_parent_counter`` binding before its cabinet parent is
+            # considered.
+            has_anchor = isinstance(
+                grounding_symbols.get(fixture_symbol, {}).get(
+                    "anchor_fixture_symbol"
+                ),
+                str,
+            )
             for role, fxtr_id in fixture_refs.items():
                 if not (isinstance(role, str) and isinstance(fxtr_id, str)):
                     continue
@@ -267,7 +305,10 @@ class TrajectoryAdapter:
                 if not (
                     fixture_symbol == role
                     or fixture_symbol_token == role_token
-                    or str(fixture_type).lower() == role.lower()
+                    or (
+                        not has_anchor
+                        and str(fixture_type).lower() == role.lower()
+                    )
                 ):
                     continue
                 self._fixture_aliases[fixture_symbol] = fxtr_id
@@ -959,10 +1000,28 @@ class TrajectoryAdapter:
         resolved_initial_state: dict[str, Any],
     ) -> dict[str, Any]:
         resolved_args = deepcopy(args)
+        known_objects = set(self._object_aliases) | set(self._object_aliases.values())
+        known_objects.update(resolved_initial_state.get("objects", {}))
+        known_objects.update(self.scene.get("objects", {}))
         for arg_name, value in list(resolved_args.items()):
             if not isinstance(value, str):
                 continue
-            if arg_name in self._FIXTURE_ARG_NAMES:
+            # target_id is polymorphic in the public tool interface.  In
+            # place_on_object it is always an object; in place_in_receptacle it
+            # may be either a movable receptacle or a fixture.  Resolving every
+            # target_id as a fixture turned symbolic plates into nearby
+            # cabinets during rendering.
+            if arg_name == "target_id" and (
+                tool_name == "place_on_object"
+                or (tool_name == "place_in_receptacle" and value in known_objects)
+            ):
+                resolved_args[arg_name] = self._resolve_object_id(
+                    value,
+                    requested_object_state=(
+                        resolved_initial_state.get("objects", {}).get(value) or None
+                    ),
+                )
+            elif arg_name in self._FIXTURE_ARG_NAMES:
                 resolved_args[arg_name] = self._resolve_fixture_id(
                     value,
                     requested_fixture_state=(

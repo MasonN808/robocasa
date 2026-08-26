@@ -1,0 +1,39 @@
+{
+  "accepted_stage_counts": {
+    "flash_critic_repair": 153,
+    "flash_high_direct": 10,
+    "flash_low_direct": 637,
+    "flash_low_with_example": 18,
+    "pro_high_direct": 1
+  },
+  "expected_configurations": 824,
+  "failures": [
+    {
+      "error": "missing_raw_candidate",
+      "run_index": 1,
+      "task": "CandleCleanup"
+    },
+    {
+      "error": "missing_raw_candidate",
+      "run_index": 4,
+      "task": "CandleCleanup"
+    },
+    {
+      "error": "missing_raw_candidate",
+      "run_index": 9,
+      "task": "CandleCleanup"
+    },
+    {
+      "error": "missing_raw_candidate",
+      "run_index": 0,
+      "task": "OrganizeCondiments"
+    },
+    {
+      "error": "missing_raw_candidate",
+      "run_index": 17,
+      "task": "PlateStoreDinner"
+    }
+  ],
+  "gate_passed": false,
+  "valid_configurations": 819
+}

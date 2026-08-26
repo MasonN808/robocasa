@@ -21,6 +21,8 @@ class SampledTrajectoryCandidate:
     raw_output: Any
     probability: float | None = None
     sampling_configuration: dict[str, str] | None = None
+    sampling_seed: int | None = None
+    sampling_attempt_number: int | None = None
 
 
 class SamplingStrategy(Protocol):
@@ -64,6 +66,7 @@ class SamplingStrategy(Protocol):
         raw_response: Any,
         task_definition: TaskDefinition,
         runtime_config: RuntimeConfig,
+        variation_key: str | None = None,
     ) -> list[SampledTrajectoryCandidate]:
         """Parses one model response into saved candidate trajectories."""
 
@@ -89,11 +92,11 @@ class BaseSamplingStrategy:
     ) -> str:
         """Builds the unchanged task prompt for one base-sampled run."""
 
-        del runtime_config
         return task_definition.build_prompt(
             variation_key,
             task_instance=task_instance,
             retry_feedback=retry_feedback,
+            prompt_style=runtime_config.prompt_style,
         )
 
     def response_schema(
@@ -105,7 +108,11 @@ class BaseSamplingStrategy:
         """Uses the task's original single-trajectory response schema."""
 
         if getattr(runtime_config, "tick_format", False):
-            tick_schema = task_definition.tick_response_schema
+            tick_schema = (
+                task_definition.explicit_blocked_tick_response_schema
+                if runtime_config.prompt_style == "simplified_v3"
+                else task_definition.tick_response_schema
+            )
             if tick_schema is not None:
                 return tick_schema
         return task_definition.response_schema
@@ -127,11 +134,13 @@ class BaseSamplingStrategy:
         raw_response: Any,
         task_definition: TaskDefinition,
         runtime_config: RuntimeConfig,
+        variation_key: str | None = None,
     ) -> list[SampledTrajectoryCandidate]:
         """Parses the unchanged single-trajectory response payload."""
 
         del task_definition
         del runtime_config
+        del variation_key
         # Reuse the shared JSON extraction helper so base sampling inherits the
         # same fence-stripping behavior as the runtime validation path.
         from data_generation.task_level.generation.raw.runtime_support import (

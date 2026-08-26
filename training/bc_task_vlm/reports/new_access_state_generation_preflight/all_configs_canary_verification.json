@@ -1,0 +1,563 @@
+{
+  "gate_passed": false,
+  "expected_tasks": 53,
+  "completed_tasks": 35,
+  "expected_configurations": 824,
+  "valid_trajectories": 774,
+  "failures": [
+    {
+      "task": "ArrangeBreadBowl",
+      "error": "incomplete_run_indices",
+      "missing": [
+        1,
+        3,
+        7,
+        12
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "BowlAndCup",
+      "run_index": 5,
+      "error": "current_fsm",
+      "detail": "validation.is_valid is False, not true"
+    },
+    {
+      "task": "CandleCleanup",
+      "error": "incomplete_run_indices",
+      "missing": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        8,
+        9,
+        10
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "CheeseMixing",
+      "error": "incomplete_run_indices",
+      "missing": [
+        5
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "CondimentCollection",
+      "error": "incomplete_run_indices",
+      "missing": [
+        3,
+        11
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "GarnishPancake",
+      "run_index": 0,
+      "error": "current_fsm",
+      "detail": "validation.is_valid is False, not true"
+    },
+    {
+      "task": "GarnishPancake",
+      "run_index": 3,
+      "error": "current_fsm",
+      "detail": "validation.is_valid is False, not true"
+    },
+    {
+      "task": "GarnishPancake",
+      "run_index": 5,
+      "error": "current_fsm",
+      "detail": "validation.is_valid is False, not true"
+    },
+    {
+      "task": "HotDogSetup",
+      "run_index": 38,
+      "error": "current_fsm",
+      "detail": "validation.is_valid is False, not true"
+    },
+    {
+      "task": "LemonSeasoningFish",
+      "run_index": 6,
+      "error": "current_fsm",
+      "detail": "validation.is_valid is False, not true"
+    },
+    {
+      "task": "LineUpCondiments",
+      "error": "incomplete_run_indices",
+      "missing": [
+        11
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "OrganizeCondiments",
+      "error": "incomplete_run_indices",
+      "missing": [
+        0,
+        4
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "PlateStoreDinner",
+      "error": "incomplete_run_indices",
+      "missing": [
+        7,
+        8,
+        14,
+        18,
+        21,
+        23
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "PrepareCoffee",
+      "error": "incomplete_run_indices",
+      "missing": [
+        0,
+        4,
+        5,
+        6,
+        7
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "PrepareDrinkStation",
+      "error": "incomplete_run_indices",
+      "missing": [
+        9,
+        11,
+        24
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "PrepareSoupServing",
+      "error": "incomplete_run_indices",
+      "missing": [
+        1,
+        2,
+        3,
+        4,
+        8,
+        25,
+        27
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "PrepareSoupServing",
+      "run_index": 0,
+      "error": "current_fsm",
+      "detail": "validation.is_valid is False, not true"
+    },
+    {
+      "task": "SeasoningSteak",
+      "run_index": 8,
+      "error": "current_fsm",
+      "detail": "validation.is_valid is False, not true"
+    },
+    {
+      "task": "SetupButterPlate",
+      "error": "incomplete_run_indices",
+      "missing": [
+        11
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "SetupSodaBowl",
+      "error": "incomplete_run_indices",
+      "missing": [
+        2
+      ],
+      "unexpected": []
+    },
+    {
+      "task": "SetUpSpiceStation",
+      "error": "incomplete_run_indices",
+      "missing": [
+        11
+      ],
+      "unexpected": []
+    }
+  ],
+  "tasks": [
+    {
+      "task": "AddLemonToFish",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "AddSugarCubes",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "AlcoholServingPrep",
+      "expected_configurations": 28,
+      "observed_unique_configurations": 28,
+      "valid_trajectories": 28,
+      "complete": true
+    },
+    {
+      "task": "AlignSilverware",
+      "expected_configurations": 8,
+      "observed_unique_configurations": 8,
+      "valid_trajectories": 8,
+      "complete": true
+    },
+    {
+      "task": "ArrangeBreadBowl",
+      "expected_configurations": 16,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": false
+    },
+    {
+      "task": "ArrangeDrinkware",
+      "expected_configurations": 8,
+      "observed_unique_configurations": 8,
+      "valid_trajectories": 8,
+      "complete": true
+    },
+    {
+      "task": "ArrangeTea",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "BeverageOrganization",
+      "expected_configurations": 8,
+      "observed_unique_configurations": 8,
+      "valid_trajectories": 8,
+      "complete": true
+    },
+    {
+      "task": "BowlAndCup",
+      "expected_configurations": 8,
+      "observed_unique_configurations": 8,
+      "valid_trajectories": 7,
+      "complete": false
+    },
+    {
+      "task": "CandleCleanup",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 4,
+      "valid_trajectories": 4,
+      "complete": false
+    },
+    {
+      "task": "CheeseMixing",
+      "expected_configurations": 6,
+      "observed_unique_configurations": 5,
+      "valid_trajectories": 5,
+      "complete": false
+    },
+    {
+      "task": "ClusterItemsForClearing",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "ColorfulSalsa",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "CondimentCollection",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 10,
+      "valid_trajectories": 10,
+      "complete": false
+    },
+    {
+      "task": "CutBuffetPizza",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "DateNight",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "DeliverStraw",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "DessertAssembly",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "DisplayMeatVariety",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "DistributeChicken",
+      "expected_configurations": 6,
+      "observed_unique_configurations": 6,
+      "valid_trajectories": 6,
+      "complete": true
+    },
+    {
+      "task": "GarnishCake",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "GarnishCupcake",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "GarnishPancake",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 9,
+      "complete": false
+    },
+    {
+      "task": "GatherMarinadeIngredients",
+      "expected_configurations": 56,
+      "observed_unique_configurations": 56,
+      "valid_trajectories": 56,
+      "complete": true
+    },
+    {
+      "task": "HotDogSetup",
+      "expected_configurations": 112,
+      "observed_unique_configurations": 112,
+      "valid_trajectories": 111,
+      "complete": false
+    },
+    {
+      "task": "LemonSeasoningFish",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 11,
+      "complete": false
+    },
+    {
+      "task": "LineUpCondiments",
+      "expected_configurations": 28,
+      "observed_unique_configurations": 27,
+      "valid_trajectories": 27,
+      "complete": false
+    },
+    {
+      "task": "MatchCupAndDrink",
+      "expected_configurations": 8,
+      "observed_unique_configurations": 8,
+      "valid_trajectories": 8,
+      "complete": true
+    },
+    {
+      "task": "MeatSkewerAssembly",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "OrganizeCondiments",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 10,
+      "valid_trajectories": 10,
+      "complete": false
+    },
+    {
+      "task": "PlateStoreDinner",
+      "expected_configurations": 28,
+      "observed_unique_configurations": 22,
+      "valid_trajectories": 22,
+      "complete": false
+    },
+    {
+      "task": "PortionHotDogs",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "PortionYogurt",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "PrepareCheeseStation",
+      "expected_configurations": 56,
+      "observed_unique_configurations": 56,
+      "valid_trajectories": 56,
+      "complete": true
+    },
+    {
+      "task": "PrepareCocktailStation",
+      "expected_configurations": 28,
+      "observed_unique_configurations": 28,
+      "valid_trajectories": 28,
+      "complete": true
+    },
+    {
+      "task": "PrepareCoffee",
+      "expected_configurations": 8,
+      "observed_unique_configurations": 3,
+      "valid_trajectories": 3,
+      "complete": false
+    },
+    {
+      "task": "PrepareDrinkStation",
+      "expected_configurations": 32,
+      "observed_unique_configurations": 29,
+      "valid_trajectories": 29,
+      "complete": false
+    },
+    {
+      "task": "PrepareSausageCheese",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "PrepareSoupServing",
+      "expected_configurations": 28,
+      "observed_unique_configurations": 21,
+      "valid_trajectories": 20,
+      "complete": false
+    },
+    {
+      "task": "SeasoningSteak",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 11,
+      "complete": false
+    },
+    {
+      "task": "ServeMealJuice",
+      "expected_configurations": 8,
+      "observed_unique_configurations": 8,
+      "valid_trajectories": 8,
+      "complete": true
+    },
+    {
+      "task": "ServeSteak",
+      "expected_configurations": 6,
+      "observed_unique_configurations": 6,
+      "valid_trajectories": 6,
+      "complete": true
+    },
+    {
+      "task": "SetBowlsForSoup",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "SetupBowls",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "SetupButterPlate",
+      "expected_configurations": 32,
+      "observed_unique_configurations": 31,
+      "valid_trajectories": 31,
+      "complete": false
+    },
+    {
+      "task": "SetupSodaBowl",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 11,
+      "valid_trajectories": 11,
+      "complete": false
+    },
+    {
+      "task": "SetUpSpiceStation",
+      "expected_configurations": 28,
+      "observed_unique_configurations": 27,
+      "valid_trajectories": 27,
+      "complete": false
+    },
+    {
+      "task": "SetupWineGlasses",
+      "expected_configurations": 8,
+      "observed_unique_configurations": 8,
+      "valid_trajectories": 8,
+      "complete": true
+    },
+    {
+      "task": "SpicyMarinade",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "SweetenCoffee",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "TongBuffetSetup",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    },
+    {
+      "task": "VeggieDipPrep",
+      "expected_configurations": 2,
+      "observed_unique_configurations": 2,
+      "valid_trajectories": 2,
+      "complete": true
+    },
+    {
+      "task": "PrepareSandwichStation",
+      "expected_configurations": 12,
+      "observed_unique_configurations": 12,
+      "valid_trajectories": 12,
+      "complete": true
+    }
+  ]
+}

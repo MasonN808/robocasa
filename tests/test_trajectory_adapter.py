@@ -77,6 +77,57 @@ class FakeExecutor:
 
 
 class TestTrajectoryAdapter(unittest.TestCase):
+    def test_explicit_object_index_maps_numbered_native_objects(self):
+        executor = FakeExecutor()
+        executor.scene["objects"] = {
+            "obj_0": {"object_type": "soda"},
+            "obj_1": {"object_type": "juice"},
+            "obj_2": {"object_type": "water"},
+        }
+        adapter = TrajectoryAdapter(executor=executor)
+        adapter._apply_sim_ground_truth(
+            {
+                "objects": {
+                    "drink_0": {"object_type": "drink", "location": "counter"},
+                    "drink_1": {"object_type": "drink", "location": "counter"},
+                    "drink_2": {"object_type": "drink", "location": "counter"},
+                },
+                "fixtures": {"counter": {"fixture_type": "counter"}},
+            },
+            {
+                f"drink_{index}": {
+                    "resolver": "object_by_type", "object_type": "drink", "index": index
+                }
+                for index in range(3)
+            },
+        )
+
+        self.assertEqual(
+            adapter._object_aliases,
+            {"drink_0": "obj_0", "drink_1": "obj_1", "drink_2": "obj_2"},
+        )
+
+    def test_place_on_object_target_id_resolves_as_object(self):
+        executor = FakeExecutor()
+        executor.scene["objects"]["plate_main"] = {"object_type": "plate"}
+        adapter = TrajectoryAdapter(executor=executor)
+        adapter._object_aliases["plate1"] = "plate_main"
+        adapter._fixture_aliases["plate1"] = "cab_main"
+
+        resolved = adapter._resolve_step_args(
+            "place_on_object",
+            {"object_id": "mug", "target_id": "plate1"},
+            {
+                "objects": {
+                    "mug": {"object_type": "mug"},
+                    "plate1": {"object_type": "plate"},
+                },
+                "fixtures": {},
+            },
+        )
+
+        self.assertEqual(resolved["target_id"], "plate_main")
+
     def test_adapt_resolves_ids_and_rewrites_image_steps(self):
         executor = FakeExecutor()
         adapter = TrajectoryAdapter(executor=executor)
@@ -1291,8 +1342,8 @@ class TestSimToolExecutorLoadInitialState(unittest.TestCase):
             _set_object_location=lambda object_id, fixture_id: location_updates.append(
                 (object_id, fixture_id)
             ),
-            _move_robot_near_fixture=lambda robot_idx, fixture_id: navigate_calls.append(
-                (robot_idx, fixture_id)
+            _move_robot_near_fixture=lambda robot_idx, fixture_id: (
+                navigate_calls.append((robot_idx, fixture_id)) or True
             ),
             _rescue_robot_to_kitchen=lambda robot_idx: None,
         )

@@ -43,6 +43,13 @@ from training.bc_task_vlm.preprocessed_data import (
     stage_artifact_images_for_examples,
 )
 from training.bc_task_vlm.task_registry import resolve_task_name, supported_task_names
+from training.bc_task_vlm.prompting import (
+    DEFAULT_PARTIAL_STEP_INDEX_MODE,
+    PROMPT_CONTRACT_VERSION,
+)
+from data_generation.task_level.tasks.shared.validation_contract import (
+    VALIDATOR_CONTRACT_VERSION,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DATASET_ROOT = Path("data_generation/task_level/data/image/20260404T191734Z")
@@ -73,6 +80,8 @@ def _resolve_validation_task_list(
     train_tasks: list[str],
     validation_split_mode: str,
 ) -> list[str]:
+    if validation_split_mode == "none":
+        return []
     if raw_value is None or raw_value.strip() in {"", "same_as_train", "train"}:
         if validation_split_mode == "same-task":
             return list(train_tasks)
@@ -131,6 +140,15 @@ def parse_args() -> argparse.Namespace:
         help="Include get_image calls as active-observation targets.",
     )
     parser.add_argument(
+        "--train-reasoning",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Supervise each assistant tool call with the trajectory's "
+            "<think>{reasoning}</think> prefix."
+        ),
+    )
+    parser.add_argument(
         "--causal-single-cache",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -170,11 +188,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--validation-split-mode",
-        choices=("same-task", "task-holdout"),
+        choices=("none", "same-task", "task-holdout"),
         default="same-task",
         help=(
-            "Use held-out trajectories from training tasks for validation, or "
-            "the legacy leave-task-out validation mode."
+            "Disable validation, use held-out trajectories from training tasks, "
+            "or use the legacy leave-task-out validation mode."
         ),
     )
     parser.add_argument(
@@ -188,6 +206,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Minimum validation trajectories per task in same-task mode.",
+    )
+    parser.add_argument(
+        "--validation-split-seed",
+        type=int,
+        default=42,
+        help="Seed used to shuffle each task's trajectory IDs before holdout.",
     )
     parser.add_argument(
         "--output-dir",
@@ -612,9 +636,10 @@ def _build_examples_for_tasks(
     sft_format: str = "plain",
     predict_agent: bool = False,
     train_get_image: bool = False,
+    train_reasoning: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "local",
+    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
     partial_observation_mode: str = "consume_once",
     example_filter: Callable[[str], bool] | None = None,
 ) -> list[Any]:
@@ -642,6 +667,7 @@ def _build_examples_for_tasks(
                 sft_format=sft_format,
                 predict_agent=predict_agent,
                 train_get_image=train_get_image,
+                train_reasoning=train_reasoning,
                 causal_single_cache=causal_single_cache,
                 partial_history=partial_history,
                 partial_step_index_mode=partial_step_index_mode,
@@ -714,6 +740,7 @@ def _build_examples_for_tasks(
                         sft_format=sft_format,
                         predict_agent=predict_agent,
                         train_get_image=train_get_image,
+                        train_reasoning=train_reasoning,
                         causal_single_cache=causal_single_cache,
                         partial_history=partial_history,
                         partial_step_index_mode=partial_step_index_mode,
@@ -756,6 +783,7 @@ def main() -> None:
     sft_format = getattr(args, "sft_format", "plain")
     predict_acting_agent = getattr(args, "predict_acting_agent", False)
     train_get_image = getattr(args, "train_get_image", False)
+    train_reasoning = getattr(args, "train_reasoning", False)
     causal_single_cache = getattr(args, "causal_single_cache", False)
     partial_history = getattr(args, "partial_history", False)
     partial_step_index_mode = getattr(args, "partial_step_index_mode", "local")
@@ -878,10 +906,11 @@ def main() -> None:
             min_validation_trajectories_per_task=(
                 args.validation_min_trajectories_per_task
             ),
+            seed=args.validation_split_seed,
         )
         train_trajectory_ids_by_task = trajectory_split.train_trajectory_ids_by_task
         val_trajectory_ids_by_task = trajectory_split.validation_trajectory_ids_by_task
-    else:
+    elif args.validation_split_mode == "task-holdout":
         overlapping_tasks = sorted(set(train_tasks).intersection(val_tasks))
         if overlapping_tasks:
             overlap_text = ", ".join(overlapping_tasks)
@@ -952,6 +981,7 @@ def main() -> None:
         sft_format=sft_format,
         predict_agent=predict_acting_agent,
         train_get_image=train_get_image,
+        train_reasoning=train_reasoning,
         causal_single_cache=causal_single_cache,
         partial_history=partial_history,
         partial_step_index_mode=partial_step_index_mode,
@@ -963,6 +993,7 @@ def main() -> None:
         sft_format=sft_format,
         predict_agent=predict_acting_agent,
         train_get_image=train_get_image,
+        train_reasoning=train_reasoning,
         causal_single_cache=causal_single_cache,
         partial_history=partial_history,
         partial_step_index_mode=partial_step_index_mode,
@@ -1158,6 +1189,7 @@ def main() -> None:
         "validation_min_trajectories_per_task": (
             args.validation_min_trajectories_per_task
         ),
+        "validation_split_seed": args.validation_split_seed,
         "train_trajectory_ids_by_task": train_trajectory_ids_by_task,
         "val_trajectory_ids_by_task": val_trajectory_ids_by_task,
         "train_example_format": "centralized",
@@ -1165,11 +1197,14 @@ def main() -> None:
         "training_samples_cache_dir": str(training_samples_cache_dir),
         "example_build_workers": args.example_build_workers,
         "preprocessed_format_version": _PREPROCESSED_FORMAT_VERSION,
+        "trajectory_validator_contract_version": VALIDATOR_CONTRACT_VERSION,
+        "prompt_contract_version": PROMPT_CONTRACT_VERSION,
         "artifact_image_size": args.artifact_image_size,
         "pretokenized": args.pretokenize,
         "sft_format": sft_format,
         "predict_acting_agent": predict_acting_agent,
         "train_get_image": train_get_image,
+        "train_reasoning": train_reasoning,
         "causal_single_cache": causal_single_cache,
         "partial_history": partial_history,
         "partial_step_index_mode": partial_step_index_mode,

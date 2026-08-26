@@ -9,18 +9,42 @@ from __future__ import annotations
 
 import pytest
 
+from data_generation.task_level.tasks.shared.concurrent_fsm import (
+    atomic_handover_conflicts,
+    contention_resources,
+    simultaneous_contentions,
+)
+from data_generation.task_level.tasks.shared.state import (
+    AgentRuntimeState,
+    TaskRuntimeState,
+)
+
 from training.bc_task_vlm.live_sim_eval import (
     REJECTION_MODE_REPORT_FAILED,
-    REJECTION_MODE_SILENT_RETRY,
-    RESOURCE_LOCKS_FIXTURES,
-    RESOURCE_LOCKS_NONE,
-    RESOURCE_LOCKS_OBJECTS,
     AgentRuntime,
+    _count_rejected_partial_records,
     _handle_rejection,
+    _partial_budget_termination,
     _proposal_key,
     _tool_duration,
-    resource_claims,
 )
+
+
+INITIAL_STATE = {
+    "objects": {
+        "cheese": {"object_type": "cheese", "location": "counter"},
+        "tomato": {"object_type": "tomato", "location": "counter"},
+        "tray": {"object_type": "tray", "location": "counter"},
+    },
+    "fixtures": {
+        "counter": {"fixture_type": "counter"},
+        "fridge": {"fixture_type": "fridge"},
+        "toaster": {
+            "fixture_type": "toaster_oven",
+            "parent_fixture": "counter",
+        },
+    },
+}
 
 
 def _nav(fixture: str) -> dict:
@@ -35,48 +59,173 @@ def _comm(to: str, message: str = "hi") -> dict:
     return {"tool": "communicate", "args": {"to": to, "message": message}}
 
 
-def _conflicts(a: dict, b: dict, mode: str) -> bool:
-    return bool(resource_claims(a, mode=mode) & resource_claims(b, mode=mode))
+def _conflicts(a: dict, b: dict) -> bool:
+    return bool(simultaneous_contentions(a, b, INITIAL_STATE))
 
 
 # --- resource claims -------------------------------------------------------
 
 
 def test_disjoint_fixtures_do_not_conflict():
-    assert not _conflicts(_nav("counter"), _nav("fridge"), RESOURCE_LOCKS_FIXTURES)
+    assert not _conflicts(_nav("counter"), _nav("fridge"))
 
 
-def test_same_fixture_conflicts():
-    assert _conflicts(_nav("counter"), _nav("counter"), RESOURCE_LOCKS_FIXTURES)
+def test_same_roomy_counter_does_not_conflict():
+    assert not _conflicts(_nav("counter"), _nav("counter"))
 
 
-def test_source_id_is_a_location_not_an_object():
-    """pick_up_object(source_id=X) reaches into fixture X, so it must collide
-    with a navigate to X — the bug this test pins is source_id being treated as
-    an object name, which silently prevented that conflict."""
-
-    assert _conflicts(
-        _nav("counter"), _pick("cheese", "counter"), RESOURCE_LOCKS_FIXTURES
+def test_different_objects_at_same_roomy_counter_do_not_conflict():
+    assert not _conflicts(
+        _pick("cheese", "counter"),
+        _pick("tomato", "counter"),
     )
+
+
+def test_same_exclusive_fixture_conflicts():
+    assert _conflicts(_nav("fridge"), _nav("fridge"))
+
+
+def test_distinct_objects_from_same_stationary_movable_source_do_not_conflict():
+    assert not _conflicts(
+        _pick("cheese", "tray"),
+        _pick("tomato", "tray"),
+    )
+
+
+def test_same_object_pickup_conflicts():
+    assert _conflicts(
+        _pick("cheese", "tray"),
+        _pick("cheese", "tray"),
+    )
+
+
+def test_moving_pickup_source_while_partner_reads_it_conflicts():
+    assert _conflicts(
+        _pick("tray", "counter"),
+        _pick("tomato", "tray"),
+    )
+
+
+def test_shared_stationary_placement_target_does_not_conflict():
+    left = {
+        "tool": "place_in_receptacle",
+        "args": {"object_id": "cheese", "receptacle_id": "tray"},
+    }
+    right = {
+        "tool": "place_in_receptacle",
+        "args": {"object_id": "tomato", "receptacle_id": "tray"},
+    }
+    assert not _conflicts(left, right)
+
+
+def test_moving_a_support_while_partner_uses_it_conflicts():
+    move_tray = _pick("tray", "counter")
+    use_tray = {
+        "tool": "place_in_receptacle",
+        "args": {"object_id": "tomato", "receptacle_id": "tray"},
+    }
+
+    assert _conflicts(move_tray, use_tray)
 
 
 def test_read_only_tools_never_conflict():
     gi = {"tool": "get_image", "args": {"views": ["wrist"]}}
-    assert resource_claims(gi, mode=RESOURCE_LOCKS_FIXTURES) == frozenset()
-    assert resource_claims(_comm("agent_1"), mode=RESOURCE_LOCKS_FIXTURES) == frozenset()
-    assert not _conflicts(_comm("agent_1"), _comm("agent_0"), RESOURCE_LOCKS_FIXTURES)
+    assert contention_resources(gi, INITIAL_STATE) == frozenset()
+    assert contention_resources(_comm("agent_1"), INITIAL_STATE) == frozenset()
+    assert not _conflicts(_comm("agent_1"), _comm("agent_0"))
 
 
-def test_lock_modes_narrow_what_is_claimed():
-    nav = _nav("counter")
-    assert resource_claims(nav, mode=RESOURCE_LOCKS_FIXTURES) == {"counter"}
-    # objects mode leaves fixtures shareable, keeping give_space meaningful
-    assert resource_claims(nav, mode=RESOURCE_LOCKS_OBJECTS) == frozenset()
-    assert resource_claims(nav, mode=RESOURCE_LOCKS_NONE) == frozenset()
-    # both agents reaching for the same item always conflicts
-    assert _conflicts(
-        _pick("cheese", "fridge"), _pick("cheese", "counter"), RESOURCE_LOCKS_OBJECTS
+def _runtime_state(agent_0_location: str, agent_1_location: str) -> TaskRuntimeState:
+    return TaskRuntimeState(
+        agents={
+            "agent_0": AgentRuntimeState(
+                location=agent_0_location, held_object=None
+            ),
+            "agent_1": AgentRuntimeState(
+                location=agent_1_location, held_object=None
+            ),
+        },
+        objects={}, fixtures={}, machine_state={},
     )
+
+
+def test_same_tick_give_space_and_exclusive_entry_conflict():
+    state = _runtime_state("counter", "fridge")
+    calls = [
+        {"agent": "agent_0", **_nav("fridge")},
+        {
+            "agent": "agent_1",
+            "tool": "give_space",
+            "args": {"fixture_id": "fridge"},
+        },
+    ]
+    assert atomic_handover_conflicts(calls, state, INITIAL_STATE) == {
+        "agent_0": frozenset({"fridge"})
+    }
+    assert atomic_handover_conflicts(
+        list(reversed(calls)), state, INITIAL_STATE
+    ) == {"agent_0": frozenset({"fridge"})}
+
+
+def test_entry_after_prior_give_space_is_accepted():
+    state = _runtime_state("counter", "counter")
+    assert not atomic_handover_conflicts(
+        [{"agent": "agent_0", **_nav("fridge")}], state, INITIAL_STATE
+    )
+
+
+def test_exclusive_entry_is_rejected_while_partner_remains_there():
+    state = _runtime_state("counter", "fridge")
+    assert atomic_handover_conflicts(
+        [{"agent": "agent_0", **_nav("fridge")}], state, INITIAL_STATE
+    ) == {"agent_0": frozenset({"fridge"})}
+
+
+def test_same_tick_give_space_and_exclusive_manipulation_conflict():
+    state = _runtime_state("counter", "fridge")
+    calls = [
+        {
+            "agent": "agent_0",
+            "tool": "open_hinged_part",
+            "args": {"target_id": "fridge", "part_id": "door"},
+        },
+        {
+            "agent": "agent_1",
+            "tool": "give_space",
+            "args": {"fixture_id": "fridge"},
+        },
+    ]
+    assert atomic_handover_conflicts(calls, state, INITIAL_STATE) == {
+        "agent_0": frozenset({"fridge"})
+    }
+
+
+def test_parented_exclusive_appliance_uses_same_atomic_handover_rule():
+    state = _runtime_state("counter", "toaster")
+    calls = [
+        {"agent": "agent_0", **_nav("toaster")},
+        {
+            "agent": "agent_1",
+            "tool": "give_space",
+            "args": {"fixture_id": "toaster"},
+        },
+    ]
+    assert atomic_handover_conflicts(calls, state, INITIAL_STATE) == {
+        "agent_0": frozenset({"toaster"})
+    }
+
+
+def test_roomy_counter_give_space_does_not_create_atomic_handover_lock():
+    state = _runtime_state("fridge", "counter")
+    calls = [
+        {"agent": "agent_0", **_nav("counter")},
+        {
+            "agent": "agent_1",
+            "tool": "give_space",
+            "args": {"fixture_id": "counter"},
+        },
+    ]
+    assert not atomic_handover_conflicts(calls, state, INITIAL_STATE)
 
 
 # --- consume-once observations ---------------------------------------------
@@ -120,68 +269,61 @@ def test_communicate_reaches_recipient_but_images_do_not():
 # --- rejection handling ----------------------------------------------------
 
 
-def _reject(agent, agents, *, mode, max_silent=3, clock=0.0):
+def _reject(agent, agents, *, mode, clock=0.0):
     record: dict = {}
     _handle_rejection(
         agent=agent, agents=agents, step=_nav("counter"), reason="resource conflict",
-        clock=clock, mode=mode, max_silent=max_silent, multiplier=1.0, record=record,
+        clock=clock, mode=mode, multiplier=1.0, record=record,
     )
     return record
 
 
-def test_silent_retry_leaves_state_untouched_and_waits_for_a_world_event():
-    a0, a1 = AgentRuntime("agent_0"), AgentRuntime("agent_1")
-    a1.ready_at = 7.5  # the other agent is mid-tool
-    agents = {"agent_0": a0, "agent_1": a1}
-
-    record = _reject(a0, agents, mode=REJECTION_MODE_SILENT_RETRY)
-
-    assert record["escalated"] is False
-    assert a0.private_history == []  # no FAILED line: no distribution shift
-    # sleeps until the world can actually change, not a fixed delay — a constant
-    # sleep would reproduce the identical call under greedy decoding forever
-    assert a0.ready_at == 7.5
-
-
-def test_silent_retry_escalates_after_the_cap():
-    a0, a1 = AgentRuntime("agent_0"), AgentRuntime("agent_1")
-    agents = {"agent_0": a0, "agent_1": a1}
-
-    for _ in range(3):
-        record = _reject(a0, agents, mode=REJECTION_MODE_SILENT_RETRY, max_silent=3)
-        assert record["escalated"] is False
-    assert a0.private_history == []
-
-    record = _reject(a0, agents, mode=REJECTION_MODE_SILENT_RETRY, max_silent=3)
-    assert record["escalated"] is True
-    assert a0.private_history[-1]["error"].startswith("resource conflict")
-
-
-def test_report_failed_mode_escalates_immediately():
+def test_report_failed_mode_records_failure_immediately():
     a0, a1 = AgentRuntime("agent_0"), AgentRuntime("agent_1")
     record = _reject(a0, {"agent_0": a0, "agent_1": a1},
                      mode=REJECTION_MODE_REPORT_FAILED)
 
-    assert record["escalated"] is True
+    assert record["failure_reported"] is True
     assert "error" in a0.private_history[-1]
 
 
 def test_rejection_never_touches_the_other_agent():
     a0, a1 = AgentRuntime("agent_0"), AgentRuntime("agent_1")
     agents = {"agent_0": a0, "agent_1": a1}
-    for mode in (REJECTION_MODE_SILENT_RETRY, REJECTION_MODE_REPORT_FAILED):
-        _reject(a0, agents, mode=mode, max_silent=0)
-        assert a1.private_history == []
+    _reject(a0, agents, mode=REJECTION_MODE_REPORT_FAILED)
+    assert a1.private_history == []
 
 
-def test_silent_retry_still_advances_the_clock_when_no_event_is_pending():
-    """With nothing else in flight there is no world event to wait for, so the
-    agent must still be pushed forward rather than retrying at zero cost."""
+def test_partial_rejection_records_are_counted_across_failure_types():
+    records = [
+        {"legal": False, "executed": False},
+        {"legal": True, "sim_success": False},
+        {"legal": True, "sim_success": True},
+    ]
+    assert _count_rejected_partial_records(records) == 2
 
-    a0, a1 = AgentRuntime("agent_0"), AgentRuntime("agent_1")
-    _reject(a0, {"agent_0": a0, "agent_1": a1},
-            mode=REJECTION_MODE_SILENT_RETRY, clock=2.0)
-    assert a0.ready_at > 2.0
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"rejected_total": 8}, "rejection_budget_exhausted"),
+        ({"consecutive_rejections": 3}, "max_consecutive_rejections"),
+        ({"proposal_index": 16}, "proposal_budget_exhausted"),
+    ],
+)
+def test_partial_scheduler_budget_terminations(overrides, expected):
+    values = {
+        "rejected_total": 0,
+        "max_rejected": 8,
+        "consecutive_rejections": 0,
+        "max_consecutive_rejections": 3,
+        "proposal_index": 0,
+        "max_proposals": 16,
+        "turn_index": 0,
+        "step_budget": 8,
+    }
+    values.update(overrides)
+    assert _partial_budget_termination(**values) == expected
 
 
 # --- durations -------------------------------------------------------------

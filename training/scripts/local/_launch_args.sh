@@ -46,6 +46,7 @@ launch_args=(
   --grad-accum "${grad_accum}"
   --train-sampling-strategy "${TRAIN_SAMPLING_STRATEGY:-random}"
   --learning-rate "${LEARNING_RATE:-2e-4}"
+  --weight-decay "${WEIGHT_DECAY:-0.0}"
   --max-length "${MAX_LENGTH:-8192}"
   --max-images-per-sample "${MAX_IMAGES_PER_SAMPLE:-4}"
   --num-workers "${NUM_WORKERS:-8}"
@@ -60,6 +61,10 @@ launch_args=(
   --wandb-mode "${WANDB_MODE:-offline}"
   --wandb-run-name "${WANDB_RUN_NAME:-qwen3vl-8b-local-sft}"
 )
+
+if [[ -n "${PREPROCESSED_DATA_DIR:-}" ]]; then
+  launch_args+=(--preprocessed-data-dir "${PREPROCESSED_DATA_DIR}")
+fi
 
 # Optional: a smaller eval micro-batch than the train micro-batch, to keep the
 # full-vocab eval loss within VRAM without slowing training. Unset by default

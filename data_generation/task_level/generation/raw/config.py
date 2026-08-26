@@ -67,7 +67,17 @@ class RuntimeConfig:
     # Generate rows of simultaneous actions instead of a flat step list, and
     # let the model place its own waits. See tick_format.py.
     tick_format: bool = False
+    # Selects the generation prompt without removing the legacy baseline.
+    prompt_style: str = "legacy"
+    # Selects how validation failures are presented on the next attempt.
+    retry_feedback_style: str = "targeted"
+    # Controls whether and how a per-run physical-action ownership split is chosen.
+    partition_policy: str = "weighted"
     random_start_location: bool = True
+    # Deterministically sample open/closed states for eligible cabinets,
+    # refrigerators, and drawers. Eligibility is inferred from symbolic state
+    # plus an exact opening tool; appliance/object state is never randomized.
+    random_access_state: bool = False
     parallelize_tasks: bool = False
     sampling: str = "base"
     verbalized_k: int = 1
@@ -83,6 +93,9 @@ class RuntimeConfig:
     batch_processing: bool = False
     batch_gcs_prefix: str | None = None
     run_indices: tuple[int, ...] = ()
+    # Per-run count of attempts already persisted by an earlier invocation.
+    # This keeps retry seeds and audit records cumulative across --resume.
+    attempt_number_offsets: tuple[tuple[int, int], ...] = ()
     composite_tasks: tuple[str, ...] = ()
     task_cancellation_event: threading.Event | None = None
     generation_timeout_sec: int | None = DEFAULT_GENERATION_TIMEOUT_SEC
@@ -132,6 +145,7 @@ class RuntimeConfig:
         cost_output_path: Path | None = None,
         resume_path: Path | None = None,
         run_indices: tuple[int, ...] | None = None,
+        attempt_number_offsets: tuple[tuple[int, int], ...] | None = None,
     ) -> RuntimeConfig:
         """Builds one task-scoped runtime config for the shared single-task runtime."""
 
@@ -143,6 +157,11 @@ class RuntimeConfig:
             cost_output_path=cost_output_path,
             resume_path=resume_path,
             run_indices=self.run_indices if run_indices is None else run_indices,
+            attempt_number_offsets=(
+                self.attempt_number_offsets
+                if attempt_number_offsets is None
+                else attempt_number_offsets
+            ),
         )
 
     def with_task_cancellation_event(
@@ -155,6 +174,11 @@ class RuntimeConfig:
             self,
             task_cancellation_event=task_cancellation_event,
         )
+
+    def attempt_number_offset_for_run(self, run_index: int) -> int:
+        """Returns the number of prior persisted attempts for one run."""
+
+        return dict(self.attempt_number_offsets).get(run_index, 0)
 
 
 def _validate_runtime_config(runtime_config: RuntimeConfig) -> None:
@@ -173,6 +197,21 @@ def _validate_runtime_config(runtime_config: RuntimeConfig) -> None:
         )
     if runtime_config.num_runs <= 0:
         raise TrajectoryGenerationError("--num-runs must be greater than 0.")
+    if runtime_config.prompt_style not in {
+        "legacy", "simplified", "simplified_v2", "simplified_v3"
+    }:
+        raise TrajectoryGenerationError(
+            "--prompt-style must be legacy, simplified, simplified_v2, or "
+            "simplified_v3."
+        )
+    if runtime_config.retry_feedback_style not in {"targeted", "observational"}:
+        raise TrajectoryGenerationError(
+            "--retry-feedback-style must be targeted or observational."
+        )
+    if runtime_config.partition_policy not in {"weighted", "balanced_local", "none"}:
+        raise TrajectoryGenerationError(
+            "--partition-policy must be weighted, balanced_local, or none."
+        )
     if runtime_config.run_indices:
         if any(
             run_index < 0 or run_index >= runtime_config.num_runs

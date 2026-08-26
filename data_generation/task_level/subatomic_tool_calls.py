@@ -111,7 +111,7 @@ SUBATOMIC_TOOL_SPECS: tuple[SubatomicToolSpec, ...] = (
     ),
     _build_tool_spec(
         "place_next_to",
-        "Place an object adjacent to a reference object or nearby fixture on the same support surface. Use reference_object_id only for movable objects and reference_fixture_id only for fixtures.",
+        "Place an object on the surrounding fixture surface, beside a reference object or fixture. This tool never places an object on or inside a movable object. To place something on a plate, tray, cutting board, or other movable support, use place_on_object. To place something inside a bowl or other container, use place_in_receptacle.",
         "object_id",
         "reference_object_id",
     ),

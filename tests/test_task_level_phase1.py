@@ -11,12 +11,52 @@ from unittest import mock
 from data_generation.task_level.pipeline.models import TaskAnalysis
 from data_generation.task_level.pipeline.phase1 import (
     _ThreadLocalGenerationClient,
+    _merge_either_or_count_goals,
     _postprocess_spec_payload,
     SpecGenerationResult,
     generate_specs,
     run_phase1,
 )
 from data_generation.task_level.runtime.client import BaseGenerationClient
+
+
+class EitherOrCountGoalTests(unittest.TestCase):
+    def test_merges_exact_count_across_alternative_locations(self):
+        goals = [
+            {
+                "kind": "object_count_at_location",
+                "object_ids": ["cherry1", "cherry2"],
+                "location": "cake",
+                "count": 1,
+            }
+        ]
+
+        result = _merge_either_or_count_goals(
+            initial_state={
+                "objects": {
+                    "cherry1": {"location": "fruit_plate"},
+                    "cherry2": {"location": "fruit_plate"},
+                    "cake": {"location": "cake_plate"},
+                    "cake_plate": {"location": "counter"},
+                }
+            },
+            goal_conditions=goals,
+            extra_execution_rules=(
+                "Place one cherry on either cake or cake_plate.",
+            ),
+        )
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "kind": "object_count_at_locations",
+                    "object_ids": ["cherry1", "cherry2"],
+                    "locations": ["cake", "cake_plate"],
+                    "count": 1,
+                }
+            ],
+        )
 
 
 class _RecordingClient(BaseGenerationClient):

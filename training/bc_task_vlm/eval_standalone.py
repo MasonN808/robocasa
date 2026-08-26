@@ -547,6 +547,12 @@ def build_vertex_function_declarations(
                 if target.get("type") == "ARRAY":
                     target = target["items"]
                 target["enum"] = list(tool_spec[allowed_values_key])
+            declared_values = tool_spec.get("allowed_arg_values", {})
+            if isinstance(declared_values, dict) and declared_values.get(field_name):
+                target = properties[field_name]
+                if target.get("type") == "ARRAY":
+                    target = target["items"]
+                target["enum"] = list(declared_values[field_name])
         declarations.append(
             {
                 "name": tool_name,
@@ -689,6 +695,11 @@ def run_hf_backend(
         device_map="auto",
     )
     if args.adapter_path is not None:
+        from training.bc_task_vlm.peft_compat import (
+            ensure_peft_tensor_parallel_import_compatibility,
+        )
+
+        ensure_peft_tensor_parallel_import_compatibility()
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, str(args.adapter_path))

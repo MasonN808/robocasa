@@ -6,7 +6,9 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from data_generation.task_level.subatomic_tool_specs import build_allowed_tool_specs
+from data_generation.task_level.subatomic_tool_specs import (
+    build_allowed_tool_specs,
+)
 from data_generation.task_level.tasks.shared.errors import (
     TaskPreconditionSemanticValidationError,
 )
@@ -86,6 +88,16 @@ class SpecDrivenTaskValidator(FiniteStateTaskValidator):
         allowed_tool_specs_override: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._task_spec = task_spec
+        self.coordinator_id = (
+            task_instance.coordinator_id
+            if task_instance is not None
+            else None
+        )
+        self.work_partition = (
+            deepcopy(task_instance.work_partition)
+            if task_instance is not None and task_instance.work_partition
+            else None
+        )
         effective_initial_state = (
             task_instance.initial_state
             if task_instance is not None
@@ -200,7 +212,12 @@ class SpecDrivenTaskValidator(FiniteStateTaskValidator):
                 ).get("state")
                 if actual_state != condition["required_state"]:
                     raise TaskPreconditionSemanticValidationError(
-                        condition["message"],
+                        condition.get("message")
+                        or (
+                            f"{condition['fixture_id']}.{condition['part_id']} must be "
+                            f"{condition['required_state']} before {step['tool']} from "
+                            f"{condition['source_id']}."
+                        ),
                         details={
                             "tool": step["tool"],
                             "fixture_id": condition["fixture_id"],
@@ -356,6 +373,25 @@ class SpecDrivenTaskValidator(FiniteStateTaskValidator):
                 )
                 if actual_count != condition.get("count"):
                     return False
+            elif condition_kind == "object_count_at_locations":
+                object_ids = [
+                    object_id
+                    for object_id in condition.get("object_ids", ())
+                    if isinstance(object_id, str)
+                ]
+                locations = {
+                    location
+                    for location in condition.get("locations", ())
+                    if isinstance(location, str)
+                }
+                actual_count = sum(
+                    1
+                    for object_id in object_ids
+                    if runtime_state.objects.get(object_id, {}).get("location")
+                    in locations
+                )
+                if actual_count != condition.get("count"):
+                    return False
             elif condition_kind == "object_at_location_one_of":
                 loc = runtime_state.objects[condition["object_id"]]["location"]
                 if loc not in condition["locations"]:
@@ -415,6 +451,78 @@ class SpecDrivenTaskValidator(FiniteStateTaskValidator):
 
         return True
 
+    def goal_state_diagnostics(
+        self, runtime_state: TaskRuntimeState
+    ) -> dict[str, Any]:
+        """Report unmet declarative goals and observed state, without a repair plan."""
+
+        unmet: list[dict[str, Any]] = []
+        for condition in self._task_spec.goal_conditions:
+            kind = condition["kind"]
+            actual: Any
+            satisfied = False
+            if kind == "object_at_location":
+                actual = runtime_state.objects.get(condition["object_id"], {}).get(
+                    "location"
+                )
+                satisfied = actual == condition["location"]
+            elif kind == "object_count_at_location":
+                actual = sum(
+                    1
+                    for object_id in condition.get("object_ids", ())
+                    if runtime_state.objects.get(object_id, {}).get("location")
+                    == condition.get("location")
+                )
+                satisfied = actual == condition.get("count")
+            elif kind == "object_count_at_locations":
+                locations = {
+                    location
+                    for location in condition.get("locations", ())
+                    if isinstance(location, str)
+                }
+                actual = sum(
+                    1
+                    for object_id in condition.get("object_ids", ())
+                    if runtime_state.objects.get(object_id, {}).get("location")
+                    in locations
+                )
+                satisfied = actual == condition.get("count")
+            elif kind == "object_at_location_one_of":
+                actual = runtime_state.objects.get(condition["object_id"], {}).get(
+                    "location"
+                )
+                satisfied = actual in condition["locations"]
+            elif kind in {"machine_flag_true", "machine_flag_equals"}:
+                actual = _resolve_machine_path(
+                    runtime_state.machine_state, tuple(condition["machine_path"])
+                )
+                expected = True if kind == "machine_flag_true" else condition.get("value")
+                satisfied = actual == expected
+            elif kind == "fixture_part_state":
+                actual = (
+                    runtime_state.fixtures.get(condition["fixture_id"], {})
+                    .get("parts", {})
+                    .get(condition["part_id"], {})
+                    .get("state")
+                )
+                satisfied = actual == condition.get("state")
+            elif kind == "fixture_control_state":
+                actual = (
+                    runtime_state.fixtures.get(condition["fixture_id"], {})
+                    .get("controls", {})
+                    .get(condition["control_id"], {})
+                    .get("state")
+                )
+                satisfied = actual == condition.get("state")
+            else:
+                actual = "unsupported goal kind"
+            if not satisfied:
+                unmet.append({"condition": deepcopy(condition), "actual": actual})
+
+        details = super().goal_state_diagnostics(runtime_state)
+        details["unmet_goal_conditions"] = unmet
+        return details
+
 
 # Tools the pipeline fills in after generation; the model never emits them.
 DERIVED_TOOL_NAMES = frozenset({"wait_for_signal"})
@@ -457,19 +565,48 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
         }
 
     allowed_tool_specs = build_allowed_tool_specs(tuple(tool_names), overrides=overrides)
-    # Waits are derived from the finished plan, not written by the model, so it
-    # is never shown the tool. Asking for them cost tokens and drove the FSM's
-    # repair loop in circles -- the model adds the wait it is told about, that
-    # wait is then unreleased, and the next attempt removes it again. The
-    # validator still accepts them, because it sees the derived trajectory.
-    model_tool_specs = {
-        name: spec
-        for name, spec in allowed_tool_specs.items()
-        if name not in DERIVED_TOOL_NAMES
-    }
+    from data_generation.task_level.tasks.shared.workspace_semantics import (
+        canonical_agent_workspace,
+    )
+
+    for tool_name in ("navigate_to_fixture", "give_space"):
+        tool_spec = allowed_tool_specs.get(tool_name)
+        if not isinstance(tool_spec, dict):
+            continue
+        allowed_ids = tool_spec.get("allowed_fixture_ids")
+        if not isinstance(allowed_ids, list):
+            continue
+        tool_spec["allowed_fixture_ids"] = list(dict.fromkeys(
+            [*allowed_ids]
+            + [
+                canonical_agent_workspace(task_spec.initial_state, fixture_id)
+                or fixture_id
+                for fixture_id in allowed_ids
+            ]
+        ))
+    # Demonstration generation is deliberately task-specific. The eventual
+    # SFT/eval policy still receives the global tool interface, but its label
+    # generator should not be invited to call tools that this task rejects.
+    # build_allowed_tool_specs also prunes unusable legacy placement aliases.
+    generation_tool_specs = deepcopy(allowed_tool_specs)
+    # New demonstrations use the canonical parent workspace for cabinet
+    # navigation/yielding. The validator retains the original cabinet IDs as
+    # legacy aliases so old trajectories and model outputs remain executable.
+    for tool_name in ("navigate_to_fixture", "give_space"):
+        tool_spec = generation_tool_specs.get(tool_name)
+        if not isinstance(tool_spec, dict):
+            continue
+        allowed_ids = tool_spec.get("allowed_fixture_ids")
+        if not isinstance(allowed_ids, list):
+            continue
+        tool_spec["allowed_fixture_ids"] = list(dict.fromkeys(
+            canonical_agent_workspace(task_spec.initial_state, fixture_id)
+            or fixture_id
+            for fixture_id in allowed_ids
+        ))
     response_schema = build_task_response_schema(
         agent_ids=task_spec.agent_ids,
-        allowed_tool_specs=model_tool_specs,
+        allowed_tool_specs=generation_tool_specs,
     )
     # In tick form the model can see that an agent is blocked, so it is given
     # wait_for_signal back and asked to place its own coordination. That is the
@@ -477,16 +614,21 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
     # all come from the model not being able to see execution order.
     tick_response_schema = build_tick_response_schema(
         agent_ids=task_spec.agent_ids,
-        allowed_tool_specs=allowed_tool_specs,
+        allowed_tool_specs=generation_tool_specs,
+    )
+    explicit_blocked_tick_response_schema = build_tick_response_schema(
+        agent_ids=task_spec.agent_ids,
+        allowed_tool_specs=generation_tool_specs,
+        explicit_blocked_markers=True,
     )
     non_communicate_tool_names = tuple(
-        tool_name for tool_name in model_tool_specs if tool_name != "communicate"
+        tool_name for tool_name in generation_tool_specs if tool_name != "communicate"
     )
     build_prompt = make_task_prompt_builder(
         composite_task=task_spec.composite_task,
         task_goal=task_spec.task_goal,
         initial_state=task_spec.initial_state,
-        allowed_tool_specs=model_tool_specs,
+        allowed_tool_specs=generation_tool_specs,
         non_communicate_tool_names=non_communicate_tool_names,
         task_preconditions=task_spec.task_preconditions,
         task_effects=task_spec.task_effects,
@@ -499,12 +641,17 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
     )
 
     def _build_task_instance(run_index: int, runtime_config: Any | None = None) -> TaskInstance:
+        # Coordinator is part of the model-visible initial configuration. Use
+        # it as the fastest-cycling dimension, then advance the physical
+        # start/access configuration. This prevents run-index parity from
+        # correlating one coordinator with one open/closed access state.
+        physical_configuration_index = run_index // len(task_spec.agent_ids)
         instance = build_randomized_fixture_task_instance(
             composite_task=task_spec.composite_task,
             agent_ids=task_spec.agent_ids,
             initial_state=task_spec.initial_state,
             allowed_tool_specs=allowed_tool_specs,
-            run_index=run_index,
+            run_index=physical_configuration_index,
             runtime_config=runtime_config,
         )
         # The partition rides on the instance so a retry, which reuses the
@@ -524,14 +671,28 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
                 )
             chosen = dict(chosen)
         else:
-            chosen = select_partition(partitions, run_index)
+            chosen = select_partition(
+                partitions,
+                run_index,
+                policy=getattr(runtime_config, "partition_policy", "weighted"),
+                initial_state=instance.initial_state,
+                work_sequence=(task_spec.work_partitions or {}).get("work_sequence") or (),
+            )
         rules = instance.extra_execution_rules or task_spec.extra_execution_rules
         if getattr(runtime_config, "tick_format", False):
             rules = tuple(rules) + TICK_FORMAT_RULES
         return replace(
             instance,
             work_partition=chosen,
+            coordinator_id=task_spec.agent_ids[run_index % len(task_spec.agent_ids)],
             extra_execution_rules=tuple(rules),
+            # Tick generation lets the model author waits, so its prompt must
+            # display the same full tool set as the tick response schema.
+            allowed_tool_specs=(
+                deepcopy(allowed_tool_specs)
+                if getattr(runtime_config, "tick_format", False)
+                else instance.allowed_tool_specs
+            ),
         )
 
     def _validator_factory(task_instance: TaskInstance | None) -> SpecDrivenTaskValidator:
@@ -545,6 +706,7 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
         composite_task=task_spec.composite_task,
         response_schema=response_schema,
         tick_response_schema=tick_response_schema,
+        explicit_blocked_tick_response_schema=explicit_blocked_tick_response_schema,
         preflight_token_estimate=PreflightTokenEstimate(
             prompt_tokens=task_spec.preflight_token_estimate.prompt_tokens,
             output_tokens=task_spec.preflight_token_estimate.output_tokens,

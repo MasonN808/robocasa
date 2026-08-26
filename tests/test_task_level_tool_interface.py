@@ -7,19 +7,78 @@ from data_generation.task_level.grounding_specs import (
 )
 from data_generation.task_level.subatomic_tool_specs import (
     TASK_LEVEL_ALLOWED_TOOL_SPECS,
+    build_allowed_tool_specs,
+    build_model_tool_specs,
+    canonicalize_model_tool_args,
 )
+from training.bc_task_vlm.tool_calling import build_tool_schemas
 from data_generation.task_level.tasks.shared.schema import build_task_response_schema
 from robocasa.utils.trajectory_adapter import TrajectoryAdapter
 
 
 class TaskLevelToolInterfaceTests(unittest.TestCase):
+    def test_legacy_placement_target_is_canonicalized_for_model_io(self):
+        self.assertEqual(
+            {"object_id": "cup", "support_id": "counter"},
+            canonicalize_model_tool_args(
+                "place_on_surface",
+                {"object_id": "cup", "target_id": "counter"},
+            ),
+        )
+        self.assertEqual(
+            {"target_id": "machine", "control_id": "start"},
+            canonicalize_model_tool_args(
+                "press_button",
+                {"target_id": "machine", "control_id": "start"},
+            ),
+        )
+
+    def test_model_interface_is_global_and_has_no_task_id_allowlists(self):
+        global_specs = build_model_tool_specs(include_get_image=True)
+        local_specs = build_allowed_tool_specs(
+            ("navigate_to_fixture",),
+            overrides={
+                "navigate_to_fixture": {"allowed_fixture_ids": ["counter"]}
+            },
+        )
+
+        self.assertIn("press_button", global_specs)
+        self.assertIn("get_image", global_specs)
+        self.assertNotIn("allowed_fixture_ids", global_specs["navigate_to_fixture"])
+        self.assertEqual(["counter"], local_specs["navigate_to_fixture"]["allowed_fixture_ids"])
+
+    def test_model_schema_describes_every_declared_argument(self):
+        specs = build_model_tool_specs(include_get_image=True)
+        schemas = build_tool_schemas(
+            agent_ids=("agent_0", "agent_1"),
+            allowed_tool_specs=specs,
+        )
+
+        for schema in schemas:
+            properties = schema["function"]["parameters"]["properties"]
+            for arg_name, arg_schema in properties.items():
+                self.assertTrue(
+                    arg_schema.get("description"),
+                    f"{schema['function']['name']}.{arg_name} lacks a description",
+                )
+
+        open_schema = next(
+            schema for schema in schemas
+            if schema["function"]["name"] == "open_hinged_part"
+        )
+        part_description = open_schema["function"]["parameters"]["properties"][
+            "part_id"
+        ]["description"]
+        self.assertIn("initial_state.fixtures[target_id].parts", part_description)
+        self.assertIn("copy it verbatim", part_description)
+
     def test_place_on_surface_spec_includes_optional_site_and_relative_args(self):
         spec = TASK_LEVEL_ALLOWED_TOOL_SPECS["place_on_surface"]
 
-        self.assertEqual(["object_id"], spec["tool_args"])
-        self.assertEqual([["target_id", "support_id"]], spec["tool_arg_any_of"])
+        self.assertEqual(["object_id", "support_id"], spec["tool_args"])
+        self.assertNotIn("tool_arg_any_of", spec)
         self.assertEqual(
-            ["target_id", "support_id", "target_site_id", "relative_position"],
+            ["target_site_id", "relative_position"],
             spec["optional_tool_args"],
         )
 
@@ -28,14 +87,11 @@ class TaskLevelToolInterfaceTests(unittest.TestCase):
 
         self.assertEqual(["object_id"], spec["tool_args"])
         self.assertEqual(
-            [["reference_id", "reference_object_id", "reference_fixture_id"]],
+            [["reference_object_id", "reference_fixture_id"]],
             spec["tool_arg_any_of"],
         )
         self.assertEqual(
             [
-                "reference_id",
-                "reference_object_id",
-                "reference_fixture_id",
                 "target_site_id",
                 "relative_position",
             ],
@@ -51,9 +107,15 @@ class TaskLevelToolInterfaceTests(unittest.TestCase):
             min_steps=1,
         )
 
-        args_properties = schema["properties"]["steps"]["items"]["properties"]["args"][
-            "properties"
-        ]
+        step_items = schema["properties"]["steps"]["items"]
+        step_branch = step_items.get("anyOf", [step_items])[0]
+        args_schema = step_branch["properties"]["args"]
+        branches = args_schema.get("anyOf", [args_schema])
+        args_properties = {
+            name: value
+            for branch in branches
+            for name, value in branch["properties"].items()
+        }
         self.assertIn("target_site_id", args_properties)
         self.assertIn("relative_position", args_properties)
 

@@ -523,6 +523,22 @@ def _resolve_symbolic_fixture_metadata(
                     resolved_concrete_ids[symbol_id] = candidates[0]
                     return candidates[0]
 
+        # An anchor relationship is more specific than a fixture type. Resolve
+        # it before generic type / role fallbacks; otherwise a symbolic parent
+        # such as ``cabinet_parent_counter`` can bind to an arbitrary counter
+        # merely because fixture_refs also contains a role named ``counter``.
+        if isinstance(symbol_grounding, dict):
+            anchor_symbol = symbol_grounding.get("anchor_fixture_symbol")
+            if isinstance(anchor_symbol, str):
+                anchor_concrete_id = _resolve_one(anchor_symbol)
+                if isinstance(anchor_concrete_id, str):
+                    parent_fixture = (
+                        fixture_details.get(anchor_concrete_id, {}).get("parent_fixture")
+                    )
+                    if isinstance(parent_fixture, str):
+                        resolved_concrete_ids[symbol_id] = parent_fixture
+                        return parent_fixture
+
         if fixture_type:
             candidates = [
                 fixture_id
@@ -544,18 +560,6 @@ def _resolve_symbolic_fixture_metadata(
             if role == fixture_type or (fixture_type and (fixture_type in role or role in fixture_type)):
                 resolved_concrete_ids[symbol_id] = concrete_fixture
                 return concrete_fixture
-
-        if isinstance(symbol_grounding, dict):
-            anchor_symbol = symbol_grounding.get("anchor_fixture_symbol")
-            if isinstance(anchor_symbol, str):
-                anchor_concrete_id = _resolve_one(anchor_symbol)
-                if isinstance(anchor_concrete_id, str):
-                    parent_fixture = (
-                        fixture_details.get(anchor_concrete_id, {}).get("parent_fixture")
-                    )
-                    if isinstance(parent_fixture, str):
-                        resolved_concrete_ids[symbol_id] = parent_fixture
-                        return parent_fixture
         return None
 
     resolved: dict[str, FixtureSimulationMetadata] = {}

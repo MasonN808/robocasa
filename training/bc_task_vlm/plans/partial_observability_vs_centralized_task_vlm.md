@@ -308,7 +308,7 @@ WorldState:
     sim_time
     event_index
     active_tools
-    resource_locks
+    active_resource_uses
     render_memo
 ```
 

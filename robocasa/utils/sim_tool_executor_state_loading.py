@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from data_generation.task_level.tasks.shared.constants import EXCLUSIVE_FIXTURE_TYPES
+
 _FRONT_BIASED_INTERIOR_FIXTURE_TYPES = frozenset(
     {
         "cabinet",
@@ -511,25 +513,65 @@ class SimToolExecutorStateLoadingMixin:
             self._settle_scene(steps=max(_PLACEMENT_SETTLE_STEPS, 4))
 
         if getattr(self, "_robot_spawn", "trajectory") == "trajectory":
+            placement_requests = []
             for agent_id, agent_state in agents.items():
                 location = agent_state.get("location")
                 if isinstance(location, str) and location in self.runner._fixtures:
                     robot_idx = self._parse_agent_idx(agent_id)
-                    require_front = self._surface_fixture_prefers_front_approach(
-                        location
-                    )
-                    try:
-                        self.runner._move_robot_near_fixture(
+                    location = self._canonical_navigation_fixture_id(location)
+                    fixture_state = fixtures.get(location) or {}
+                    fixture_type = str(
+                        fixture_state.get("fixture_type") or ""
+                    ).lower()
+                    placement_requests.append(
+                        (
+                            0 if fixture_type in EXCLUSIVE_FIXTURE_TYPES else 1,
                             robot_idx,
+                            agent_id,
                             location,
-                            require_front=require_front,
                         )
-                    except TypeError:
-                        self.runner._move_robot_near_fixture(robot_idx, location)
-                    self._normalize_robot_facing_for_stove_workstation(
+                    )
+
+            # Default simulator poses are not part of the requested symbolic
+            # initial state. Move every robot away before assigning positions,
+            # otherwise a stale pose can falsely reserve the first target.
+            set_pose = getattr(self.runner, "_set_robot_pose", None)
+            if callable(set_pose):
+                for robot_idx in range(self.runner._num_robots):
+                    offset = float(robot_idx * 10)
+                    set_pose(
+                        robot_idx,
+                        np.asarray([100.0 + offset, 100.0 + offset]),
+                        0.0,
+                    )
+                self.env.sim.forward()
+
+            # Constrained/exclusive targets claim their usable pose first;
+            # shared workspaces then choose among the remaining valid poses.
+            for _priority, robot_idx, agent_id, location in sorted(
+                placement_requests,
+                key=lambda request: (request[0], request[1]),
+            ):
+                require_front = self._fixture_requires_front_approach(
+                    location
+                ) or self._surface_fixture_prefers_front_approach(location)
+                try:
+                    placed = self.runner._move_robot_near_fixture(
                         robot_idx,
                         location,
+                        require_front=require_front,
                     )
+                except TypeError:
+                    placed = self.runner._move_robot_near_fixture(robot_idx, location)
+                if not placed:
+                    raise RuntimeError(
+                        f"Could not place {agent_id} at initial fixture {location!r}; "
+                        "no valid unreserved working pose exists."
+                    )
+                self._normalize_robot_facing_for_stove_workstation(
+                    robot_idx,
+                    location,
+                )
             for i in range(self.runner._num_robots):
                 self.runner._rescue_robot_to_kitchen(i)
 

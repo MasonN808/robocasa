@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from data_generation.task_level.tasks.shared.schema import build_task_response_schema
+from data_generation.task_level.subatomic_tool_specs import KNOWN_OBSERVATION_VIEWS
 
 # Synthetic terminal tool for agent-prediction (v2) training: trajectories in
 # the data simply end with no signal, so a task_complete step is synthesized
@@ -21,20 +22,19 @@ TASK_COMPLETE_TOOL_SPEC: dict[str, Any] = {
 }
 
 GET_IMAGE_TOOL_NAME = "get_image"
-KNOWN_OBSERVATION_VIEWS = (
-    "top_view",
-    "room_view",
-    "map",
-    "wrist",
-    "agentview_center",
-    "agentview_left",
-    "agentview_right",
-)
 GET_IMAGE_TOOL_SPEC: dict[str, Any] = {
     "tool_args": ["views"],
     "tool_arg_types": {"views": "STRING_ARRAY"},
     "allowed_views": list(KNOWN_OBSERVATION_VIEWS),
-    "description": "Request one or more camera views before choosing the next action.",
+    "tool_arg_descriptions": {
+        "views": (
+            "A non-empty list containing only these exact camera-view names: "
+            + ", ".join(KNOWN_OBSERVATION_VIEWS)
+            + ". Copy the names exactly; do not invent directional, object, "
+            "fixture, or scene-specific view names."
+        )
+    },
+    "description": "Request one or more canonical camera views before choosing the next action.",
 }
 
 
@@ -311,8 +311,18 @@ def validate_single_step_payload(
             if allowed_ids_key and allowed_ids_key in tool_spec
             else None
         )
-        if constraint_key is not None:
-            allowed_values = set(tool_spec[constraint_key])
+        declared_values = tool_spec.get("allowed_arg_values", {})
+        explicit_values = (
+            declared_values.get(arg_name)
+            if isinstance(declared_values, dict)
+            else None
+        )
+        if constraint_key is not None or explicit_values:
+            allowed_values = set(
+                tool_spec[constraint_key]
+                if constraint_key is not None
+                else explicit_values
+            )
             if isinstance(normalized_value, str):
                 if normalized_value not in allowed_values:
                     allowed_text = ", ".join(sorted(allowed_values))

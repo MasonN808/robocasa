@@ -91,6 +91,22 @@ class TaskSpecTests(unittest.TestCase):
         self.assertTrue(spec.grounding["symbols"])
         self.assertTrue(spec.example_trajectory["steps"])
 
+    def test_fixture_relative_placement_anchors_are_derived_navigation_targets(self):
+        sandwich = load_task_spec("PrepareSandwichStation")
+        sandwich_targets = sandwich.allowed_tool_specs["navigate_to_fixture"][
+            "allowed_fixture_ids"
+        ]
+        self.assertIn("staging_surface", sandwich_targets)
+        self.assertIn("toaster_oven", sandwich_targets)
+
+        bowls = load_task_spec("SetupBowls")
+        bowl_targets = bowls.allowed_tool_specs["navigate_to_fixture"][
+            "allowed_fixture_ids"
+        ]
+        self.assertIn("dining_counter", bowl_targets)
+        self.assertIn("stool1", bowl_targets)
+        self.assertIn("stool2", bowl_targets)
+
     def test_phase1_few_shot_examples_load(self):
         examples = load_few_shot_examples()
 

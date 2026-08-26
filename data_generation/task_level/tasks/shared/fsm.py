@@ -48,6 +48,10 @@ from .errors import (
 )
 from .instances import build_canonical_agents
 from .prompting import _format_agent_id_list
+from .workspace_semantics import (
+    accepted_agent_workspaces,
+    canonical_agent_workspace,
+)
 from .schema import (
     _allowed_ids_key_for_arg_name,
     _normalize_mapping,
@@ -158,6 +162,7 @@ class FiniteStateTaskValidator:
         goal_satisfied_at_step: int | None = None
 
         for expected_index, step in enumerate(steps):
+            state_before_step = self._build_final_state(runtime_state)
             try:
                 if step["step"] != expected_index:
                     raise UnexpectedStepIndexSemanticValidationError(
@@ -239,7 +244,14 @@ class FiniteStateTaskValidator:
                 if goal_state_satisfied and not was_satisfied:
                     goal_satisfied_at_step = step["step"]
             except TrajectoryValidationError as exc:
-                raise self._validation_error_with_step(exc, step["step"]) from exc
+                details = dict(exc.details)
+                details.setdefault("state_before_step", state_before_step)
+                contextual_exc = type(exc)(
+                    str(exc), step=exc.step, details=details
+                )
+                raise self._validation_error_with_step(
+                    contextual_exc, step["step"]
+                ) from exc
 
         if not first_action_seen:
             raise MissingTaskActionSemanticValidationError(
@@ -247,7 +259,8 @@ class FiniteStateTaskValidator:
             )
         if not goal_state_satisfied:
             raise UnsatisfiedGoalSemanticValidationError(
-                f"Trajectory never satisfied the {self.composite_task} goal state."
+                f"Trajectory never satisfied the {self.composite_task} goal state.",
+                details=self.goal_state_diagnostics(runtime_state),
             )
 
         signature = self.trajectory_signature({"agents": agents, "steps": steps})
@@ -310,6 +323,13 @@ class FiniteStateTaskValidator:
         final_state["fixtures"] = deepcopy(runtime_state.fixtures)
         final_state["machine_state"] = deepcopy(runtime_state.machine_state)
         return final_state
+
+    def goal_state_diagnostics(
+        self, runtime_state: TaskRuntimeState
+    ) -> dict[str, Any]:
+        """Describe the terminal symbolic state without prescribing a repair."""
+
+        return {"final_state": self._build_final_state(runtime_state)}
 
     def _normalize_agents(self, agents_value: Any) -> list[dict[str, str]]:
         """Normalizes the agent roster required by the task-level schema."""
@@ -459,36 +479,18 @@ class FiniteStateTaskValidator:
         fine, which is why fixture type decides rather than fixture identity.
         """
 
+        # Keep this temporal wait audit on the exact same resource definition
+        # as concurrent replay and live evaluation. In particular, two agents
+        # may read one stationary source plate while picking distinct children;
+        # moving the plate while it is read is handled by the canonical pair
+        # classifier in concurrent replay.
+        from .concurrent_fsm import contention_resources
+
         fixtures = self.initial_state.get("fixtures") or {}
         objects = set(self.initial_state.get("objects") or {})
 
-
         def _resources(step: dict[str, Any]) -> list[str]:
-            tool = step["tool"]
-            if tool in SOCIAL_TOOL_NAMES or tool in OBSERVATION_TOOL_NAMES:
-                return []
-            if tool in GIVE_SPACE_TOOL_NAMES:
-                return []
-            args = step.get("args") or {}
-            found: list[str] = []
-            for name in DEPENDENCY_ARG_NAMES:
-                value = args.get(name)
-                if isinstance(value, str) and value in objects:
-                    found.append(value)
-            for name in FIXTURE_ARG_NAMES:
-                value = args.get(name)
-                if isinstance(value, str) and value in fixtures and _exclusive(value):
-                    found.append(value)
-            return found
-
-        def _exclusive(fixture_id: str) -> bool:
-            state = fixtures.get(fixture_id)
-            if not isinstance(state, dict):
-                return False
-            return (
-                str(state.get("fixture_type", "")).lower()
-                in EXCLUSIVE_FIXTURE_TYPES
-            )
+            return list(contention_resources(step, self.initial_state))
 
         # Contention is a TEMPORAL fact, not a structural one. Requiring a wait
         # wherever two agents merely touch the same thing demanded one for
@@ -520,15 +522,7 @@ class FiniteStateTaskValidator:
                 held.pop(str(args.get("fixture_id")), None)
                 continue
 
-            contested: list[str] = []
-            for name in DEPENDENCY_ARG_NAMES:
-                value = args.get(name)
-                if isinstance(value, str) and value in objects:
-                    contested.append(value)
-            for name in FIXTURE_ARG_NAMES:
-                value = args.get(name)
-                if isinstance(value, str) and value in fixtures and _exclusive(value):
-                    contested.append(value)
+            contested = _resources(step)
 
             for resource in contested:
                 holder, held_at = held.get(resource, (None, -1))
@@ -716,9 +710,9 @@ class FiniteStateTaskValidator:
                 details={"agent": step["agent"], "to": to_agent},
             )
 
-        if not set(tool_args) <= {"to", "message", "releases"}:
+        if not set(tool_args) <= {"to", "message", "releases", "coordination_phase"}:
             raise CommunicationStepSemanticValidationError(
-                "communicate args may only contain to, message and releases.",
+                "communicate args may only contain to, message, releases and coordination_phase.",
                 details={"arg_names": sorted(tool_args)},
             )
         normalized_message = " ".join(message.strip().split())
@@ -726,6 +720,18 @@ class FiniteStateTaskValidator:
             "to": to_agent,
             "message": normalized_message,
         }
+        phase = tool_args.get("coordination_phase")
+        allowed_phases = {
+            "propose", "await_plan", "await_confirmation", "confirm",
+            "portion_complete",
+        }
+        if phase is not None:
+            if phase not in allowed_phases:
+                raise CommunicationStepSemanticValidationError(
+                    f"Unsupported coordination_phase {phase!r}.",
+                    details={"coordination_phase": phase},
+                )
+            step["args"]["coordination_phase"] = phase
         released = self._normalize_released_ids(step, tool_args.get("releases"))
         if released:
             step["args"]["releases"] = released
@@ -838,6 +844,23 @@ class FiniteStateTaskValidator:
                 )
             object_id = tool_args["object_id"]
             source_id = tool_args["source_id"]
+            other_holders = [
+                other_agent_id
+                for other_agent_id, other_agent_state in runtime_state.agents.items()
+                if other_agent_id != step["agent"]
+                and other_agent_state.held_object == object_id
+            ]
+            if other_holders:
+                raise HeldObjectSemanticValidationError(
+                    f"{step['agent']} cannot pick up {object_id}; it is already "
+                    f"held by {other_holders[0]}.",
+                    details={
+                        "agent": step["agent"],
+                        "object_id": object_id,
+                        "held_by": other_holders[0],
+                        "tool": tool_name,
+                    },
+                )
             object_location = runtime_state.objects.get(object_id, {}).get("location")
             if not self._object_location_matches_source(
                 object_location=object_location,
@@ -891,18 +914,47 @@ class FiniteStateTaskValidator:
             return
 
         if tool_name in RELEASE_TOOL_NAMES:
+            # Report a held movable receptacle as the real problem before
+            # attempting to resolve its supporting fixture. Otherwise a bowl
+            # held by the partner degraded into the impossible instruction
+            # navigate_to_fixture(bowl).
+            self._require_referenced_objects_not_held(step, runtime_state)
+            required_fixture = self.resolve_required_fixture(step, runtime_state)
             if required_fixture is not None:
+                alternative_locations: tuple[str, ...] = ()
+                if tool_name == "place_next_to":
+                    reference_fixture_id = tool_args.get("reference_fixture_id")
+                    if isinstance(reference_fixture_id, str):
+                        adjacent_location_id = self._resolve_reference_location(
+                            reference_id=reference_fixture_id,
+                            runtime_state=runtime_state,
+                        )
+                        if (
+                            isinstance(adjacent_location_id, str)
+                            and required_fixture
+                            == self._resolve_fixture_for_location(
+                                location_id=adjacent_location_id,
+                                runtime_state=runtime_state,
+                            )
+                        ):
+                            alternative_locations = (reference_fixture_id,)
                 self._require_agent_location(
                     step=step,
                     current_location=agent_state.location,
                     expected_location=required_fixture,
+                    alternative_locations=alternative_locations,
                 )
             self._require_held_object(
                 step["agent"],
                 agent_state,
                 tool_args["object_id"],
             )
-            self._require_referenced_objects_not_held(step, runtime_state)
+            # Destination resolution is a precondition, not an effect. Running
+            # it only while committing let malformed but globally exposed
+            # placement calls pass the frozen tick check and then crash the
+            # harness. Resolve without mutation here so live evaluation reports
+            # an ordinary model rejection and commits only known-safe effects.
+            self._resolve_release_location(step, runtime_state)
             return
 
         if tool_name in INTERACTION_TOOL_NAMES:
@@ -1079,7 +1131,9 @@ class FiniteStateTaskValidator:
         tool_args = step["args"]
 
         if tool_name in NAVIGATION_TOOL_NAMES:
-            agent_state.location = tool_args["fixture_id"]
+            agent_state.location = canonical_agent_workspace(
+                self.initial_state, tool_args["fixture_id"]
+            )
             return
 
         if tool_name in OBSERVATION_TOOL_NAMES:
@@ -1372,10 +1426,20 @@ class FiniteStateTaskValidator:
         step: dict[str, Any],
         current_location: str | None,
         expected_location: str,
+        alternative_locations: tuple[str, ...] = (),
     ) -> None:
         """Checks that an agent navigated to the fixture before interacting there."""
 
-        if current_location != expected_location:
+        accepted_locations = tuple(dict.fromkeys(
+            location
+            for candidate in (expected_location, *alternative_locations)
+            for location in accepted_agent_workspaces(
+                self.initial_state,
+                candidate,
+                exclusive_fixture_types=EXCLUSIVE_FIXTURE_TYPES,
+            )
+        ))
+        if current_location not in accepted_locations:
             step_number = step.get("step")
             step_prefix = (
                 f"Step {step_number} ({step['tool']}): "
@@ -1383,18 +1447,72 @@ class FiniteStateTaskValidator:
                 else ""
             )
             current_location_label = current_location or "unknown location"
+            assignment = (
+                (getattr(self, "work_partition", None) or {}).get("assignment") or {}
+            )
+            partner_needs_location = any(
+                any(
+                    self._assignment_needs_location(descriptions, location)
+                    for location in accepted_locations
+                )
+                for other_agent, descriptions in assignment.items()
+                if other_agent != step["agent"]
+            )
+            destination_label = (
+                expected_location
+                if len(accepted_locations) == 1
+                else "one of " + ", ".join(accepted_locations)
+            )
             raise NavigationSemanticValidationError(
                 f"{step_prefix}{step['agent']} is at {current_location_label} and must "
-                f"use navigate_to_fixture to reach {expected_location} before using "
+                f"use navigate_to_fixture to reach {destination_label} before using "
                 f"{step['tool']}.",
                 step=step_number if isinstance(step_number, int) else None,
                 details={
                     "agent": step["agent"],
                     "tool": step["tool"],
+                    "actual_ids": sorted(
+                        str(value)
+                        for value in (step.get("args") or {}).values()
+                        if isinstance(value, str)
+                    ),
                     "current_location": current_location,
                     "expected_location": expected_location,
+                    "accepted_locations": list(accepted_locations),
+                    "initial_location": (
+                        (self.initial_state.get("agents") or {})
+                        .get(step["agent"], {})
+                        .get("location")
+                    ),
+                    "partner_needs_location": partner_needs_location,
                 },
             )
+
+    def _assignment_needs_location(
+        self,
+        descriptions: Sequence[str],
+        fixture_id: str,
+    ) -> bool:
+        """Whether assigned work reaches a fixture, including implicit pickup sources."""
+
+        fixture_pattern = re.compile(
+            rf"(?<![A-Za-z0-9_]){re.escape(fixture_id)}(?![A-Za-z0-9_])"
+        )
+        objects = self.initial_state.get("objects") or {}
+        for description in descriptions:
+            if fixture_pattern.search(description):
+                return True
+            if not description.startswith("pick_up_object "):
+                continue
+            for object_id, object_state in objects.items():
+                if not re.search(
+                    rf"(?<![A-Za-z0-9_]){re.escape(object_id)}(?![A-Za-z0-9_])",
+                    description,
+                ):
+                    continue
+                if isinstance(object_state, dict) and object_state.get("location") == fixture_id:
+                    return True
+        return False
 
     def _require_other_agent_at_fixture(
         self,
@@ -1408,7 +1526,9 @@ class FiniteStateTaskValidator:
         other_agents_at_fixture = sorted(
             agent_id
             for agent_id, agent_state in runtime_state.agents.items()
-            if agent_id != step["agent"] and agent_state.location == fixture_id
+            if agent_id != step["agent"]
+            and canonical_agent_workspace(self.initial_state, agent_state.location)
+            == canonical_agent_workspace(self.initial_state, fixture_id)
         )
         if other_agents_at_fixture:
             return
@@ -1615,6 +1735,11 @@ class FiniteStateTaskValidator:
         if object_location == source_id:
             return True
         if not isinstance(object_location, str):
+            return False
+        # A held object is not present at the fixture where its holder happens
+        # to stand.  Treating held_by_agent_1 as that agent's counter location
+        # allowed another agent to acquire the same object simultaneously.
+        if object_location.startswith("held_by_"):
             return False
 
         location_fixture_id = self._resolve_fixture_for_location(

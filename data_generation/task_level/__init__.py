@@ -8,6 +8,7 @@ from data_generation.task_level.subatomic_tool_calls import (
 )
 from data_generation.task_level.subatomic_tool_specs import (
     TASK_LEVEL_ALLOWED_TOOL_SPECS,
+    build_model_tool_specs,
     build_allowed_tool_specs,
 )
 
@@ -15,6 +16,7 @@ __all__ = [
     "SubatomicToolArg",
     "SubatomicToolSpec",
     "TASK_LEVEL_ALLOWED_TOOL_SPECS",
+    "build_model_tool_specs",
     "build_allowed_tool_specs",
     "discover_subatomic_tools",
     "render_subatomic_tool_catalog",

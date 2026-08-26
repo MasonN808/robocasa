@@ -242,3 +242,22 @@ slurm-*.out
 .claude/
 model_evals/data/
 *.orig
+
+# Generated communication-ablation videos and previews
+artifacts/
+
+# Bulk generated prompt exemplars (regenerable)
+training/bc_task_vlm/reports/all_config_exemplar_bank/
+
+# Experimental RL implementation and outputs (kept local for now)
+training/bc_task_vlm/rl/
+training/bc_task_vlm/rl_cohorts/
+training/bc_task_vlm/rl_runs/
+training/scripts/rl/
+tests/rl/
+
+# Experimental DAgger implementation (kept local for now)
+training/bc_task_vlm/dagger/
+training/bc_task_vlm/plans/dagger_resynchronization_plan.md
+tests/test_bc_task_vlm_dagger.py
+launch_dagger_*.sbatch

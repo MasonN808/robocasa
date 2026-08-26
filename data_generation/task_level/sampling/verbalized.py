@@ -205,10 +205,12 @@ class VerbalizedSamplingStrategy:
         raw_response: Any,
         task_definition: TaskDefinition,
         runtime_config: RuntimeConfig,
+        variation_key: str | None = None,
     ) -> list[SampledTrajectoryCandidate]:
         """Parses one verbalized response into per-trajectory candidate objects."""
 
         del task_definition
+        del variation_key
         response_payload = _extract_json_object(raw_response)
         validator = VerbalizedTrajectorySequenceValidator(
             expected_count=runtime_config.verbalized_k

@@ -25,6 +25,10 @@ import imageio
 import numpy as np
 import robosuite.utils.transform_utils as T
 
+from data_generation.task_level.tasks.shared.constants import (
+    EXCLUSIVE_FIXTURE_TYPES,
+)
+
 from robocasa.models.fixtures.blender import Blender
 from robocasa.models.fixtures.coffee_machine import CoffeeMachine
 from robocasa.models.fixtures.electric_kettle import ElectricKettle
@@ -55,10 +59,6 @@ from robocasa.utils.trajectory_runner import TrajectoryRunner
 # For these fixtures, require_front=True ensures the robot lines up with the
 # opening rather than standing on a blocked side.
 _REQUIRE_FRONT_TYPES = {
-    FixtureType.CABINET,
-    FixtureType.CABINET_SINGLE_DOOR,
-    FixtureType.CABINET_DOUBLE_DOOR,
-    FixtureType.CABINET_WITH_DOOR,
     FixtureType.FRIDGE,
     FixtureType.MICROWAVE,
     FixtureType.OVEN,
@@ -78,6 +78,7 @@ _COUNTERTOP_APPLIANCE_TYPES = {
     FixtureType.BLENDER,
     FixtureType.STAND_MIXER,
     FixtureType.ELECTRIC_KETTLE,
+    FixtureType.STOVE,
 }
 _COUNTERTOP_APPLIANCE_TYPE_NAMES = frozenset(
     {
@@ -87,6 +88,9 @@ _COUNTERTOP_APPLIANCE_TYPE_NAMES = frozenset(
         "blender",
         "stand_mixer",
         "electric_kettle",
+        "stove",
+        "stovetop",
+        "cooktop",
     }
 )
 # Appliances that should keep extra clearance when something is placed next
@@ -319,6 +323,17 @@ def _is_approach_center(fixture) -> bool:
     """Return True if the robot should approach the fixture center, not an object inside it."""
     try:
         return any(fixture_is_type(fixture, ft) for ft in _APPROACH_CENTER_TYPES)
+    except Exception:
+        return False
+
+
+def _is_countertop_appliance(fixture) -> bool:
+    """Return whether occupancy-derived aisle-facing approach semantics apply."""
+    try:
+        return any(
+            fixture_is_type(fixture, fixture_type)
+            for fixture_type in _COUNTERTOP_APPLIANCE_TYPES
+        )
     except Exception:
         return False
 
@@ -738,6 +753,41 @@ class SimToolExecutor(
         fixture_type = fixture_info.get("fixture_type")
         return str(fixture_type) if isinstance(fixture_type, str) else None
 
+    def _fixture_is_cabinet(self, fixture_id: str) -> bool:
+        return (self._get_fixture_type_name(fixture_id) or "").lower() in {
+            "cab",
+            "cabinet",
+            "cabinet_single_door",
+            "cabinet_double_door",
+            "cabinet_with_door",
+        }
+
+    def _fixture_parent_id(self, fixture_id: str) -> str | None:
+        state = (self.get_scene_description().get("fixtures") or {}).get(
+            fixture_id, {}
+        )
+        parent = state.get("parent_fixture")
+        return parent if isinstance(parent, str) and parent else None
+
+    def _canonical_navigation_fixture_id(self, fixture_id: str) -> str:
+        if self._fixture_is_cabinet(fixture_id):
+            return self._fixture_parent_id(fixture_id) or fixture_id
+        return fixture_id
+
+    def _robot_at_exclusive_child_of_parent(
+        self, robot_idx: int, parent_fixture_id: str
+    ) -> bool:
+        scene = self.get_scene_description().get("fixtures") or {}
+        for child_id, state in scene.items():
+            if not isinstance(state, dict) or state.get("parent_fixture") != parent_fixture_id:
+                continue
+            child_type = str(state.get("fixture_type") or "").lower()
+            if child_type not in EXCLUSIVE_FIXTURE_TYPES:
+                continue
+            if self._robot_near_fixture(robot_idx, child_id):
+                return True
+        return False
+
     def _fixture_id_is_structural_obstacle(self, fixture_id: str) -> bool:
         lowered = str(fixture_id).lower()
         if any(token in lowered for token in _STRUCTURAL_FIXTURE_ID_TOKENS):
@@ -760,7 +810,9 @@ class SimToolExecutor(
 
     def _fixture_requires_front_approach(self, fixture_id: str) -> bool:
         fixture = getattr(self.runner, "_fixtures", {}).get(fixture_id)
-        return fixture is not None and _require_front(fixture)
+        return fixture is not None and (
+            _require_front(fixture) or isinstance(fixture, CoffeeMachine)
+        )
 
     def _fixture_is_drawer(self, fixture_id: str) -> bool:
         fixture_type = (self._get_fixture_type_name(fixture_id) or "").lower()
@@ -4511,18 +4563,24 @@ class SimToolExecutor(
         return ToolResult("get_image", True, details)
 
     def navigate_to_fixture(self, fixture_id: str, robot_idx: int = 0) -> ToolResult:
+        requested_fixture_id = fixture_id
+        fixture_id = self._canonical_navigation_fixture_id(fixture_id)
         fixture = self._require_fixture(fixture_id)
         placed = self._move_robot_near_fixture_with_retries(
             robot_idx,
             fixture_id,
-            require_front=_require_front(fixture)
+            require_front=self._fixture_requires_front_approach(fixture_id)
             or self._surface_fixture_prefers_front_approach(fixture_id),
         )
         self._sync_held_object(robot_idx)
         return ToolResult(
             tool_name="navigate_to_fixture",
             success=placed,
-            details={"fixture_id": fixture_id, "robot_idx": robot_idx},
+            details={
+                "fixture_id": requested_fixture_id,
+                "resolved_workspace_fixture_id": fixture_id,
+                "robot_idx": robot_idx,
+            },
         )
 
     def _normalize_robot_facing_for_stove_workstation(
@@ -4889,13 +4947,31 @@ class SimToolExecutor(
         self, robot_idx: int, fixture_id: str, threshold: float = 1.5
     ) -> bool:
         """Return True if the robot is ready to interact with the fixture."""
+        fixture_id = self._canonical_navigation_fixture_id(fixture_id)
         fxtr = self.runner._fixtures.get(fixture_id)
         if fxtr is None:
             return False
         pos = self.runner._get_robot_position(robot_idx)[:2]
         if _is_approach_center(fxtr):
             target_xy = self.runner._get_fixture_front_target_xy(fixture_id)
-            metrics = get_front_alignment_metrics(fxtr, pos, target_xy=target_xy)
+            # Countertop appliance mesh rotation is not a reliable declaration
+            # of its usable aisle-facing side. Placement already derives that
+            # side from occupancy; readiness must use the identical face.
+            front_face = None
+            if _is_countertop_appliance(fxtr) and not isinstance(
+                fxtr, CoffeeMachine
+            ):
+                front_face = (
+                    self.runner._occupancy_grid.preferred_reachable_approach_face(
+                        fxtr
+                    )
+                )
+            metrics = get_front_alignment_metrics(
+                fxtr,
+                pos,
+                target_xy=target_xy,
+                front_face=front_face,
+            )
             if metrics is None:
                 return False
             fixture_center = np.asarray(fxtr.pos[:2], dtype=float)
@@ -5389,6 +5465,11 @@ class SimToolExecutor(
         require_front: bool = False,
     ) -> bool:
         """Place a robot near a fixture, clearing teammate blockers if needed."""
+        if self._fixture_is_cabinet(fixture_id):
+            require_front = False
+        fixture_id = self._canonical_navigation_fixture_id(fixture_id)
+        if self._robot_at_exclusive_child_of_parent(robot_idx, fixture_id):
+            return True
         placed = self.runner._move_robot_near_fixture(
             robot_idx,
             fixture_id,
@@ -5483,23 +5564,27 @@ class SimToolExecutor(
 
         # Skip navigation only if the robot is already in a usable working
         # pose for the fixture.
-        requires_front_surface = self._surface_fixture_prefers_front_approach(
-            source_fixture_id
+        # Match navigate_to_fixture: countertop appliances such as stoves
+        # target the appliance center but do not require a front-face pose.
+        requires_front_approach = (
+            self._fixture_requires_front_approach(source_fixture_id)
+            or self._surface_fixture_prefers_front_approach(source_fixture_id)
         )
         if (
             not skip_renav_after_drawer_open
             and (
-                requires_front_surface
+                requires_front_approach
                 or not self._robot_near_fixture(robot_idx, source_fixture_id)
             )
         ):
             source_fxtr = self.runner._fixtures[source_fixture_id]
             if _is_approach_center(source_fxtr):
-                # Interactive fixture (fridge, cabinet) — must approach from front
+                # Approach-center fixtures use the same front constraint as
+                # explicit navigation to that fixture.
                 moved = self._move_robot_near_fixture_with_retries(
                     robot_idx,
                     source_fixture_id,
-                    require_front=True,
+                    require_front=requires_front_approach,
                 )
             else:
                 # Surface — pre-compute object position, pick closest face
@@ -5514,7 +5599,7 @@ class SimToolExecutor(
                     robot_idx,
                     source_fixture_id,
                     ref_pos_override=ref_pos,
-                    require_front=requires_front_surface,
+                    require_front=requires_front_approach,
                 )
             if not moved:
                 return ToolResult(
@@ -6047,7 +6132,9 @@ class SimToolExecutor(
         self.runner._move_robot_near_fixture(
             robot_idx,
             reference_fixture_id,
-            require_front=_require_front(fixture),
+            require_front=self._fixture_requires_front_approach(
+                reference_fixture_id
+            ),
         )
         self._sync_held_object(robot_idx)
 
@@ -6263,7 +6350,7 @@ class SimToolExecutor(
         moved = self._move_robot_near_fixture_with_retries(
             robot_idx,
             target_id,
-            require_front=_require_front(fixture),
+            require_front=self._fixture_requires_front_approach(target_id),
         )
         if moved:
             self._sync_held_object(robot_idx)
@@ -6372,7 +6459,8 @@ class SimToolExecutor(
         to: str,
         message: str,
         robot_idx: int = 0,
-        releases: list[str] | None = None,
+        releases: str | None = None,
+        coordination_phase: str | None = None,
     ) -> ToolResult:
         # `releases` is symbolic bookkeeping: it names the resource this message
         # hands over, which is what wakes a partner blocked in wait_for_signal.
@@ -6387,7 +6475,8 @@ class SimToolExecutor(
                 "robot_idx": robot_idx,
                 "to": to,
                 "message": message,
-                "releases": list(releases or ()),
+                "releases": releases,
+                "coordination_phase": coordination_phase,
             },
         )
 
@@ -6397,6 +6486,8 @@ class SimToolExecutor(
         Delegates to ``TrajectoryRunner.give_space`` which finds a free grid
         cell that is ≥1.5 m from the fixture.
         """
+        requested_fixture_id = fixture_id
+        fixture_id = self._canonical_navigation_fixture_id(fixture_id)
         self._require_fixture(fixture_id)
         self.runner.give_space(robot_idx, fixture_id)
         self._sync_held_object(robot_idx)
@@ -6404,7 +6495,8 @@ class SimToolExecutor(
             "give_space",
             True,
             {
-                "fixture_id": fixture_id,
+                "fixture_id": requested_fixture_id,
+                "resolved_workspace_fixture_id": fixture_id,
                 "robot_idx": robot_idx,
             },
         )

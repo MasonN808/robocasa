@@ -30,15 +30,19 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+import re
 from typing import Any, Sequence
 
 from .constants import (
+    ACQUIRE_TOOL_NAMES,
+    CLOSE_PART_TOOL_NAMES,
     DEPENDENCY_ARG_NAMES,
     EXCLUSIVE_FIXTURE_TYPES,
     FIXTURE_ARG_NAMES,
     GIVE_SPACE_TOOL_NAMES,
     NAVIGATION_TOOL_NAMES,
     OBSERVATION_TOOL_NAMES,
+    OPEN_PART_TOOL_NAMES,
     RELEASE_TOOL_NAMES,
     SOCIAL_TOOL_NAMES,
     WAIT_TOOL_NAMES,
@@ -54,6 +58,16 @@ from .errors import (
     UnsupportedToolSemanticValidationError,
     WaitSignalSemanticValidationError,
 )
+from .scheduling import (
+    ConcurrentScheduler,
+    opening_protocol_error,
+    proposal_grounding_ids,
+    release_keys,
+    symbolic_id_mentioned,
+    wait_key,
+)
+from .validation_contract import VALIDATOR_CONTRACT_VERSION
+from .workspace_semantics import canonical_agent_workspace
 
 LOCK_STEP = "lock_step"
 EXECUTOR = "executor"
@@ -68,6 +82,183 @@ _EXECUTOR_DEFAULT_FLOOR = 2.0
 _EPS = 1e-6
 
 _WAIT_TOOL = "wait_for_signal"
+
+
+def is_exclusive_fixture(
+    fixture_id: str | None,
+    initial_state: dict[str, Any],
+) -> bool:
+    """Return whether one fixture has the FSM's single-user workspace."""
+
+    fixtures = initial_state.get("fixtures") or {}
+    state = fixtures.get(fixture_id)
+    if not isinstance(state, dict):
+        return False
+    return str(state.get("fixture_type", "")).lower() in EXCLUSIVE_FIXTURE_TYPES
+
+
+def _cabinet_fixture_for_step(
+    step: dict[str, Any], initial_state: dict[str, Any]
+) -> tuple[str | None, bool]:
+    """Return (cabinet id, changes-door-state) for one cabinet call."""
+
+    from .workspace_semantics import is_cabinet
+
+    tool = step.get("tool")
+    args = step.get("args") or {}
+    fixture_id = None
+    if tool in OPEN_PART_TOOL_NAMES | CLOSE_PART_TOOL_NAMES:
+        fixture_id = args.get("target_id")
+    elif tool in ACQUIRE_TOOL_NAMES:
+        fixture_id = args.get("source_id")
+    elif tool in RELEASE_TOOL_NAMES:
+        fixture_id = (
+            args.get("target_id")
+            or args.get("support_id")
+            or args.get("receptacle_id")
+        )
+    if isinstance(fixture_id, str) and is_cabinet(initial_state, fixture_id):
+        return fixture_id, tool in OPEN_PART_TOOL_NAMES | CLOSE_PART_TOOL_NAMES
+    return None, False
+
+
+def contention_resources(
+    step: dict[str, Any],
+    initial_state: dict[str, Any],
+) -> frozenset[str]:
+    """Return the resources claimed by one call under canonical FSM semantics.
+
+    Roomy fixtures are deliberately absent. The object being manipulated is
+    exclusive, while stationary source/support/receptacle/reference objects are
+    shared reads. ``simultaneous_contentions`` separately catches the
+    asymmetric case where one call moves such an object while another reads it.
+    """
+
+    tool = step.get("tool")
+    if tool in SOCIAL_TOOL_NAMES or tool in OBSERVATION_TOOL_NAMES:
+        return frozenset()
+    if tool in GIVE_SPACE_TOOL_NAMES:
+        return frozenset()
+    objects = set(initial_state.get("objects") or {})
+    args = step.get("args") or {}
+    found: set[str] = set()
+    object_id = args.get("object_id")
+    if isinstance(object_id, str) and object_id in objects:
+        found.add(object_id)
+    for name in FIXTURE_ARG_NAMES:
+        value = args.get(name)
+        if isinstance(value, str) and is_exclusive_fixture(value, initial_state):
+            found.add(value)
+    return frozenset(found)
+
+
+def simultaneous_contentions(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    initial_state: dict[str, Any],
+) -> frozenset[str]:
+    """Return resources that make two same-tick calls incompatible.
+
+    This is the canonical pair classifier for both offline validation and live
+    scheduling. In addition to ordinary shared claims, moving an object while
+    the other call uses it as a source/support/reference is a conflict.
+    """
+
+    conflicts = set(contention_resources(left, initial_state)) & set(
+        contention_resources(right, initial_state)
+    )
+    left_cabinet, left_transition = _cabinet_fixture_for_step(left, initial_state)
+    right_cabinet, right_transition = _cabinet_fixture_for_step(right, initial_state)
+    if (
+        isinstance(left_cabinet, str)
+        and left_cabinet == right_cabinet
+        and (left_transition or right_transition)
+    ):
+        conflicts.add(f"cabinet_access:{left_cabinet}")
+    left_args = left.get("args") or {}
+    right_args = right.get("args") or {}
+    left_object = left_args.get("object_id")
+    right_object = right_args.get("object_id")
+    left_secondary = {
+        left_args.get(name)
+        for name in DEPENDENCY_ARG_NAMES
+        if name != "object_id" and isinstance(left_args.get(name), str)
+    }
+    right_secondary = {
+        right_args.get(name)
+        for name in DEPENDENCY_ARG_NAMES
+        if name != "object_id" and isinstance(right_args.get(name), str)
+    }
+    if isinstance(left_object, str) and left_object in right_secondary:
+        conflicts.add(left_object)
+    if isinstance(right_object, str) and right_object in left_secondary:
+        conflicts.add(right_object)
+    return frozenset(conflicts)
+
+
+def atomic_handover_conflicts(
+    calls: Sequence[dict[str, Any]],
+    runtime_state: Any,
+    initial_state: dict[str, Any],
+) -> dict[str, frozenset[str]]:
+    """Return entrants that race an occupant's same-tick ``give_space``.
+
+    A tick is validated against its beginning-of-tick state. Physically
+    leaving an exclusive workspace is therefore visible to other agents only
+    on the following tick, independent of call iteration order.
+    """
+
+    calls_by_agent = {
+        str(call.get("agent")): call
+        for call in calls
+        if isinstance(call, dict) and isinstance(call.get("agent"), str)
+    }
+    vacated_by: dict[str, str] = {}
+    for agent_id, call in calls_by_agent.items():
+        if call.get("tool") not in GIVE_SPACE_TOOL_NAMES:
+            continue
+        fixture_id = (call.get("args") or {}).get("fixture_id")
+        if not isinstance(fixture_id, str) or not is_exclusive_fixture(
+            fixture_id, initial_state
+        ):
+            continue
+        agent_state = getattr(runtime_state, "agents", {}).get(agent_id)
+        if agent_state is not None and agent_state.location == fixture_id:
+            vacated_by[fixture_id] = agent_id
+
+    conflicts: dict[str, set[str]] = {}
+    # Also reject entry/use while another agent remains at an exclusive
+    # workspace. Offline replay catches the resulting co-location after a
+    # commit, but live evaluation must reject the proposal *before* executing
+    # it; otherwise the teleporting executor may silently displace the holder.
+    for agent_id, call in calls_by_agent.items():
+        claimed = contention_resources(call, initial_state)
+        for fixture_id in claimed:
+            if not is_exclusive_fixture(fixture_id, initial_state):
+                continue
+            for occupant_id, occupant_state in getattr(
+                runtime_state, "agents", {}
+            ).items():
+                if occupant_id == agent_id:
+                    continue
+                occupant_workspace = canonical_agent_workspace(
+                    initial_state, getattr(occupant_state, "location", None)
+                )
+                target_workspace = canonical_agent_workspace(
+                    initial_state, fixture_id
+                )
+                if occupant_workspace == target_workspace:
+                    conflicts.setdefault(agent_id, set()).add(fixture_id)
+    for agent_id, call in calls_by_agent.items():
+        for fixture_id, occupant in vacated_by.items():
+            if agent_id == occupant:
+                continue
+            if fixture_id in contention_resources(call, initial_state):
+                conflicts.setdefault(agent_id, set()).add(fixture_id)
+    return {
+        agent_id: frozenset(resources)
+        for agent_id, resources in conflicts.items()
+    }
 
 
 def duration_of(tool_name: str, model: str) -> float:
@@ -167,6 +358,7 @@ class ConcurrentTaskValidator:
         validator: Any,
         *,
         models: Sequence[str] = DURATION_MODELS,
+        require_initial_communication: bool = True,
     ) -> None:
         self.validator = validator
         self.composite_task = validator.composite_task
@@ -180,6 +372,7 @@ class ConcurrentTaskValidator:
         # fires with nobody blocked is discarded. 7 of the 9 deadlocks in job
         # 266947 were exactly this, and every one was clean under LOCK_STEP.
         self.models = tuple(models)
+        self.require_initial_communication = bool(require_initial_communication)
 
     # -- replay -----------------------------------------------------------
 
@@ -206,9 +399,8 @@ class ConcurrentTaskValidator:
             streams.setdefault(step["agent"], []).append(index)
 
         cursor = {agent_id: 0 for agent_id in streams}
-        ready_at = {agent_id: 0.0 for agent_id in streams}
         waiting_since: dict[str, float] = {}
-        blocked_on: dict[str, tuple[str, str]] = {}
+        scheduler = ConcurrentScheduler(tuple(streams))
         # A release is an EVENT: it wakes only an agent already waiting when it
         # fires, exactly as AgentRuntime.deliver does -- a message sent before
         # the waiter blocked was never delivered to it and never will be.
@@ -244,7 +436,7 @@ class ConcurrentTaskValidator:
             # executor would sit there too.
             pending = [
                 a for a in streams
-                if cursor[a] < len(streams[a]) or a in blocked_on
+                if cursor[a] < len(streams[a]) or scheduler.blocked(a)
             ]
             if not pending:
                 break
@@ -255,40 +447,24 @@ class ConcurrentTaskValidator:
             # could succeed put it on the clock at the instant it discharged,
             # which drew the agent as idle for the whole block and then calling
             # wait at the very moment it was already free.
-            runnable: list[str] = []
-            for agent_id in pending:
-                key = blocked_on.get(agent_id)
-                if key is not None:
-                    woken = [
-                        at for at in fired.get(key, ())
-                        if at >= waiting_since[agent_id] - _EPS
-                    ]
-                    if not woken:
-                        continue
-                    blocked_on.pop(agent_id)
-                    # A woken agent resumes on the instant AFTER the release,
-                    # never on the release itself. Same-instant resumption is a
-                    # race the executor would have to arbitrate -- the message
-                    # has to be delivered before the waiter's next proposal is
-                    # built -- and it is one more thing for the model to get
-                    # subtly wrong. Costing the wake a tick removes both.
-                    ready_at[agent_id] = max(
-                        ready_at[agent_id],
-                        min(woken) + duration_of(_WAIT_TOOL, model),
-                    )
-                if cursor[agent_id] < len(streams[agent_id]):
-                    runnable.append(agent_id)
+            has_work = {a: cursor[a] < len(streams[a]) for a in streams}
+            next_ready = scheduler.next_ready_time(has_work=has_work)
+            if next_ready is not None:
+                clock = max(clock, next_ready)
+            runnable = scheduler.ready_agents(clock=clock, has_work=has_work)
 
-            if not runnable and not blocked_on:
+            if not runnable and not scheduler.blocked_agents():
                 break
 
             if not runnable:
-                result.blocked = sorted(blocked_on)
+                result.blocked = scheduler.blocked_agents()
                 for agent_id in result.blocked:
                     index = streams[agent_id][cursor[agent_id] - 1]
                     step = steps[index]
                     args = step.get("args") or {}
-                    earlier = fired.get(blocked_on[agent_id], ())
+                    waiting = scheduler.states[agent_id].waiting_for or {}
+                    key = (str(waiting.get("from")), str(waiting.get("about")))
+                    earlier = fired.get(key, ())
                     since = waiting_since[agent_id]
                     detail = (
                         f"the release fired at t={max(earlier):g}, before this "
@@ -305,8 +481,7 @@ class ConcurrentTaskValidator:
                     )
                 break
 
-            clock = max(clock, min(ready_at[a] for a in runnable))
-            acting = sorted(a for a in runnable if ready_at[a] <= clock + _EPS)
+            acting = runnable
 
             # Co-location is judged once per TICK, not once per batch of calls.
             # A zero-duration call leaves its agent ready at the same clock, so
@@ -326,6 +501,58 @@ class ConcurrentTaskValidator:
             open_acting.update(acting)
 
             instant = [(a, streams[a][cursor[a]]) for a in acting]
+            instant_calls = [
+                {**steps[index], "agent": agent_id}
+                for agent_id, index in instant
+            ]
+            precondition_errors = self.validate_cycle_preconditions(
+                instant_calls, state
+            )
+            if precondition_errors:
+                failing_agent = next(
+                    agent_id for agent_id, _ in instant
+                    if agent_id in precondition_errors
+                )
+                error = precondition_errors[failing_agent]
+                failing_index = next(
+                    index for agent_id, index in instant
+                    if agent_id == failing_agent
+                )
+                details = dict(error.details)
+                details.setdefault(
+                    "state_before_tick",
+                    validator._build_final_state(deepcopy(state)),
+                )
+                details.setdefault("atomic_tick", clock)
+                error = type(error)(
+                    str(error), step=error.step, details=details
+                )
+                result.step_error = validator._validation_error_with_step(
+                    error, steps[failing_index]["step"]
+                )
+                result.makespan = clock
+                return result
+            for entrant, resources in atomic_handover_conflicts(
+                instant_calls, state, validator.initial_state
+            ).items():
+                for resource in resources:
+                    key = ("atomic-handover", resource, entrant)
+                    if key in seen_conflicts:
+                        continue
+                    seen_conflicts.add(key)
+                    occupant = next(
+                        call["agent"]
+                        for call in instant_calls
+                        if call["agent"] != entrant
+                        and call.get("tool") in GIVE_SPACE_TOOL_NAMES
+                        and (call.get("args") or {}).get("fixture_id") == resource
+                    )
+                    result.conflicts.append(
+                        f"  t={clock:g}: {entrant} enters or uses {resource!r} "
+                        f"while its beginning-of-tick occupant {occupant} calls "
+                        "give_space. The departure takes effect after this "
+                        "atomic tick; enter on the following tick."
+                    )
             self._check_simultaneous_use(steps, instant, clock, seen_conflicts, result)
 
             for agent_id, index in instant:
@@ -336,7 +563,7 @@ class ConcurrentTaskValidator:
                     self._check_ask(step, agent_id, previous[agent_id], result)
                     args = step.get("args") or {}
                     key = (args.get("from"), str(args.get("about")))
-                    blocked_on[agent_id] = key
+                    scheduler.block(agent_id, step, clock=clock)
                     waiting_since[agent_id] = clock
                     wait_started[index] = clock
                     # A release fired at the very instant the wait is called is
@@ -353,15 +580,11 @@ class ConcurrentTaskValidator:
                             f"before the release, or drop it."
                         )
                 else:
-                    try:
-                        self._apply(step, state)
-                    except TrajectoryValidationError as exc:
-                        result.step_error = validator._validation_error_with_step(
-                            exc, step["step"]
-                        )
-                        if stop_on_step_error:
-                            result.makespan = clock
-                            return result
+                    # Every call in this instant was already checked against
+                    # the same frozen beginning-of-tick state. Commit effects
+                    # only now; no call may gain a prerequisite from an
+                    # earlier agent's commit in this tick.
+                    self._commit(step, state)
                     if tool not in OBSERVATION_TOOL_NAMES | SOCIAL_TOOL_NAMES:
                         result.first_action = True
 
@@ -372,6 +595,11 @@ class ConcurrentTaskValidator:
                             previous[agent_id], clock, result,
                         )
                         fired.setdefault((agent_id, released), []).append(clock)
+                    scheduler.deliver(
+                        step,
+                        clock=clock,
+                        resume_delay=duration_of(_WAIT_TOOL, model),
+                    )
 
                 for resource in self._let_go_of(step, previous[agent_id]):
                     departures.setdefault((agent_id, resource), []).append(clock)
@@ -383,11 +611,19 @@ class ConcurrentTaskValidator:
                 result.events.append(
                     Event(index=index, agent=agent_id, tool=tool, start=clock, end=end)
                 )
-                ready_at[agent_id] = end
+                scheduler.states[agent_id].ready_at = end
                 cursor[agent_id] += 1
 
             if result.goal_at is None and validator.is_goal_state_satisfied(state):
                 result.goal_at = clock
+                # A waiter on its final call is not deadlocked when its partner
+                # completes the global goal in this same atomic tick. Live
+                # execution terminates the episode here, so no later release is
+                # required and no agent is invoked again.
+                if all(cursor[a] >= len(streams[a]) for a in streams):
+                    scheduler.finish_cycle(goal_satisfied=True)
+                    waiting_since.clear()
+                    break
             elif result.goal_at is not None:
                 for agent_id, index in instant:
                     step = steps[index]
@@ -413,8 +649,26 @@ class ConcurrentTaskValidator:
 
     # -- per-step application ---------------------------------------------
 
-    def _apply(self, step: dict[str, Any], state: Any) -> None:
-        """Applies one step, mirroring live_sim_eval.FsmMirror.step."""
+    def validate_cycle_preconditions(
+        self,
+        calls: Sequence[dict[str, Any]],
+        state: Any,
+    ) -> dict[str, TrajectoryValidationError]:
+        """Validate every call against one immutable beginning-of-tick state."""
+
+        errors: dict[str, TrajectoryValidationError] = {}
+        for call in calls:
+            if call.get("tool") in WAIT_TOOL_NAMES:
+                continue
+            agent_id = str(call.get("agent"))
+            try:
+                self._validate_only(call, deepcopy(state))
+            except TrajectoryValidationError as exc:
+                errors[agent_id] = exc
+        return errors
+
+    def _validate_only(self, step: dict[str, Any], state: Any) -> None:
+        """Validate one transition without committing any world effects."""
 
         validator = self.validator
         if step["tool"] in OBSERVATION_TOOL_NAMES:
@@ -426,12 +680,18 @@ class ConcurrentTaskValidator:
             return
 
         if step["tool"] == "communicate":
+            if step["tool"] not in validator.allowed_tool_specs:
+                raise UnsupportedToolSemanticValidationError(
+                    f"Tool {step['tool']} is not allowed for {self.composite_task}.",
+                    details={
+                        "tool": step["tool"],
+                        "composite_task": self.composite_task,
+                    },
+                )
             validator._validate_communicate_step(step)
-            state.communicated_agents.add(step["agent"])
-            validator.apply_task_effects(step, state)
             return
 
-        if step["tool"] not in OBSERVATION_TOOL_NAMES:
+        if self.require_initial_communication and step["tool"] not in OBSERVATION_TOOL_NAMES:
             if state.communicated_agents != set(self.agent_ids):
                 raise MissingInitialCommunicationSemanticValidationError(
                     "Both agents must coordinate via communication before the "
@@ -450,40 +710,35 @@ class ConcurrentTaskValidator:
         validator._validate_task_local_symbolic_constraints(step)
         validator._validate_generic_transition(step, state)
         validator.validate_task_preconditions(step, state)
+
+    def _commit(self, step: dict[str, Any], state: Any) -> None:
+        """Commit one transition whose preconditions already passed."""
+
+        validator = self.validator
+        if step["tool"] in OBSERVATION_TOOL_NAMES:
+            return
+        if step["tool"] == "communicate":
+            state.communicated_agents.add(step["agent"])
+            validator.apply_task_effects(step, state)
+            return
         validator._apply_generic_effects(step, state)
         validator.apply_task_effects(step, state)
+
+    def _apply(self, step: dict[str, Any], state: Any) -> None:
+        """Validate and commit one step for legacy/sequential callers."""
+
+        self._validate_only(step, state)
+        self._commit(step, state)
 
     # -- the two contention invariants ------------------------------------
 
     def _exclusive(self, fixture_id: str | None) -> bool:
-        fixtures = self.validator.initial_state.get("fixtures") or {}
-        state = fixtures.get(fixture_id)
-        if not isinstance(state, dict):
-            return False
-        return str(state.get("fixture_type", "")).lower() in EXCLUSIVE_FIXTURE_TYPES
+        return is_exclusive_fixture(fixture_id, self.validator.initial_state)
 
     def _named_resources(self, step: dict[str, Any]) -> list[str]:
         """Objects and exclusive fixtures this call reaches for."""
 
-        tool = step["tool"]
-        if tool in SOCIAL_TOOL_NAMES or tool in OBSERVATION_TOOL_NAMES:
-            return []
-        # give_space is the actor LEAVING; two agents swapping places at one
-        # fixture is the handoff working, not a collision.
-        if tool in GIVE_SPACE_TOOL_NAMES:
-            return []
-        objects = set(self.validator.initial_state.get("objects") or {})
-        args = step.get("args") or {}
-        found: list[str] = []
-        for name in DEPENDENCY_ARG_NAMES:
-            value = args.get(name)
-            if isinstance(value, str) and value in objects:
-                found.append(value)
-        for name in FIXTURE_ARG_NAMES:
-            value = args.get(name)
-            if isinstance(value, str) and self._exclusive(value):
-                found.append(value)
-        return found
+        return list(contention_resources(step, self.validator.initial_state))
 
     def _check_simultaneous_use(
         self,
@@ -516,6 +771,36 @@ class ConcurrentTaskValidator:
                 f"same instant. One of them must wait_for_signal on it and the "
                 f"other must release it."
             )
+
+        # Shared reads of a stationary plate/tray/support are safe, but moving
+        # that support while the partner uses it is not. Catch that asymmetric
+        # write/read case without turning two placements onto the support back
+        # into a false collision.
+        for left_pos, (left_agent, left_index) in enumerate(instant):
+            left = steps[left_index]
+            for right_agent, right_index in instant[left_pos + 1:]:
+                right = steps[right_index]
+                ordinary = set(self._named_resources(left)) & set(
+                    self._named_resources(right)
+                )
+                asymmetric = simultaneous_contentions(
+                    left, right, self.validator.initial_state
+                ) - ordinary
+                for resource in asymmetric:
+                    key = (
+                        "move-while-used",
+                        resource,
+                        *sorted((left_agent, right_agent)),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    result.conflicts.append(
+                        f"  t={clock:g}: {left_agent} {left['tool']} and "
+                        f"{right_agent} {right['tool']} conflict because "
+                        f"{resource!r} is being moved while the other call uses "
+                        "it as a support, source, receptacle, or reference."
+                    )
 
     def _let_go_of(
         self, step: dict[str, Any], previous: dict[str, Any] | None
@@ -578,6 +863,30 @@ class ConcurrentTaskValidator:
                 f"{(previous.get('args') or {}).get('to')!r}. Ask the agent you "
                 f"are about to wait on."
             )
+            return
+
+        message = str((previous.get("args") or {}).get("message") or "")
+        # The wait call is private, so its `about` value cannot teach the
+        # holder which exact structural release will wake the waiter. Require
+        # the visible request to carry that value explicitly. Keeping the
+        # shape machine-readable also prevents semantically related but
+        # mismatched releases such as about="fruit_plate" followed by
+        # releases="dining_counter".
+        exact_id = re.compile(
+            rf"(?<![A-Za-z0-9_]){re.escape(about)}(?![A-Za-z0-9_])",
+            flags=re.IGNORECASE,
+        )
+        release_language = re.compile(
+            r"\breleas(?:e|es|ed|ing)\b",
+            flags=re.IGNORECASE,
+        )
+        if exact_id.search(message) is None or release_language.search(message) is None:
+            result.protocol.append(
+                f"{prefix} {about!r}, but its request did not tell {holder} "
+                f"the exact release value. The message immediately before the "
+                f"wait must name {about!r} and identify it as the release "
+                f"keyword, for example `When done, release \"{about}\"`."
+            )
 
     # NOTE: an earlier rule here rejected a wait whose holder had already let
     # the resource go before the wait began. Measured against real tick output
@@ -637,38 +946,11 @@ class ConcurrentTaskValidator:
             )
             return
 
-        # 3. Released, but not as the report of the departure.
-        #
-        # Only things the agent took POSSESSION of need a departure to report:
-        # a fixture it stood at, an object it held. A resource merely used --
-        # picking a drumstick out of a pan, say -- is handed back the moment
-        # that use ends, because there is nothing to put down or step off.
-        # Demanding a give_space there flagged 31 correct handovers.
-        if previous is None or released in self._named_resources(previous):
-            return
-        args = previous.get("args") or {}
-        departed = (
-            # Stepping clear of ANY fixture counts. Placing an object down and
-            # then giving space before announcing is not a gap in the handover,
-            # it IS the handover -- the agent finishes withdrawing and only then
-            # says so. Requiring the released id to match rejected all 5 of the
-            # real cases, every one of them correct.
-            previous["tool"] in GIVE_SPACE_TOOL_NAMES
-        ) or (
-            previous["tool"] in NAVIGATION_TOOL_NAMES
-            and str(args.get("fixture_id")) != released
-        ) or (
-            previous["tool"] in RELEASE_TOOL_NAMES
-            and released in {str(value) for value in args.values()}
-        )
-        if not departed:
-            result.protocol.append(
-                f"{prefix}, but its previous call was "
-                f"{previous['tool']}, not the handover. The release must be "
-                f"the very next thing the agent does after letting go: "
-                f"anything in between is time the waiter is blocked on a "
-                f"resource that is already free."
-            )
+        # Once the state proves the object is no longer held or the exclusive
+        # fixture is no longer occupied, a later report is valid. Requiring the
+        # release to be the immediately following call rejected trajectories
+        # that merely kept the waiter blocked a little longer, even though the
+        # same schedule executes correctly in live sim.
 
     def _known_id(self, symbol: str) -> bool:
         """True when this names something that actually exists in the scene."""
@@ -683,7 +965,9 @@ class ConcurrentTaskValidator:
 
         occupants: dict[str, list[str]] = {}
         for agent_id, agent_state in state.agents.items():
-            location = agent_state.location
+            location = canonical_agent_workspace(
+                self.validator.initial_state, agent_state.location
+            )
             if location and self._exclusive(location):
                 occupants.setdefault(location, []).append(agent_id)
         return occupants
@@ -726,7 +1010,589 @@ class ConcurrentTaskValidator:
                 f"second must wait until the first calls give_space and releases it."
             )
 
+    def _validate_tick_invocations(self, candidate: dict[str, Any]) -> None:
+        """Reject tick grids that a live model scheduler cannot reproduce."""
+
+        rows = candidate.get("tick_rows")
+        if not isinstance(rows, list):
+            rows = candidate.get("ticks")
+        if not isinstance(rows, list):
+            return
+
+        self._validate_opening_handshake(rows)
+        explicit_blocked = candidate.get("format") == "explicit_blocked_v1"
+
+        scheduler = ConcurrentScheduler(self.agent_ids)
+        for row_index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise TrajectoryValidationError(
+                    f"Tick row {row_index} must be an object."
+                )
+            tick = row.get("tick", row_index)
+            if tick != row_index:
+                raise TrajectoryValidationError(
+                    f"Tick rows must be consecutive from 0; row {row_index} "
+                    f"declares tick {tick!r}.",
+                    details={"row": row_index, "tick": tick},
+                )
+            unknown = sorted(
+                key for key in row if key != "tick" and key not in self.agent_ids
+            )
+            if unknown:
+                raise TrajectoryValidationError(
+                    f"Tick {tick} contains unknown agent field(s): "
+                    + ", ".join(unknown),
+                    details={"tick": tick, "unknown_agents": unknown},
+                )
+            represented = {agent for agent in self.agent_ids if agent in row}
+            marker_agents = {
+                agent
+                for agent in represented
+                if row.get(agent) == {"state": "blocked"}
+            }
+            present = represented - marker_agents
+            blocked_agents = set(scheduler.blocked_agents())
+            required = set(self.agent_ids) - blocked_agents
+            missing = sorted(required - present)
+            unexpected = sorted(present & blocked_agents)
+            missing_markers = sorted(blocked_agents - marker_agents)
+            false_markers = sorted(marker_agents - blocked_agents)
+            missing_entries = sorted(set(self.agent_ids) - represented)
+            if explicit_blocked and (missing_entries or missing_markers or false_markers):
+                descriptions = []
+                if missing_entries:
+                    descriptions.append("agent field omitted: " + ", ".join(missing_entries))
+                if missing_markers:
+                    descriptions.append("blocked marker missing: " + ", ".join(missing_markers))
+                if false_markers:
+                    descriptions.append("unblocked marked blocked: " + ", ".join(false_markers))
+                raise TrajectoryValidationError(
+                    f"Tick {tick} violates explicit blocked-state format "
+                    f"({'; '.join(descriptions)}).",
+                    details={"tick": tick, "format": "explicit_blocked_v1"},
+                )
+            if missing or unexpected:
+                descriptions = []
+                if missing:
+                    descriptions.append("unblocked omitted: " + ", ".join(missing))
+                if unexpected:
+                    descriptions.append(
+                        "blocked invoked before release: " + ", ".join(unexpected)
+                    )
+                raise TrajectoryValidationError(
+                    f"Tick {tick} is not executable by the live scheduler "
+                    f"({'; '.join(descriptions)}). Every unblocked agent must "
+                    "emit one call, and only a previously blocked agent may be absent.",
+                    details={
+                        "tick": tick,
+                        "missing": missing,
+                        "unexpected": unexpected,
+                    },
+                )
+
+            new_waits: dict[str, tuple[str, str]] = {}
+            releases: list[tuple[str, str]] = []
+            for agent in present:
+                call = row.get(agent) or {}
+                args = call.get("args") or {}
+                key = wait_key({**call, "agent": agent})
+                if key is not None:
+                    new_waits[agent] = key
+                releases.extend(release_keys({**call, "agent": agent}))
+            same_tick = sorted(
+                waiter
+                for waiter, key in new_waits.items()
+                if key in releases
+            )
+            if same_tick:
+                wait_details = []
+                for waiter in same_tick:
+                    source, resource = new_waits[waiter]
+                    releaser = next(
+                        (
+                            agent
+                            for agent in present
+                            if (source, resource) in release_keys(
+                                {**(row.get(agent) or {}), "agent": agent}
+                            )
+                        ),
+                        source,
+                    )
+                    wait_details.append(
+                        {
+                            "waiter": waiter,
+                            "releaser": releaser,
+                            "resource": resource,
+                            "resource_requires_handover": (
+                                resource in (self.validator.initial_state.get("objects") or {})
+                                or self._exclusive(resource)
+                            ),
+                        }
+                    )
+                raise TrajectoryValidationError(
+                    f"Tick {tick} waits and releases in the same atomic cycle "
+                    f"for: {', '.join(same_tick)}. A waiter resumes only after "
+                    "a release from a later tick.",
+                    details={
+                        "tick": tick,
+                        "same_tick_wait_release": same_tick,
+                        "wait_release_pairs": wait_details,
+                    },
+                )
+            for waiter in new_waits:
+                scheduler.block(waiter, row[waiter], clock=float(tick))
+            for agent in present:
+                call = {**(row.get(agent) or {}), "agent": agent}
+                scheduler.deliver(call, clock=float(tick), resume_delay=1.0)
+
+    def _validate_opening_handshake(self, rows: Sequence[dict[str, Any]]) -> None:
+        """Require a causal leader proposal followed by follower confirmation."""
+
+        coordinator = getattr(self.validator, "coordinator_id", None)
+        if coordinator not in self.agent_ids:
+            return  # legacy/fake validators have no coordinator contract
+        follower = next(a for a in self.agent_ids if a != coordinator)
+        # Rendering inserts observation-only rows. They are instrumentation,
+        # not authored protocol turns, so locate the first two meaningful
+        # cycles instead of assuming they remain physical rows 0 and 1.
+        authored_rows = [
+            (tick, row)
+            for tick, row in enumerate(rows)
+            if isinstance(row, dict)
+            and any(
+                isinstance(row.get(agent), dict)
+                and row[agent].get("tool") not in OBSERVATION_TOOL_NAMES
+                for agent in self.agent_ids
+            )
+        ]
+        if len(authored_rows) < 2:
+            raise TrajectoryValidationError(
+                "Coordinator protocol requires two opening communication ticks."
+            )
+        opening_ticks = (authored_rows[0][0], authored_rows[1][0])
+        expected = (
+            (opening_ticks[0], coordinator, "propose"),
+            (opening_ticks[0], follower, "await_plan"),
+            (opening_ticks[1], coordinator, "await_confirmation"),
+            (opening_ticks[1], follower, "confirm"),
+        )
+        for tick, agent, phase in expected:
+            call = rows[tick].get(agent) if isinstance(rows[tick], dict) else None
+            phase_index = 0 if phase in {"propose", "await_plan"} else 1
+            error = opening_protocol_error(
+                agent_id=agent,
+                call=call or {},
+                agent_ids=self.agent_ids,
+                coordinator_id=coordinator,
+                phase=phase_index,
+                observation_tools=OBSERVATION_TOOL_NAMES,
+            )
+            if error is not None:
+                raise TrajectoryValidationError(
+                    f"Tick {tick}: {error}",
+                    details={"tick": tick, "agent": agent, "expected_phase": phase},
+                )
+
+        partition = getattr(self.validator, "work_partition", None) or {}
+        assignment = partition.get("assignment") or {}
+        known = set(self.validator.initial_state.get("objects") or {}) | set(
+            self.validator.initial_state.get("fixtures") or {}
+        )
+        # The opening proposal proves who owns which work; it need not repeat
+        # every shared destination already stated in the task goal. Require the
+        # first concrete resource in each assigned action (the manipulated
+        # object, fixture, or control anchor), not later support/target IDs.
+        required_by_agent = proposal_grounding_ids(assignment, known)
+        required_ids = {
+            symbol for symbols in required_by_agent.values() for symbol in symbols
+        }
+        proposal = str(
+            (rows[opening_ticks[0]][coordinator].get("args") or {}).get("message")
+            or ""
+        )
+        missing_ids = sorted(
+            symbol for symbol in required_ids
+            if not symbolic_id_mentioned(proposal, symbol)
+        )
+        if missing_ids:
+            proposal_step = self.agent_ids.index(coordinator)
+            raise TrajectoryValidationError(
+                "The coordinator proposal does not ground the generated work "
+                "partition in exact symbolic IDs: " + ", ".join(missing_ids),
+                details={
+                    "tick": opening_ticks[0],
+                    "coordinator": coordinator,
+                    "proposal": proposal,
+                    "missing_ids": missing_ids,
+                    "required_by_agent": required_by_agent,
+                },
+                step=proposal_step,
+            )
+
+        premature = re.compile(
+            r"\b(?:(?:the\s+)?task\s+(?:is\s+)?(?:now\s+)?"
+            r"(?:complete|completed|done|finished)|we(?:'re|\s+are)\s+"
+            r"(?:now\s+)?(?:done|finished))\b",
+            re.IGNORECASE,
+        )
+        for tick, row in enumerate(rows):
+            for agent in self.agent_ids:
+                call = row.get(agent) if isinstance(row, dict) else None
+                if (call or {}).get("tool") != "communicate":
+                    continue
+                message = str(((call or {}).get("args") or {}).get("message") or "")
+                phase = ((call or {}).get("args") or {}).get("coordination_phase")
+                scoped_portion = re.search(
+                    r"\b(?:my|our)\s+(?:assigned\s+)?(?:portion|part|work)\b",
+                    message,
+                    re.IGNORECASE,
+                )
+                if premature.search(message) and not (
+                    phase == "portion_complete" and scoped_portion
+                ):
+                    raise TrajectoryValidationError(
+                        f"Tick {tick} {agent} makes a global completion claim. "
+                        "Only the FSM terminates the global task; communicate "
+                        "only that the agent's own assigned portion is finished.",
+                        details={"tick": tick, "agent": agent, "message": message},
+                    )
+        self._validate_social_only_tails(rows)
+
+    def _validate_social_only_tails(
+        self, rows: Sequence[dict[str, Any]]
+    ) -> None:
+        """Turn a finished agent's filler tail into one status then a real wait."""
+
+        inert = OBSERVATION_TOOL_NAMES | SOCIAL_TOOL_NAMES | WAIT_TOOL_NAMES
+        active_ticks: dict[str, list[int]] = {a: [] for a in self.agent_ids}
+        for tick, row in enumerate(rows):
+            for agent in self.agent_ids:
+                call = row.get(agent) if isinstance(row, dict) else None
+                # An explicit {"state": "blocked"} invocation-grid marker is
+                # not an action. Treating its missing tool (None) as a
+                # non-inert tool made generation and persisted-record replay
+                # disagree after canonicalization removed those markers.
+                if (
+                    isinstance(call, dict)
+                    and call.get("tool")
+                    and call.get("tool") not in inert
+                ):
+                    active_ticks[agent].append(tick)
+        for agent in self.agent_ids:
+            partner = next(a for a in self.agent_ids if a != agent)
+            if not active_ticks[partner]:
+                continue
+            # If the accepted opening plan assigns this agent no physical
+            # work, it has no "portion" to announce as complete.  Its correct
+            # first post-handshake action is to block on the partner's real
+            # outstanding resource.  Requiring a portion_complete message in
+            # this case rejected exactly the efficient one-agent plans that
+            # the canonical prompt permits.
+            if not active_ticks[agent]:
+                tail = [
+                    (tick, rows[tick][agent])
+                    for tick in range(2, len(rows))
+                    if agent in rows[tick]
+                    and isinstance(rows[tick].get(agent), dict)
+                    and rows[tick][agent].get("tool")
+                ]
+                if tail and tail[0][1].get("tool") == _WAIT_TOOL:
+                    continue
+            own_last = max(active_ticks[agent], default=1)
+            partner_last = max(active_ticks[partner])
+            if own_last >= partner_last:
+                continue
+            tail_ticks = [
+                tick for tick in range(max(2, own_last + 1), len(rows))
+                if agent in rows[tick]
+                and isinstance(rows[tick].get(agent), dict)
+                and rows[tick][agent].get("tool")
+            ]
+            status_tick = next(
+                (
+                    tick
+                    for tick in tail_ticks
+                    if rows[tick][agent].get("tool") == "communicate"
+                    and (rows[tick][agent].get("args") or {}).get(
+                        "coordination_phase"
+                    ) == "portion_complete"
+                ),
+                None,
+            )
+            if status_tick is None:
+                if not tail_ticks:
+                    continue  # invocation-grid validation reports the omission
+                first_tick = tail_ticks[0]
+                raise TrajectoryValidationError(
+                    f"After finishing its physical work at tick {own_last}, "
+                    f"{agent} must send one portion_complete message rather "
+                    "than fill the remaining episode with status calls.",
+                    details={
+                        "agent": agent,
+                        "partner": partner,
+                        "own_last_physical_tick": own_last,
+                        "tick": first_tick,
+                    },
+                )
+            # Before portion_complete, permit only necessary release messages.
+            for tick in tail_ticks:
+                if tick >= status_tick:
+                    break
+                call = rows[tick][agent]
+                args = call.get("args") or {}
+                if call.get("tool") != "communicate" or not args.get("releases"):
+                    raise TrajectoryValidationError(
+                        f"After finishing its physical work at tick {own_last}, "
+                        f"{agent} must send one portion_complete message rather "
+                        "than fill the remaining episode with status calls.",
+                        details={
+                            "agent": agent,
+                            "partner": partner,
+                            "own_last_physical_tick": own_last,
+                            "tick": tick,
+                        },
+                    )
+            call = rows[status_tick][agent]
+            args = call.get("args") or {}
+            if partner_last <= status_tick:
+                continue  # partner completes the global goal in this atomic tick
+            wait_tick = status_tick + 1
+            wait_call = rows[wait_tick].get(agent) if wait_tick < len(rows) else None
+            if not isinstance(wait_call, dict) or wait_call.get("tool") != _WAIT_TOOL:
+                raise TrajectoryValidationError(
+                    f"{agent}'s portion_complete message at tick {status_tick} "
+                    "must be followed on the next tick by wait_for_signal on "
+                    "the partner's outstanding real object or fixture.",
+                    details={
+                        "agent": agent,
+                        "partner": partner,
+                        "own_last_physical_tick": own_last,
+                        "tick": status_tick,
+                    },
+                )
+            partition = getattr(self.validator, "work_partition", None) or {}
+            partner_assignment = (partition.get("assignment") or {}).get(partner, [])
+            known = set(self.validator.initial_state.get("objects") or {}) | set(
+                self.validator.initial_state.get("fixtures") or {}
+            )
+            outstanding_ids = {
+                symbol
+                for description in partner_assignment
+                for symbol in known
+                if re.search(
+                    rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])",
+                    description,
+                )
+            }
+            about = str((wait_call.get("args") or {}).get("about") or "")
+            if outstanding_ids and about not in outstanding_ids:
+                raise TrajectoryValidationError(
+                    f"{agent} waits about {about!r}, but the partner's outstanding "
+                    "partition names one of: " + ", ".join(sorted(outstanding_ids)),
+                    details={"agent": agent, "tick": wait_tick, "about": about},
+                )
+
     # -- drop-in validation ------------------------------------------------
+
+    def canonicalize(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        """Return the canonical tick plan plus its derived flat step stream.
+
+        Tick rows, not flattened steps, are the source of truth for live-policy
+        certification. Flattening is deliberately owned here so no caller can
+        erase an omitted-vs-blocked distinction before the FSM sees it.
+        """
+
+        rows = candidate.get("ticks")
+        if not isinstance(rows, list):
+            rows = candidate.get("tick_rows")
+        if not isinstance(rows, list):
+            raise TrajectoryValidationError(
+                "Concurrent live-policy validation requires canonical ticks; "
+                "flat steps alone cannot represent whether an absent agent was blocked."
+            )
+        from data_generation.task_level.tasks.shared.scheduling import (
+            observation_transparent_tick_rows,
+        )
+
+        canonical = dict(candidate)
+        # get_image is serialized as a supervised model call, but live sim
+        # serves it inside the current scheduling cycle.  Project it out before
+        # judging invocation, blocking, release, and completion semantics.
+        rows = observation_transparent_tick_rows(
+            rows,
+            observation_tools=OBSERVATION_TOOL_NAMES,
+        )
+        canonical["tick_rows"] = deepcopy(rows)
+        canonical.pop("ticks", None)
+        self._validate_tick_invocations(canonical)
+
+        clean_rows = []
+        for row in rows:
+            clean_row = {
+                key: deepcopy(value)
+                for key, value in row.items()
+                if value != {"state": "blocked"}
+            }
+            clean_rows.append(clean_row)
+        canonical["tick_rows"] = clean_rows
+        canonical.pop("format", None)
+
+        steps: list[dict[str, Any]] = []
+        for row in clean_rows:
+            if not isinstance(row, dict):
+                continue
+            for agent_id in self.agent_ids:
+                action = row.get(agent_id)
+                if not isinstance(action, dict) or not action.get("tool"):
+                    continue
+                step = deepcopy(action)
+                step["agent"] = agent_id
+                step["step"] = len(steps)
+                steps.append(step)
+        canonical["steps"] = steps
+        self._validate_partition_actions(steps)
+        return canonical
+
+    def _validate_partition_actions(self, steps: Sequence[dict[str, Any]]) -> None:
+        """Use the generation-only partition to certify expert-plan coherence."""
+
+        partition = getattr(self.validator, "work_partition", None) or {}
+        assignment = partition.get("assignment") or {}
+        if not assignment:
+            return
+        initial = self.validator.initial_state
+        known = set(initial.get("objects") or {}) | set(initial.get("fixtures") or {})
+        for fixture in (initial.get("fixtures") or {}).values():
+            known.update((fixture.get("parts") or {}).keys())
+            known.update((fixture.get("controls") or {}).keys())
+
+        expected: dict[str, list[tuple[str, frozenset[str], str]]] = {}
+        for agent, descriptions in assignment.items():
+            parsed = []
+            for description in descriptions:
+                tool, _, _ = description.partition(" ")
+                ids = frozenset(
+                    symbol
+                    for symbol in known
+                    if re.search(
+                        rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])",
+                        description,
+                    )
+                )
+                parsed.append((tool, ids, description))
+            expected[agent] = parsed
+
+        remaining = {agent: list(items) for agent, items in expected.items()}
+        partition_tools = {item[0] for items in expected.values() for item in items}
+        for step in steps:
+            if step.get("tool") not in partition_tools:
+                continue
+            actual_ids = {
+                str(value)
+                for value in (step.get("args") or {}).values()
+                if isinstance(value, str)
+            }
+            agent = step.get("agent")
+            options = remaining.get(agent, [])
+            match = next(
+                (
+                    item for item in options
+                    if item[0] == step.get("tool") and item[1] <= actual_ids
+                ),
+                None,
+            )
+            if match is None:
+                incomplete = next(
+                    (
+                        item for item in options
+                        if item[0] == step.get("tool")
+                        and actual_ids < item[1]
+                    ),
+                    None,
+                )
+                consumed = [
+                    item for item in expected.get(agent, [])
+                    if item not in options
+                ]
+                duplicate = next(
+                    (
+                        item for item in consumed
+                        if item[0] == step.get("tool") and item[1] <= actual_ids
+                    ),
+                    None,
+                )
+                assigned_agent = next(
+                    (
+                        owner
+                        for owner, items in remaining.items()
+                        if owner != agent
+                        and any(
+                            item[0] == step.get("tool")
+                            and item[1] <= actual_ids
+                            for item in items
+                        )
+                    ),
+                    None,
+                )
+                if incomplete is not None:
+                    missing_action_ids = sorted(incomplete[1] - actual_ids)
+                    issue = "missing_ids"
+                    message = (
+                        f"{agent}'s assigned {step.get('tool')} call with "
+                        f"{sorted(actual_ids)} is incomplete; add its missing symbolic "
+                        f"IDs: {missing_action_ids}."
+                    )
+                elif duplicate is not None:
+                    missing_action_ids = []
+                    issue = "duplicate"
+                    message = (
+                        f"{agent} repeats assigned action {duplicate[2]}; remove the "
+                        "duplicate call."
+                    )
+                else:
+                    missing_action_ids = []
+                    issue = "wrong_owner"
+                    message = (
+                        f"{agent} performs {step.get('tool')} with {sorted(actual_ids)}, "
+                        "which is not assigned to it by the generation work partition."
+                    )
+                raise TrajectoryValidationError(
+                    message,
+                    details={
+                        "agent": agent,
+                        "step": step.get("step"),
+                        "tool": step.get("tool"),
+                        "actual_ids": sorted(actual_ids),
+                        "action_issue": issue,
+                        "missing_action_ids": missing_action_ids,
+                        "assigned_actions": [item[2] for item in options],
+                        "assigned_agent": assigned_agent,
+                    },
+                )
+            options.remove(match)
+        missing = {
+            agent: [item[2] for item in items]
+            for agent, items in remaining.items()
+            if items
+        }
+        if missing:
+            raise TrajectoryValidationError(
+                "Trajectory does not perform every action in its generation "
+                f"work partition: {missing}",
+                details={"missing_partition_actions": missing},
+            )
+
+    def validate_flat_legacy(
+        self,
+        candidate: dict[str, Any],
+        *,
+        models: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        """Validate a legacy flat stream without claiming live-policy parity."""
+
+        return self._validate_canonical(
+            candidate, models=models, live_policy_certified=False
+        )
 
     def validate(
         self,
@@ -741,6 +1607,20 @@ class ConcurrentTaskValidator:
         deliberately configures LOCK_STEP alone -- see `__init__`. The reported
         final state comes from LOCK_STEP, the regime with exactly one schedule.
         """
+
+        candidate = self.canonicalize(candidate)
+        return self._validate_canonical(
+            candidate, models=models, live_policy_certified=True
+        )
+
+    def _validate_canonical(
+        self,
+        candidate: dict[str, Any],
+        *,
+        models: Sequence[str] | None = None,
+        live_policy_certified: bool,
+    ) -> dict[str, Any]:
+        """Validate an already canonicalized plan."""
 
         models = tuple(models) if models is not None else self.models
         replays = {model: self.replay(candidate, model=model) for model in models}
@@ -782,7 +1662,11 @@ class ConcurrentTaskValidator:
             if run.goal_at is None:
                 raise UnsatisfiedGoalSemanticValidationError(
                     f"Trajectory never satisfied the {self.composite_task} goal "
-                    f"state under the {model} schedule."
+                    f"state under the {model} schedule.",
+                    details={
+                        "model": model,
+                        **self.validator.goal_state_diagnostics(run.runtime_state),
+                    },
                 )
 
         validator = self.validator
@@ -790,9 +1674,26 @@ class ConcurrentTaskValidator:
         steps = validator._normalize_steps(candidate.get("steps"))
         return {
             "is_valid": True,
-            "checks": list(validator._all_checks) + ["concurrent_replay"],
+            "validator_contract_version": VALIDATOR_CONTRACT_VERSION,
+            "live_policy_certified": live_policy_certified,
+            "checks": list(validator._all_checks) + [
+                "concurrent_replay",
+                (
+                    "canonical_tick_invocations"
+                    if live_policy_certified
+                    else "legacy_flat_stream_only"
+                ),
+            ],
             "final_state": validator._build_final_state(primary.runtime_state),
-            "normalized_candidate": {"agents": agents, "steps": steps},
+            "normalized_candidate": {
+                "agents": agents,
+                "steps": steps,
+                **(
+                    {"tick_rows": deepcopy(candidate["tick_rows"])}
+                    if isinstance(candidate.get("tick_rows"), list)
+                    else {}
+                ),
+            },
             "signature": validator.trajectory_signature(
                 {"agents": agents, "steps": steps}
             ),

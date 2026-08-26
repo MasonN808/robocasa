@@ -836,7 +836,8 @@ def _goal_has_location_constraint(
         ):
             return True
         if (
-            condition.get("kind") == "object_count_at_location"
+            condition.get("kind")
+            in {"object_count_at_location", "object_count_at_locations"}
             and object_id in (condition.get("object_ids") or [])
         ):
             return True
@@ -3090,7 +3091,7 @@ def _rewrite_contradictory_source_location_goals(
     return rewritten_goal_conditions
 
 
-def _add_zero_count_goals_for_either_or_rules(
+def _merge_either_or_count_goals(
     *,
     initial_state: dict[str, Any] | None,
     goal_conditions: list[dict[str, Any]],
@@ -3144,22 +3145,26 @@ def _add_zero_count_goals_for_either_or_rules(
         if len(alternate_locations) != 1:
             continue
         alternate_location = alternate_locations[0]
-        if any(
-            isinstance(existing_condition, dict)
-            and existing_condition.get("kind") == "object_count_at_location"
-            and existing_condition.get("object_ids") == object_ids
-            and existing_condition.get("location") == alternate_location
+        replacement = {
+            "kind": "object_count_at_locations",
+            "object_ids": list(object_ids),
+            "locations": [location, alternate_location],
+            "count": 1,
+        }
+        condition_index = normalized_goal_conditions.index(condition)
+        normalized_goal_conditions[condition_index] = replacement
+        normalized_goal_conditions = [
+            existing_condition
             for existing_condition in normalized_goal_conditions
-        ):
-            continue
-        normalized_goal_conditions.append(
-            {
-                "kind": "object_count_at_location",
-                "object_ids": list(object_ids),
-                "location": alternate_location,
-                "count": 0,
-            }
-        )
+            if not (
+                isinstance(existing_condition, dict)
+                and existing_condition is not replacement
+                and existing_condition.get("kind") == "object_count_at_location"
+                and existing_condition.get("object_ids") == object_ids
+                and existing_condition.get("location") == alternate_location
+                and existing_condition.get("count") == 0
+            )
+        ]
     return normalized_goal_conditions
 
 
@@ -4093,7 +4098,7 @@ def _postprocess_spec_payload(
             trajectory=trajectory,
             goal_conditions=normalized_goal_conditions,
         )
-        normalized_goal_conditions = _add_zero_count_goals_for_either_or_rules(
+        normalized_goal_conditions = _merge_either_or_count_goals(
             initial_state=initial_state if isinstance(initial_state, dict) else None,
             goal_conditions=normalized_goal_conditions,
             extra_execution_rules=normalized_payload.get("extra_execution_rules") or (),

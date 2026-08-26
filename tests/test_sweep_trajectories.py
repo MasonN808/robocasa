@@ -986,6 +986,8 @@ class SweepTrajectoryWorkerTests(unittest.TestCase):
         self.assertIsNot(first, third)
         self.assertIsNot(third, fourth)
         self.assertEqual(len(created_executors), 3)
+        self.assertEqual(first.kwargs["map_dpi"], 60)
+        self.assertEqual(first.kwargs["map_renderer"], "raster")
         self.assertTrue(first.closed)
         self.assertTrue(third.closed)
         self.assertFalse(fourth.closed)
@@ -1044,6 +1046,42 @@ class SweepTrajectoryWorkerTests(unittest.TestCase):
         self.assertEqual(result["steps_succeeded"], 1)
         self.assertEqual(result["steps_total"], 1)
         self.assertEqual(result["images_rendered"], 1)
+
+    def test_cached_executor_key_includes_map_rendering_contract(self) -> None:
+        created_executors = []
+
+        class FakeCachedExecutor:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+                self.closed = False
+                created_executors.append(self)
+
+            def close(self) -> None:
+                self.closed = True
+
+        common = dict(
+            task_name="PrepareCoffee",
+            robots=2,
+            layout=11,
+            style=34,
+            seed=42,
+            placement="grid",
+            cell_size=0.05,
+            robot_spawn="trajectory",
+            gl_backend="egl",
+            executor_factory=FakeCachedExecutor,
+        )
+        raster = sweep_trajectories_script._get_or_create_cached_executor(**common)
+        legacy = sweep_trajectories_script._get_or_create_cached_executor(
+            **common,
+            map_dpi=300,
+            map_renderer="legacy",
+        )
+
+        self.assertIsNot(raster, legacy)
+        self.assertTrue(raster.closed)
+        self.assertEqual(legacy.kwargs["map_dpi"], 300)
+        self.assertEqual(legacy.kwargs["map_renderer"], "legacy")
 
 
 class SweepTrajectoryShardTests(unittest.TestCase):

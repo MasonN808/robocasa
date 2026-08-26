@@ -58,6 +58,35 @@ class SelectPartitionTests(unittest.TestCase):
         self.assertIsNone(select_partition([], 0))
         self.assertIsNone(select_partition([{"labels": "0", "weight": 0.0}], 0))
 
+    def test_none_policy_disables_ownership_partition(self):
+        self.assertIsNone(select_partition(PARTITIONS, 0, policy="none"))
+
+    def test_balanced_local_rejects_degenerate_and_prefers_aligned_starts(self):
+        initial_state = {
+            "agents": {
+                "agent_0": {"location": "coffee_machine"},
+                "agent_1": {"location": "cab"},
+            },
+            "fixtures": {
+                "cab": {"fixture_type": "cabinet"},
+                "coffee_machine": {"fixture_type": "coffee_machine"},
+            },
+            "objects": {"mug": {"location": "cab"}},
+        }
+        work = [
+            {"tool": "pick_up_object", "args": {"object_id": "mug", "source_id": "cab"}},
+            {"tool": "place_under", "args": {"object_id": "mug", "reference_fixture_id": "coffee_machine"}},
+            {"tool": "press_button", "args": {"target_id": "coffee_machine", "control_id": "start_button"}},
+        ]
+        selected = select_partition(
+            PARTITIONS,
+            0,
+            policy="balanced_local",
+            initial_state=initial_state,
+            work_sequence=work,
+        )
+        self.assertEqual(selected["labels"], "110")
+
 
 class PartitionRuleTests(unittest.TestCase):
     def test_rules_name_each_agent_and_its_work(self):
@@ -78,6 +107,22 @@ class PartitionRuleTests(unittest.TestCase):
 
     def test_no_partition_produces_no_rules(self):
         self.assertEqual(partition_rules(None, ("agent_0", "agent_1")), ())
+
+    def test_bowl_loading_precedence_uses_sampled_owners(self):
+        partition = {
+            "assignment": {
+                "agent_0": ["pick_up_object bowl"],
+                "agent_1": [
+                    "place_in_receptacle toaster_oven_bread -> bowl"
+                ],
+            }
+        }
+        text = "\n".join(partition_rules(partition, ("agent_0", "agent_1")))
+        self.assertIn(
+            "agent_1 places toaster_oven_bread into bowl while bowl rests on "
+            "counter; only afterward may agent_0 pick up bowl",
+            text,
+        )
 
 
 class DegenerateTests(unittest.TestCase):

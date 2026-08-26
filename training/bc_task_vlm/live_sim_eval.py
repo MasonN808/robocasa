@@ -45,8 +45,17 @@ from typing import Any
 from urllib import error as urllib_error, request as urllib_request
 
 from training.bc_task_vlm.prompting import (
+    DEFAULT_PARTIAL_STEP_INDEX_MODE,
+    PROMPT_CONTRACT_VERSION,
     build_messages,
+    build_partial_user_prompt,
     build_user_prompt,
+    normalize_partial_history_steps,
+)
+from training.bc_task_vlm.communication_profiles import (
+    COMMUNICATION_MODES,
+    apply_communication_profile,
+    get_communication_profile,
 )
 from training.bc_task_vlm.schema_utils import (
     augment_tool_specs_with_get_image,
@@ -61,6 +70,15 @@ from training.bc_task_vlm.tool_calling import (
     parse_first_qwen_tool_call,
     pop_agent_argument,
     tool_call_to_single_step_payload,
+)
+from data_generation.task_level.subatomic_tool_specs import build_model_tool_specs
+from data_generation.task_level.tasks.shared.concurrent_fsm import (
+    contention_resources,
+    is_exclusive_fixture,
+    simultaneous_contentions,
+)
+from data_generation.task_level.tasks.shared.workspace_semantics import (
+    canonical_agent_workspace,
 )
 
 # Expert view-selection rule, measured over 162 trajectories (~3,300 calls):
@@ -233,53 +251,47 @@ def _check_pruned_organize_condiments_success(
 # ---------------------------------------------------------------------------
 
 WAIT_TOOL_NAME = "wait_for_signal"
-REJECTION_MODE_SILENT_RETRY = "silent-retry"
 REJECTION_MODE_REPORT_FAILED = "report-failed"
-RESOURCE_LOCKS_NONE = "none"
-RESOURCE_LOCKS_OBJECTS = "objects"
-RESOURCE_LOCKS_FIXTURES = "fixtures"
-
-# Tools that mutate nothing and therefore claim no shared resource.
-_NON_CLAIMING_TOOLS = frozenset({"communicate", "get_image", TASK_COMPLETE_TOOL_NAME})
-# Arg names that name a fixture vs a movable object, used to derive claims
-# without inventing a new schema.
-# Movable objects an agent would be holding.
-_OBJECT_ARG_NAMES = ("object_id", "reference_object_id")
-# Places an agent must occupy or reach into. `source_id` belongs here, not with
-# objects: pick_up_object(source_id=...) names the fixture being reached into
-# (fridge/cabinet/counter), so it must collide with a navigate to that fixture.
-_LOCATION_ARG_NAMES = (
-    "fixture_id",
-    "source_id",
-    "target_id",
-    "receptacle_id",
-    "reference_fixture_id",
-)
 
 
-def resource_claims(step: dict[str, Any], *, mode: str) -> frozenset[str]:
-    """Resources a proposed tool call would hold, derived from its arguments.
+def _prioritize_incumbent_fixture_users(
+    agent_ids: list[str],
+    proposal_by_agent: dict[str, dict[str, Any]],
+    runtime_state: Any,
+    initial_state: dict[str, Any],
+) -> list[str]:
+    """Put valid users already at an exclusive fixture before new entrants.
 
-    `communicate`/`get_image` are read-only and claim nothing, so two agents may
-    always look and talk simultaneously.
+    Pairwise contention arbitration is order-sensitive by design: the first
+    compatible proposal wins.  Alphabetical ordering can therefore reject an
+    incumbent's manipulation when a lower-numbered agent simultaneously tries
+    to enter the incumbent's workspace.  The occupancy gate later rejects the
+    entrant too, producing a false reject-both livelock.  Stable sorting keeps
+    the configured tie-break order within each class while ensuring the
+    beginning-of-tick occupant gets first claim on its existing workspace.
     """
 
-    if mode == RESOURCE_LOCKS_NONE:
-        return frozenset()
-    tool = step.get("tool")
-    if tool in _NON_CLAIMING_TOOLS:
-        return frozenset()
-    args = step.get("args") or {}
-    # Flat namespace: the same entity named through different argument slots
-    # must collide, so claims are bare IDs rather than typed keys.
-    claims: set[str] = {
-        str(args[name]) for name in _OBJECT_ARG_NAMES if args.get(name)
-    }
-    if mode == RESOURCE_LOCKS_FIXTURES:
-        claims.update(
-            str(args[name]) for name in _LOCATION_ARG_NAMES if args.get(name)
+    agents = getattr(runtime_state, "agents", {})
+
+    def is_incumbent(agent_id: str) -> bool:
+        agent_state = agents.get(agent_id)
+        if agent_state is None:
+            return False
+        current_workspace = canonical_agent_workspace(
+            initial_state, getattr(agent_state, "location", None)
         )
-    return frozenset(claims)
+        for resource in contention_resources(
+            proposal_by_agent[agent_id], initial_state
+        ):
+            if not is_exclusive_fixture(resource, initial_state):
+                continue
+            if current_workspace == canonical_agent_workspace(
+                initial_state, resource
+            ):
+                return True
+        return False
+
+    return sorted(agent_ids, key=lambda agent_id: not is_incumbent(agent_id))
 
 
 def _sim_clock(session: "SimSession") -> float | None:
@@ -386,16 +398,16 @@ _LENIENT_WAIT_DISCHARGE = False
 def _releases_awaited(step: dict[str, Any], waiting_for: dict[str, Any]) -> bool:
     """True when this message hands over the thing the waiter is waiting for."""
 
-    if _LENIENT_WAIT_DISCHARGE:
-        return True
+    from data_generation.task_level.tasks.shared.scheduling import (
+        message_releases_wait,
+    )
+
     about = str((waiting_for or {}).get("about") or "").strip()
     if not about:
-        # Nothing was named, so nothing specific can be handed over; fall back
-        # to the old behaviour rather than waiting forever.
         return True
-    released = (step.get("args") or {}).get("releases") or []
-    released = [released] if isinstance(released, str) else list(released)
-    return about in {str(value).strip() for value in released}
+    return message_releases_wait(
+        step, waiting_for, lenient=_LENIENT_WAIT_DISCHARGE
+    )
 
 
 class AgentRuntime:
@@ -430,21 +442,6 @@ class AgentRuntime:
         """Appends to this agent's private history (own act or delivered msg)."""
 
         self.private_history.append(deepcopy(step))
-        if (
-            self.waiting_for is not None
-            and step.get("tool") == "communicate"
-            and step.get("agent") != self.agent_id
-            and _releases_awaited(step, self.waiting_for)
-        ):
-            self.waiting_for = None
-            # Resume at the moment of release. `ready_at` still holds the stale
-            # time the wait WOULD have expired, and the scheduler's catch-up
-            # cannot repair it: a freshly woken agent is exactly the one that
-            # sets the next clock minimum, so `ready_at < clock` is never true
-            # for it. It then acts in the past -- traj_000004 of
-            # arrange_bread_bowl released at t=10.5 and resumed at t=9.25.
-            if clock is not None and self.ready_at < clock:
-                self.ready_at = clock
 
     def take_observation(self) -> tuple[list[str], list[str]]:
         """Consume-once: hand over the pending observation and clear it."""
@@ -478,6 +475,20 @@ def _routing_views_for_step(step_index: int) -> tuple[str, ...]:
     if step_index in OPENING_COMMUNICATION_STEP_INDICES:
         return OVERHEAD_VIEWS
     return ROUTER_VIEWS
+
+
+def _budget_reference_action_count(trajectory: dict[str, Any]) -> int:
+    """Return a nonzero action-length reference without requiring an expert carrier."""
+
+    expert_count = sum(
+        step.get("tool") != "get_image" for step in trajectory.get("steps", [])
+    )
+    if expert_count:
+        return expert_count
+    configured = trajectory.get("evaluation_reference_action_count")
+    if isinstance(configured, int) and configured > 0:
+        return configured
+    return 16
 
 
 # ---------------------------------------------------------------------------
@@ -639,14 +650,32 @@ class FsmMirror:
     template. Legality failures are returned, never raised.
     """
 
-    def __init__(self, *, composite_task: str, trajectory: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        *,
+        composite_task: str,
+        trajectory: dict[str, Any],
+        communication_mode: str = "full",
+    ) -> None:
         from data_generation.task_level.tasks.specs import load_task_spec
         from data_generation.task_level.tasks.specs.runtime import (
             SpecDrivenTaskValidator,
         )
 
         spec = load_task_spec(composite_task)
-        self.validator = SpecDrivenTaskValidator(spec)
+        # The policy sees the shared global tool interface. Its calls must not
+        # then be rejected merely because an older task spec omitted an
+        # otherwise valid, state-compatible tool. Generic FSM preconditions and
+        # task-specific preconditions still apply, and the task goal is
+        # unchanged.
+        profile = get_communication_profile(communication_mode)
+        model_tool_specs = apply_communication_profile(
+            build_model_tool_specs(include_get_image=True), communication_mode
+        )
+        self.validator = SpecDrivenTaskValidator(
+            spec,
+            allowed_tool_specs_override=model_tool_specs,
+        )
         initial_state = _canonical_symbolic_initial_state(
             task_spec=spec,
             trajectory=trajectory,
@@ -661,9 +690,74 @@ class FsmMirror:
             ConcurrentTaskValidator,
         )
 
-        self._concurrent = ConcurrentTaskValidator(self.validator)
+        self._concurrent = ConcurrentTaskValidator(
+            self.validator,
+            require_initial_communication=profile.require_initial_communication,
+        )
         agents = self.validator._normalize_agents(trajectory.get("agents"))
         self.runtime_state = self.validator._build_runtime_state(agents)
+        self.goal_satisfied = self.validator.is_goal_state_satisfied(
+            self.runtime_state
+        )
+
+    def atomic_handover_conflicts(
+        self, calls: list[dict[str, Any]]
+    ) -> dict[str, frozenset[str]]:
+        """Apply the shared beginning-of-tick exclusive-handover rule."""
+
+        from data_generation.task_level.tasks.shared.concurrent_fsm import (
+            atomic_handover_conflicts,
+        )
+
+        return atomic_handover_conflicts(
+            calls, self.runtime_state, self.validator.initial_state
+        )
+
+    def validate_cycle_preconditions(
+        self, calls: list[dict[str, Any]]
+    ) -> dict[str, str]:
+        """Validate a complete proposal batch against one frozen state."""
+
+        errors = self._concurrent.validate_cycle_preconditions(
+            calls, self.runtime_state
+        )
+        return {
+            agent_id: f"{type(exc).__name__}: {exc}"
+            for agent_id, exc in errors.items()
+        }
+
+    def validate_wait_call(self, step: dict[str, Any]) -> str | None:
+        """Validate the immediately knowable wait contract in live rollout.
+
+        Offline validation can additionally prove that a future matching
+        release exists. Live rollout cannot inspect the future, but it must
+        still reject malformed callers and non-symbolic release keys before
+        handing the call to the scheduler.
+        """
+
+        if WAIT_TOOL_NAME not in self.validator.allowed_tool_specs:
+            return f"UnsupportedToolSemanticValidationError: Tool {WAIT_TOOL_NAME} is not allowed."
+        args = step.get("args") or {}
+        from_agent = args.get("from")
+        about = args.get("about")
+        if set(args) != {"from", "about"}:
+            return "WaitSignalSemanticValidationError: wait_for_signal args may only contain from and about."
+        if from_agent not in AGENT_IDS or from_agent == step.get("agent"):
+            return "WaitSignalSemanticValidationError: wait_for_signal requires from to reference the other agent."
+        known = set(self.validator.initial_state.get("objects") or {}) | set(
+            self.validator.initial_state.get("fixtures") or {}
+        )
+        if not isinstance(about, str) or not about.strip() or (
+            known and about.strip() not in known
+        ):
+            return "WaitSignalSemanticValidationError: wait_for_signal about must be an exact symbolic object or fixture ID."
+        step["args"] = {"from": from_agent, "about": about.strip()}
+        return None
+
+    def commit(self, step: dict[str, Any]) -> None:
+        """Commit a step whose preconditions passed the cycle-level check."""
+
+        self._concurrent._commit(step, self.runtime_state)
         self.goal_satisfied = self.validator.is_goal_state_satisfied(
             self.runtime_state
         )
@@ -912,6 +1006,11 @@ class HfPolicy:
             args.model_name_or_path, **model_kwargs
         )
         if args.adapter_path:
+            from training.bc_task_vlm.peft_compat import (
+                ensure_peft_tensor_parallel_import_compatibility,
+            )
+
+            ensure_peft_tensor_parallel_import_compatibility()
             from peft import PeftModel
 
             self.model = PeftModel.from_pretrained(
@@ -962,6 +1061,10 @@ class VllmPolicy:
         self.request_timeout = args.vllm_request_timeout
         self.max_new_tokens = args.max_new_tokens
         self.seed = args.seed
+        self.temperature = float(getattr(args, "vllm_temperature", 0.0))
+        self.top_p = getattr(args, "vllm_top_p", None)
+        self.top_k = getattr(args, "vllm_top_k", None)
+        self.enable_thinking = bool(getattr(args, "enable_thinking", False))
         self.last_usage: dict[str, Any] = {}
 
     @staticmethod
@@ -1014,12 +1117,16 @@ class VllmPolicy:
             "messages": self._request_messages(feature),
             "tools": feature["tool_schemas"],
             "tool_choice": "auto",
-            "temperature": 0,
+            "temperature": self.temperature,
             "max_tokens": self.max_new_tokens,
             "seed": self.seed,
             "stream": False,
-            "chat_template_kwargs": {"enable_thinking": False},
+            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
         }
+        if self.top_p is not None:
+            payload["top_p"] = float(self.top_p)
+        if self.top_k is not None:
+            payload["top_k"] = int(self.top_k)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -1050,6 +1157,15 @@ class VllmPolicy:
                 f"Malformed vLLM response: {response_payload!r}"
             ) from exc
         tool_calls = message.get("tool_calls") or []
+        reasoning_text = ""
+        reasoning = message.get("reasoning_content")
+        if isinstance(reasoning, str):
+            reasoning_text = reasoning.strip()
+        elif tool_calls and isinstance(message.get("content"), str):
+            # Rationale-supervised Instruct adapters may emit their learned
+            # <think> content here even though the base model has no native
+            # enable_thinking switch. Keep it only as private diagnostics.
+            reasoning_text = message["content"].strip()
         if tool_calls:
             function = tool_calls[0].get("function") or {}
             arguments = function.get("arguments", {})
@@ -1057,7 +1173,7 @@ class VllmPolicy:
                 arguments = json.loads(arguments)
             if not isinstance(arguments, dict):
                 raise RuntimeError("vLLM tool-call arguments are not an object.")
-            return (
+            decoded = (
                 "<tool_call>\n"
                 + json.dumps(
                     {
@@ -1068,6 +1184,7 @@ class VllmPolicy:
                 )
                 + "\n</tool_call>"
             )
+            return _GeneratedPolicyText(decoded, reasoning_text=reasoning_text)
         content = message.get("content")
         if isinstance(content, str):
             return content
@@ -1080,6 +1197,15 @@ class VllmPolicy:
         raise RuntimeError(
             f"vLLM response contained no text or tool call: {message!r}"
         )
+
+
+class _GeneratedPolicyText(str):
+    """Decoded action plus private, non-contextual model diagnostics."""
+
+    def __new__(cls, value: str, *, reasoning_text: str = ""):
+        instance = super().__new__(cls, value)
+        instance.reasoning_text = reasoning_text
+        return instance
 
 
 class GeminiPolicy:
@@ -1265,6 +1391,57 @@ def _uses_model_generation(policy: Any) -> bool:
     return callable(getattr(policy, "generate", None))
 
 
+class DaggerPrefixPolicy:
+    """Replay an accepted correction prefix, then delegate to the SFT model."""
+
+    def __init__(self, delegate: Any, row: dict[str, Any]) -> None:
+        self.delegate = delegate
+        diagnostic = row["diagnostic"]
+        correction = row["expert_review"]["correction"]
+        branch = int(correction["branch_before_event_position"])
+        calls = []
+        for event in diagnostic["full_trajectory"][:branch]:
+            if event.get("legal") is True and event.get("executed") is True:
+                proposal = event.get("proposal") or {}
+                if proposal.get("tool"):
+                    calls.append((str(event.get("agent")), deepcopy(proposal)))
+        for tick in [*(correction.get("resync_ticks") or []), *(correction.get("post_correction_ticks") or [])]:
+            for agent in AGENT_IDS:
+                value = tick.get(f"{agent}_call_json")
+                try:
+                    call = json.loads(value)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if call != {"state": "blocked"}:
+                    calls.append((agent, call))
+        self.queues = {agent: [] for agent in AGENT_IDS}
+        for agent, call in calls:
+            if agent in self.queues:
+                # The stored diagnostic/correction representation uses
+                # ``tool``/``args``.  The Qwen tool-call parser consumes the
+                # OpenAI-style ``name``/``arguments`` body inside
+                # <tool_call>.  Normalize here so replayed expert calls pass
+                # through exactly the same parser as model-generated calls.
+                call = {
+                    "name": call.get("name") or call.get("tool"),
+                    "arguments": call.get("arguments") or call.get("args") or {},
+                }
+                self.queues[agent].append(call)
+        # Replaying the already accepted learner prefix and expert correction
+        # reconstructs the branch state; it is not new continuation work.  The
+        # live loop uses this immutable count to give the delegate its normal
+        # action budget after replay has finished.
+        self.replay_call_count = sum(len(queue) for queue in self.queues.values())
+
+    def generate(self, feature: dict[str, Any]) -> str:
+        agent = str(feature.get("agent_id") or "")
+        queue = self.queues.get(agent) or []
+        if queue:
+            call = queue.pop(0)
+            return "<tool_call>\n" + json.dumps(call, sort_keys=True) + "\n</tool_call>"
+        return self.delegate.generate(feature)
+
+
 # ---------------------------------------------------------------------------
 # The live loop for one trajectory
 # ---------------------------------------------------------------------------
@@ -1295,23 +1472,40 @@ def run_trajectory(
         get_image_observation_mode
         == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED
     )
-    tool_specs = augment_tool_specs_for_agent_prediction(
-        task_metadata.allowed_tool_specs,
-        include_get_image=train_get_image,
-        include_task_complete=bool(
-            getattr(args, "predict_task_complete", False)
+    communication_mode = getattr(args, "communication_mode", "full")
+    tool_specs = apply_communication_profile(
+        augment_tool_specs_for_agent_prediction(
+            task_metadata.allowed_tool_specs,
+            include_get_image=train_get_image,
+            include_task_complete=bool(
+                getattr(args, "predict_task_complete", False)
+            ),
         ),
+        communication_mode,
+    )
+    model_tool_specs = apply_communication_profile(
+        build_model_tool_specs(
+            include_get_image=train_get_image,
+            include_task_complete=bool(
+                getattr(args, "predict_task_complete", False)
+            ),
+        ),
+        communication_mode,
     )
     tool_schemas = build_tool_schemas(
         agent_ids=AGENT_IDS,
-        allowed_tool_specs=tool_specs,
+        allowed_tool_specs=model_tool_specs,
         include_agent_param=True,
     )
     adapter, adapted = session.start_trajectory(trajectory)
     # Simulator-adapted IDs are concrete scene names. The FSM keeps the
     # trajectory's symbolic state and normalizes legacy symbols to the current
     # verified task spec inside FsmMirror.
-    mirror = FsmMirror(composite_task=composite_task, trajectory=trajectory)
+    mirror = FsmMirror(
+        composite_task=composite_task,
+        trajectory=trajectory,
+        communication_mode=communication_mode,
+    )
     _register_canonical_fixture_aliases(adapter, trajectory)
     if frames_dir is not None:
         session.executor.save_scene_frames(str(frames_dir), prefix="step_-001")
@@ -1320,8 +1514,9 @@ def run_trajectory(
         s for s in trajectory["steps"] if s.get("tool") != "get_image"
     ]
     budget_multiplier = 2 if train_get_image else 1
+    budget_reference_steps = _budget_reference_action_count(trajectory)
     step_budget = max(
-        4, int(len(expert_action_steps) * args.step_budget_factor * budget_multiplier)
+        4, int(budget_reference_steps * args.step_budget_factor * budget_multiplier)
     )
     is_model_policy = _uses_model_generation(policy)
 
@@ -1376,6 +1571,8 @@ def run_trajectory(
             termination = "policy_exhausted"
             break
 
+        private_reasoning = str(proposal.pop("_private_reasoning", "") or "")
+
         record: dict[str, Any] = {
             "step_index": step_index,
             "proposal": deepcopy(proposal),
@@ -1384,6 +1581,7 @@ def run_trajectory(
             "observation_agent": (
                 proposal_observation_agent if train_get_image else None
             ),
+            "private_reasoning": private_reasoning or None,
         }
         if "error" in proposal:
             # Unparseable model output: no-op with feedback.
@@ -1603,6 +1801,14 @@ def run_trajectory(
 
     native, native_error = session.native_success()
     fsm_goal = mirror.goal_satisfied
+    first_rejection = next(
+        (
+            record for record in records
+            if record.get("legal") is False or record.get("sim_success") is False
+        ),
+        None,
+    )
+    had_rejection = first_rejection is not None
     return {
         "task_name": task_name,
         "composite_task": composite_task,
@@ -1624,6 +1830,14 @@ def run_trajectory(
         "native_success": native,
         "native_error": native_error,
         "fsm_goal_satisfied": fsm_goal,
+        "had_rejection": had_rejection,
+        "first_rejection": deepcopy(first_rejection),
+        "fsm_success_if_terminate_on_first_rejection": bool(
+            fsm_goal and not had_rejection
+        ),
+        "native_success_if_terminate_on_first_rejection": bool(
+            native and not had_rejection
+        ),
         "partial_goal_fraction": mirror.partial_goal_fraction(),
         "step_efficiency_ratio": (
             len(records) / len(expert_action_steps) if expert_action_steps else None
@@ -1633,6 +1847,30 @@ def run_trajectory(
         ],
         "steps": records,
     }
+
+
+def _opening_protocol_error(
+    *,
+    agent_id: str,
+    proposal: dict[str, Any],
+    coordinator_id: str | None,
+    phase: int,
+) -> str | None:
+    """Return why a live proposal violates the certified opening handshake."""
+
+    if "error" in proposal:
+        return None
+    from data_generation.task_level.tasks.shared.scheduling import (
+        opening_protocol_error,
+    )
+
+    return opening_protocol_error(
+        agent_id=agent_id,
+        call=proposal,
+        agent_ids=AGENT_IDS,
+        coordinator_id=coordinator_id,
+        phase=phase,
+    )
 
 
 def run_trajectory_partial(
@@ -1657,14 +1895,26 @@ def run_trajectory_partial(
     task_metadata = get_task_metadata(task_name)
     # Partial v3 supervises get_image with a FIXED caller, so the tool set gains
     # get_image but never task_complete or the agent argument.
-    tool_specs = augment_tool_specs_with_get_image(task_metadata.allowed_tool_specs)
+    communication_mode = getattr(args, "communication_mode", "full")
+    communication_profile = get_communication_profile(communication_mode)
+    tool_specs = apply_communication_profile(
+        augment_tool_specs_with_get_image(task_metadata.allowed_tool_specs),
+        communication_mode,
+    )
+    model_tool_specs = apply_communication_profile(
+        build_model_tool_specs(include_get_image=True), communication_mode
+    )
     tool_schemas = build_tool_schemas(
         agent_ids=AGENT_IDS,
-        allowed_tool_specs=tool_specs,
+        allowed_tool_specs=model_tool_specs,
         include_agent_param=False,
     )
     adapter, adapted = session.start_trajectory(trajectory)
-    mirror = FsmMirror(composite_task=composite_task, trajectory=trajectory)
+    mirror = FsmMirror(
+        composite_task=composite_task,
+        trajectory=trajectory,
+        communication_mode=communication_mode,
+    )
     _register_canonical_fixture_aliases(adapter, trajectory)
     if frames_dir is not None:
         session.executor.save_scene_frames(str(frames_dir), prefix="step_-001")
@@ -1672,11 +1922,14 @@ def run_trajectory_partial(
     expert_action_steps = [
         s for s in trajectory["steps"] if s.get("tool") != "get_image"
     ]
-    step_budget = max(4, int(len(expert_action_steps) * args.step_budget_factor * 2))
-    lock_mode = getattr(args, "resource_locks", RESOURCE_LOCKS_FIXTURES)
+    budget_reference_steps = _budget_reference_action_count(trajectory)
+    continuation_step_budget = max(
+        4, int(budget_reference_steps * args.step_budget_factor * 2)
+    )
+    replay_allowance = int(getattr(policy, "replay_call_count", 0))
+    step_budget = continuation_step_budget + replay_allowance
     lock_priority = getattr(args, "conflict_priority", "agent-order")
-    rejection_mode = getattr(args, "rejection_mode", REJECTION_MODE_SILENT_RETRY)
-    max_silent = int(getattr(args, "max_silent_retries", 3))
+    rejection_mode = getattr(args, "rejection_mode", REJECTION_MODE_REPORT_FAILED)
     multiplier = float(getattr(args, "duration_multiplier", 1.0))
     global _DURATION_JITTER, _DURATION_RNG, _UNIFORM_DURATIONS
     global _LENIENT_WAIT_DISCHARGE
@@ -1700,6 +1953,9 @@ def run_trajectory_partial(
     )
 
     agents = {aid: AgentRuntime(aid) for aid in AGENT_IDS}
+    from data_generation.task_level.tasks.shared.scheduling import ConcurrentScheduler
+
+    scheduler = ConcurrentScheduler(AGENT_IDS, states=agents)
     is_model_policy = _uses_model_generation(policy)
     # Non-model policies (oracle/degenerate) replay a JOINT expert sequence, but
     # a per-agent scheduler asks a specific agent what it wants to do. Split the
@@ -1742,8 +1998,12 @@ def run_trajectory_partial(
     max_consecutive_waits = int(getattr(args, 'max_consecutive_waits', 3))
     max_free_observations = int(getattr(args, "max_free_observations", 4))
     observation_caps = 0
-    escalations = 0
-    silent_resolutions = 0
+    coordinator_id = (
+        trajectory.get("coordinator_id")
+        if communication_profile.require_opening_protocol
+        else None
+    )
+    opening_phase = 0
 
     # Concurrent replay lets each agent advance its own stream under the timing
     # scheduler, the regime a model actually meets at eval. It is only sound
@@ -1788,7 +2048,13 @@ def run_trajectory_partial(
         )
         return proposal, tuple(view_names) if view_names else None
 
-    while turn_index < step_budget:
+    # Productive work is bounded by ``step_budget``. Model proposals also need
+    # an independent hard bound: rejected calls, capped waits, and other
+    # nonproductive proposals may leave ``turn_index`` unchanged. The counters
+    # existed previously but were never updated or checked, allowing one
+    # pathological trajectory to generate forever (jobs 284515/284516).
+    max_proposals = step_budget + max_rejected
+    while turn_index < step_budget and proposal_index < max_proposals:
         if not is_model_policy and not concurrent_replay:
             # Replay follows the recorded joint order; the timing scheduler is
             # bypassed entirely so the plan cannot be re-interleaved.
@@ -1807,22 +2073,24 @@ def run_trajectory_partial(
             if all(a.ready_at == float("inf") for a in agents.values()):
                 termination = "policy_exhausted"
                 break
-            # A waiting agent is not polled. If EVERY agent is waiting nobody
-            # can ever send the message that would wake them, so break the
-            # deadlock rather than hanging: wake all, and record it -- a hang
-            # is operationally far worse than budget exhaustion.
-            if agents and all(a.waiting_for is not None for a in agents.values()):
+            # A waiting agent is not polled and only a matching release may
+            # wake it.  If every agent is waiting, the episode has reached a
+            # real mutual-wait deadlock.  Never silently clear the waits: that
+            # would manufacture actions which the agents could not take under
+            # the protocol and would corrupt both evaluation and DAgger logs.
+            if agents and all(scheduler.blocked(a) for a in agents):
                 mutual_wait_deadlocks += 1
-                for a in agents.values():
-                    a.waiting_for = None
-                    a.consecutive_waits = 0
+                termination = "mutual_wait_deadlock"
+                break
             # A blocked agent must not drive the clock. Its ready_at is stale
             # -- the moment its wait WOULD have expired -- so including it here
             # pulled the clock back every iteration and the loop never
             # advanced past a partner that was merely busy.
-            runnable_times = [
-                a.ready_at for a in agents.values() if a.waiting_for is None
-            ] or [a.ready_at for a in agents.values()]
+            next_ready = scheduler.next_ready_time()
+            runnable_times = (
+                [next_ready] if next_ready is not None
+                else [a.ready_at for a in agents.values()]
+            )
             # Monotonic, but only over agents that still have work. `inf` is the
             # sentinel for an EXHAUSTED agent, and clamping upward against it
             # pins the clock at infinity forever -- after which the catch-up
@@ -1840,12 +2108,7 @@ def run_trajectory_partial(
             for a in agents.values():
                 if a.waiting_for is None and a.ready_at < clock:
                     a.ready_at = clock
-            ready = sorted(
-                (a for a in agents.values()
-                 if a.ready_at <= clock and a.ready_at != float("inf")
-                 and a.waiting_for is None),
-                key=lambda a: a.agent_id,
-            )
+            ready = [agents[a] for a in scheduler.ready_agents(clock=clock)]
             if not ready:
                 # A partner that is merely BUSY must not cancel a wait. This
                 # fired whenever nobody was runnable at the current instant,
@@ -1862,10 +2125,12 @@ def run_trajectory_partial(
                 waiting = [a for a in agents.values() if a.waiting_for is not None]
                 if not waiting:
                     break
-                clock = max(clock, min(a.ready_at for a in waiting))
-                for a in waiting:
-                    a.waiting_for = None
-                continue
+                # No non-waiting agent remains that could send a release.
+                # Waiting is permanent regardless of the communication
+                # ablation; modes differ in guidance/tool exposure, not in
+                # the runtime meaning of wait_for_signal.
+                termination = "permanent_wait_no_runnable_agents"
+                break
         if len(ready) > 1:
             simultaneous_cycles += 1
 
@@ -1880,9 +2145,15 @@ def run_trajectory_partial(
             proposals.sort(key=lambda item: item[0].agent_id)
         elapsed = round(time.perf_counter() - started, 3)
 
+        private_reasoning_by_agent = {
+            agent.agent_id: str(proposal.pop("_private_reasoning", "") or "")
+            for agent, proposal, _ in proposals
+        }
+
         # --- resource conflict resolution against the same pre-batch state ---
-        claims = {
-            agent.agent_id: resource_claims(prop, mode=lock_mode)
+        symbolic_initial_state = mirror.validator.initial_state
+        proposal_by_agent = {
+            agent.agent_id: prop
             for agent, prop, _ in proposals
             if "error" not in prop
         }
@@ -1891,17 +2162,54 @@ def run_trajectory_partial(
         # same call forever (observed: 6 conflicts, zero progress, livelock).
         # One agent proceeds; the loser gets an ordinary tool error and replans.
         conflicted: set[str] = set()
-        ids = sorted(claims)
+        ids = sorted(proposal_by_agent)
         if lock_priority == "seeded":
             rng = random.Random(f"{args.seed}:{turn_index}")
             rng.shuffle(ids)
-        held: set[str] = set()
+        ids = _prioritize_incumbent_fixture_users(
+            ids,
+            proposal_by_agent,
+            mirror.runtime_state,
+            symbolic_initial_state,
+        )
+        accepted: dict[str, dict[str, Any]] = {}
+        conflict_resources: dict[str, set[str]] = {}
         for a_id in ids:
-            if claims[a_id] & held:
+            proposal = proposal_by_agent[a_id]
+            pair_conflicts: set[str] = set()
+            for accepted_proposal in accepted.values():
+                pair_conflicts.update(
+                    simultaneous_contentions(
+                        proposal,
+                        accepted_proposal,
+                        symbolic_initial_state,
+                    )
+                )
+            if pair_conflicts:
                 conflicted.add(a_id)
+                conflict_resources[a_id] = pair_conflicts
             else:
-                held |= claims[a_id]
+                accepted[a_id] = proposal
 
+        atomic_calls = [
+            {**proposal, "agent": agent_id}
+            for agent_id, proposal in proposal_by_agent.items()
+        ]
+        cycle_precondition_errors = mirror.validate_cycle_preconditions(
+            atomic_calls
+        )
+        for agent_id, resources in mirror.atomic_handover_conflicts(
+            atomic_calls
+        ).items():
+            conflicted.add(agent_id)
+            conflict_resources.setdefault(agent_id, set()).update(resources)
+
+        cycle_record_start = len(records)
+        opening_observation_cycle = (
+            coordinator_id in AGENT_IDS
+            and opening_phase < 2
+            and any(p.get("tool") == "get_image" for _, p, _ in proposals)
+        )
         for agent, proposal, views_used in proposals:
             record: dict[str, Any] = {
                 "step_index": turn_index,
@@ -1912,6 +2220,7 @@ def run_trajectory_partial(
                 "views": list(views_used) if views_used else None,
                 "proposal_elapsed_s": elapsed,
                 "cycle_agents": [a.agent_id for a in ready],
+                "private_reasoning": private_reasoning_by_agent[agent.agent_id] or None,
             }
             agent.local_turn += 1
             proposal_index += 1
@@ -1921,21 +2230,70 @@ def run_trajectory_partial(
                 agent.repeated_proposals += 1
             agent.last_proposal_key = key
 
+            # Enforce the same two-cycle opening contract used to certify the
+            # training tick grid. Observation calls may precede it, but no
+            # physical call or competing proposal may slip through merely
+            # because the prompt was misunderstood.
+            protocol_error = _opening_protocol_error(
+                agent_id=agent.agent_id,
+                proposal=proposal,
+                coordinator_id=coordinator_id,
+                phase=opening_phase,
+            )
+            if opening_observation_cycle and proposal.get("tool") != "get_image":
+                protocol_error = (
+                    "opening observations and handshake messages cannot be mixed "
+                    "in one atomic cycle; observe now and send the required "
+                    "handshake message on the next cycle"
+                )
+            if protocol_error is not None:
+                record.update(legal=False, reason=protocol_error, executed=False)
+                _handle_rejection(
+                    agent=agent, agents=agents, step=proposal,
+                    reason=protocol_error, clock=clock, mode=rejection_mode,
+                    multiplier=multiplier, record=record,
+                )
+                records.append(record)
+                continue
+
             # wait_for_signal is a scheduling primitive, not a sim action: it
-            # blocks the agent instead of touching the world. `about` is
-            # recorded but never checked -- any inbound message wakes the agent
-            # (see AgentRuntime.deliver) and judging relevance is the model's
-            # job. The first wait is free; later consecutive waits consume
+            # blocks the agent instead of touching the world. The shared
+            # scheduler wakes it only for a later communicate call from the
+            # requested sender whose exact releases ID matches `about`.
+            # The first wait is free; later consecutive waits consume
             # budget so a wait->irrelevant-message->wait livelock is bounded
             # and visible rather than an unbounded stall.
             if proposal.get("tool") == WAIT_TOOL_NAME and "error" not in proposal:
                 wait_args = proposal.get("args") or {}
-                agent.consecutive_waits += 1
-                agent.waiting_for = {
-                    "from": wait_args.get("from"),
-                    "about": wait_args.get("about"),
-                    "declared_at": turn_index,
+                wait_step = {
+                    "step": turn_index,
+                    "agent": agent.agent_id,
+                    "tool": WAIT_TOOL_NAME,
+                    "args": deepcopy(wait_args),
                 }
+                wait_error = mirror.validate_wait_call(wait_step)
+                if wait_error is not None:
+                    record.update(
+                        legal=False,
+                        executed=False,
+                        reason=wait_error,
+                    )
+                    _handle_rejection(
+                        agent=agent,
+                        agents=agents,
+                        step=wait_step,
+                        reason=wait_error,
+                        clock=clock,
+                        mode=rejection_mode,
+                        multiplier=multiplier,
+                        record=record,
+                    )
+                    records.append(record)
+                    continue
+                wait_args = wait_step["args"]
+                agent.consecutive_waits += 1
+                scheduler.block(agent.agent_id, wait_step, clock=clock)
+                agent.waiting_for["declared_at"] = turn_index
                 record["legal"] = True
                 record["executed"] = True
                 record["waited_for"] = deepcopy(agent.waiting_for)
@@ -1948,8 +2306,14 @@ def run_trajectory_partial(
                     record["wait_capped"] = True
                     wait_caps += 1
                     turn_index += 1
-                agent.deliver({"agent": agent.agent_id, "tool": WAIT_TOOL_NAME,
-                               "args": deepcopy(wait_args)})
+                agent.deliver(
+                    {
+                        "step": turn_index,
+                        "agent": agent.agent_id,
+                        "tool": WAIT_TOOL_NAME,
+                        "args": deepcopy(wait_args),
+                    }
+                )
                 agent.ready_at = clock + _tool_duration(
                     WAIT_TOOL_NAME, sim_steps=None, multiplier=multiplier
                 )
@@ -1987,7 +2351,8 @@ def run_trajectory_partial(
                 )
                 conflicts.append(
                     {"agent": agent.agent_id, "sim_time": round(clock, 3),
-                     "tool": proposal.get("tool"), "claims": sorted(claims[agent.agent_id])}
+                     "tool": proposal.get("tool"),
+                     "claims": sorted(conflict_resources.get(agent.agent_id, ())) }
                 )
                 _handle_rejection(
                     agent=agent,
@@ -1997,23 +2362,9 @@ def run_trajectory_partial(
                     reason=reason,
                     clock=clock,
                     mode=rejection_mode,
-                    max_silent=max_silent,
                     multiplier=multiplier,
                     record=record,
                 )
-                if not is_model_policy and not record.get("escalated"):
-                    # Silent retry leaves state untouched, so an expert step
-                    # consumed by a rejected proposal must go back on the queue.
-                    if concurrent_replay:
-                        expert_queues.setdefault(
-                            proposal["agent"], []
-                        ).insert(0, proposal)
-                    else:
-                        expert_sequence.insert(0, proposal)
-                if record.get("escalated"):
-                    escalations += 1
-                else:
-                    silent_resolutions += 1
                 records.append(record)
                 continue
 
@@ -2037,13 +2388,20 @@ def run_trajectory_partial(
                     out_dir=render_dir,
                     tag=f"t{turn_index:03d}_{agent.agent_id}",
                 )
-                # Consume-once: only the requester ever sees this.
+                # Consume-once: only the requester ever sees this. Preserve the
+                # global index in raw private state; prompt normalization below
+                # converts it to local or removes it exactly as training does.
+                observation_step_index = turn_index
                 turn_index += 1
                 consecutive_rejections = 0
                 agent.pending_obs = (image_paths, view_names)
                 agent.deliver(
-                    {"agent": agent.agent_id, "tool": "get_image",
-                     "args": {"views": list(views)}}
+                    {
+                        "step": observation_step_index,
+                        "agent": agent.agent_id,
+                        "tool": "get_image",
+                        "args": {"views": list(views)},
+                    }
                 )
                 record.update(legal=True, executed=True, reason=None)
                 agent.ready_at, agent.consecutive_obs, capped = observation_ready_at(
@@ -2068,7 +2426,8 @@ def run_trajectory_partial(
             }
             state_before = deepcopy(mirror.runtime_state)
             goal_before = mirror.goal_satisfied
-            legal, reason = mirror.step(symbolic_step)
+            reason = cycle_precondition_errors.get(agent.agent_id)
+            legal = reason is None
             record.update(legal=legal, reason=reason)
 
             if not legal:
@@ -2076,14 +2435,12 @@ def run_trajectory_partial(
                 _handle_rejection(
                     agent=agent, agents=agents, step=symbolic_step,
                     reason=reason or "illegal", clock=clock, mode=rejection_mode,
-                    max_silent=max_silent, multiplier=multiplier, record=record,
+                    multiplier=multiplier, record=record,
                 )
-                if record.get("escalated"):
-                    escalations += 1
-                else:
-                    silent_resolutions += 1
                 records.append(record)
                 continue
+
+            mirror.commit(symbolic_step)
 
             try:
                 tool_call = adapter._adapt_step(
@@ -2111,12 +2468,8 @@ def run_trajectory_partial(
                     _handle_rejection(
                         agent=agent, agents=agents, step=symbolic_step,
                         reason=sim_reason, clock=clock, mode=rejection_mode,
-                        max_silent=max_silent, multiplier=multiplier, record=record,
+                        multiplier=multiplier, record=record,
                     )
-                    if record.get("escalated"):
-                        escalations += 1
-                    else:
-                        silent_resolutions += 1
                     records.append(record)
                     continue
             except Exception as exc:
@@ -2129,7 +2482,7 @@ def run_trajectory_partial(
                 _handle_rejection(
                     agent=agent, agents=agents, step=symbolic_step,
                     reason=f"{type(exc).__name__}: {exc}", clock=clock,
-                    mode=rejection_mode, max_silent=max_silent,
+                    mode=rejection_mode,
                     multiplier=multiplier, record=record,
                 )
                 records.append(record)
@@ -2143,6 +2496,14 @@ def run_trajectory_partial(
             if symbolic_step["tool"] == "communicate":
                 recipient = (symbolic_step.get("args") or {}).get("to")
                 if recipient in agents and recipient != agent.agent_id:
+                    scheduler.deliver(
+                        symbolic_step,
+                        clock=clock,
+                        resume_delay=_tool_duration(
+                            WAIT_TOOL_NAME, sim_steps=None, multiplier=multiplier
+                        ),
+                        lenient=_LENIENT_WAIT_DISCHARGE,
+                    )
                     agents[recipient].deliver(symbolic_step, clock=clock)
                     record["delivered_to"] = recipient
             sim_t1 = _sim_clock(session)
@@ -2176,28 +2537,79 @@ def run_trajectory_partial(
                 record["native_error"] = native_err
             records.append(record)
 
-            criterion = getattr(args, "success_criterion", "fsm")
-            reached = (
-                mirror.goal_satisfied
-                if criterion == "fsm"
-                else (mirror.goal_satisfied and native_now)
+            # Goal termination is decided after the whole concurrent proposal
+            # batch commits. Proposals in one cycle were generated from the
+            # same pre-cycle context, so stopping midway makes a tick
+            # non-atomic and disagrees with ConcurrentTaskValidator.
+        cycle_records = records[cycle_record_start:]
+        if coordinator_id in AGENT_IDS and opening_phase < 2:
+            expected_agents = set(AGENT_IDS)
+            committed = {
+                record.get("agent")
+                for record in cycle_records
+                if record.get("executed")
+                and (record.get("proposal") or {}).get("tool") == "communicate"
+            }
+            if committed == expected_agents:
+                opening_phase += 1
+        cycle_rejected = _count_rejected_partial_records(cycle_records)
+        rejected_total += cycle_rejected
+        if cycle_rejected:
+            consecutive_rejections += cycle_rejected
+        elif cycle_records:
+            consecutive_rejections = 0
+
+        criterion = getattr(args, "success_criterion", "fsm")
+        native_after_cycle, _ = session.native_success()
+        reached = (
+            mirror.goal_satisfied
+            if criterion == "fsm"
+            else (mirror.goal_satisfied and native_after_cycle)
+        )
+        if reached:
+            termination = "goal_satisfied"
+            scheduler.finish_cycle(goal_satisfied=True)
+
+        if not reached:
+            budget_termination = _partial_budget_termination(
+                rejected_total=rejected_total,
+                max_rejected=max_rejected,
+                consecutive_rejections=consecutive_rejections,
+                max_consecutive_rejections=max_consec,
+                proposal_index=proposal_index,
+                max_proposals=max_proposals,
+                turn_index=turn_index,
+                step_budget=step_budget,
             )
-            if reached:
-                termination = "goal_satisfied"
-                break
-        if termination in ("goal_satisfied", "max_consecutive_rejections",
-                           "rejection_budget_exhausted"):
+            if budget_termination is not None:
+                termination = budget_termination
+
+        if termination in (
+            "goal_satisfied",
+            "max_consecutive_rejections",
+            "rejection_budget_exhausted",
+            "proposal_budget_exhausted",
+        ):
             break
 
     native, native_error = session.native_success()
     finite = [a.ready_at for a in agents.values() if a.ready_at != float("inf")]
     makespan = max(finite, default=0.0)
+    first_rejection = next(
+        (
+            record for record in records
+            if record.get("legal") is False or record.get("sim_success") is False
+        ),
+        None,
+    )
+    had_rejection = first_rejection is not None
     return {
         "task_name": task_name,
         "composite_task": composite_task,
         "trajectory_id": trajectory.get("trajectory_id"),
         "partial_history": True,
-        "resource_locks": lock_mode,
+        "communication_mode": communication_mode,
+        "contention_policy": "concurrent_fsm",
         "rejection_mode": rejection_mode,
         "scene": {"layout": args.layout, "style": args.style, "seed": args.seed},
         "expert_steps": len(expert_action_steps),
@@ -2205,6 +2617,20 @@ def run_trajectory_partial(
         "productive_steps": turn_index,
         "rejected_total": rejected_total,
         "executed_steps": sum(1 for r in records if r.get("executed")),
+        "communication_calls": sum(
+            1
+            for r in records
+            if r.get("executed")
+            and (r.get("proposal") or {}).get("tool") == "communicate"
+        ),
+        "wait_calls": waits_issued,
+        "release_messages": sum(
+            1
+            for r in records
+            if r.get("executed")
+            and (r.get("proposal") or {}).get("tool") == "communicate"
+            and ((r.get("proposal") or {}).get("args") or {}).get("releases")
+        ),
         "rejected_steps": sum(
             1 for r in records
             if r.get("legal") is False or r.get("sim_success") is False
@@ -2214,6 +2640,14 @@ def run_trajectory_partial(
         "native_success": native,
         "native_error": native_error,
         "fsm_goal_satisfied": mirror.goal_satisfied,
+        "had_rejection": had_rejection,
+        "first_rejection": deepcopy(first_rejection),
+        "fsm_success_if_terminate_on_first_rejection": bool(
+            mirror.goal_satisfied and not had_rejection
+        ),
+        "native_success_if_terminate_on_first_rejection": bool(
+            native and not had_rejection
+        ),
         "partial_goal_fraction": mirror.partial_goal_fraction(),
         "makespan": round(makespan, 3),
         "simultaneous_cycles": simultaneous_cycles,
@@ -2223,8 +2657,7 @@ def run_trajectory_partial(
         "mutual_wait_deadlocks": mutual_wait_deadlocks,
         "resource_conflicts": len(conflicts),
         "conflict_details": conflicts,
-        "silent_resolutions": silent_resolutions,
-        "escalations": escalations,
+        "reported_failures": rejected_total,
         "per_agent": {
             aid: {
                 "turns": a.local_turn,
@@ -2240,6 +2673,38 @@ def run_trajectory_partial(
     }
 
 
+def _count_rejected_partial_records(records: list[dict[str, Any]]) -> int:
+    """Count rejected proposals emitted during one concurrent scheduler cycle."""
+
+    return sum(
+        1
+        for record in records
+        if record.get("legal") is False or record.get("sim_success") is False
+    )
+
+
+def _partial_budget_termination(
+    *,
+    rejected_total: int,
+    max_rejected: int,
+    consecutive_rejections: int,
+    max_consecutive_rejections: int,
+    proposal_index: int,
+    max_proposals: int,
+    turn_index: int,
+    step_budget: int,
+) -> str | None:
+    """Return the bounded-loop termination, if a partial episode exhausted it."""
+
+    if rejected_total >= max_rejected:
+        return "rejection_budget_exhausted"
+    if consecutive_rejections >= max_consecutive_rejections:
+        return "max_consecutive_rejections"
+    if proposal_index >= max_proposals and turn_index < step_budget:
+        return "proposal_budget_exhausted"
+    return None
+
+
 def _handle_rejection(
     *,
     agent: AgentRuntime,
@@ -2248,41 +2713,34 @@ def _handle_rejection(
     reason: str,
     clock: float,
     mode: str,
-    max_silent: int,
     multiplier: float,
     record: dict[str, Any],
 ) -> None:
-    """Silent-retry by default; escalate to a FAILED: entry only as a last resort.
+    """Record every rejection in private history before allowing recovery."""
 
-    Silent retry sleeps the agent until the NEXT WORLD EVENT rather than a fixed
-    delay. That matters: under greedy decoding an unchanged prompt reproduces the
-    identical call, so a constant sleep would loop forever. Waiting for the other
-    agent to finish means the retry sees a released lock, a satisfied
-    precondition, or a delivered message.
-    """
-
-    agent.silent_retries += 1
-    escalate = (
-        mode == REJECTION_MODE_REPORT_FAILED or agent.silent_retries > max_silent
+    if mode != REJECTION_MODE_REPORT_FAILED:
+        raise ValueError(f"Unsupported rejection mode: {mode!r}")
+    # This is deliberately visible even though FAILED lines are absent from
+    # SFT. Recovery therefore measures a general model capability; the
+    # counterfactual no-rejection metric separately scores learned execution.
+    # Parsed proposals do not necessarily carry an ``agent`` field; the
+    # caller identity lives on AgentRuntime. Every private-history row must be
+    # a complete symbolic step so the next prompt can render it safely.
+    agent.deliver(
+        {
+            **step,
+            "agent": step.get("agent") or agent.agent_id,
+            "tool": step.get("tool") or "invalid",
+            "args": deepcopy(step.get("args") or {}),
+            "error": reason[:120],
+        }
     )
-    record["silent_retries"] = agent.silent_retries
-    record["escalated"] = escalate
-    if escalate:
-        # Accepts the distribution shift: the model never saw FAILED: in training.
-        agent.deliver({**step, "error": reason[:120]})
-        agent.silent_retries = 0
-        agent.ready_at = clock + _tool_duration(
-            step.get("tool", "communicate"), sim_steps=None, multiplier=multiplier
-        )
-        return
-    # State untouched: no history entry, observation not consumed.
-    others = [a.ready_at for a in agents.values() if a.agent_id != agent.agent_id]
-    next_event = max((t for t in others if t > clock), default=None)
-    if next_event is None:
-        next_event = clock + _tool_duration(
-            "navigate_to_fixture", sim_steps=None, multiplier=multiplier
-        )
-    agent.ready_at = next_event
+    agent.silent_retries = 0
+    record["silent_retries"] = 0
+    record["failure_reported"] = True
+    agent.ready_at = clock + _tool_duration(
+        step.get("tool", "communicate"), sim_steps=None, multiplier=multiplier
+    )
 
 
 def _model_propose_step(
@@ -2406,6 +2864,18 @@ def _generate_once(
     pre_rendered_image_paths: list[str] | None = None,
     partial_caller: str | None = None,
 ) -> dict[str, Any]:
+    communication_mode = getattr(args, "communication_mode", "full")
+    communication_profile = get_communication_profile(communication_mode)
+    model_tool_specs = apply_communication_profile(
+        build_model_tool_specs(
+            include_get_image=bool(getattr(args, "train_get_image", False)),
+            include_task_complete=bool(
+                not (partial_caller is not None)
+                and getattr(args, "predict_task_complete", False)
+            ),
+        ),
+        communication_mode,
+    )
     if pre_rendered_image_paths is not None:
         image_paths = list(pre_rendered_image_paths)
         view_names = list(views)
@@ -2422,44 +2892,38 @@ def _generate_once(
     if partial:
         # The caller is the actor: no agent prediction, no joint step index,
         # and observation ownership is implicit in the private state.
-        from training.bc_task_vlm.dataset import DEFAULT_PARTIAL_STEP_INDEX_MODE
-
         # Was "none" here, "local" in training, "global" in the other two
         # evaluators. A missing attribute must not silently mean a different
         # prompt than the model was trained on.
         index_mode = getattr(
             args, "partial_step_index_mode", DEFAULT_PARTIAL_STEP_INDEX_MODE
         )
-        if index_mode == "local":
-            prompt_step_index: int | None = len(history)
-            step_index_label = "Next local agent turn index"
-        elif index_mode == "none":
-            prompt_step_index = None
-            step_index_label = "Next global step index"
-        else:
-            prompt_step_index = step_index
-            step_index_label = "Next global step index"
-        user_prompt = build_user_prompt(
+        user_prompt = build_partial_user_prompt(
             composite_task=task_metadata.composite_task,
-            task_instruction=trajectory.get("task", ""),
+            task_instruction=task_metadata.task_goal,
             agent_id=partial_caller,
-            next_step_index=prompt_step_index,
-            step_index_label=step_index_label,
+            global_step_index=step_index,
             observation_views=view_names,
             history_steps=history,
-            allowed_tool_specs=tool_specs,
-            sft_format="tool_call",
-            predict_agent=False,
+            allowed_tool_specs=model_tool_specs,
+            partial_step_index_mode=index_mode,
+            coordinator_id=(
+                trajectory.get("coordinator_id")
+                if communication_profile.require_opening_protocol
+                else None
+            ),
+            initial_state=trajectory.get("initial_state"),
+            communication_mode=communication_mode,
         )
     else:
         user_prompt = build_user_prompt(
             composite_task=task_metadata.composite_task,
-            task_instruction=trajectory.get("task", ""),
+            task_instruction=task_metadata.task_goal,
             agent_id="",
             next_step_index=step_index,
             observation_views=view_names,
             history_steps=history,
-            allowed_tool_specs=tool_specs,
+            allowed_tool_specs=model_tool_specs,
             sft_format="tool_call",
             observation_owner=agent_hint,
             include_observation_owner=(
@@ -2471,7 +2935,14 @@ def _generate_once(
                     )
                 )
             ),
+            coordinator_id=(
+                trajectory.get("coordinator_id")
+                if communication_profile.require_opening_protocol
+                else None
+            ),
             predict_agent=True,
+            initial_state=trajectory.get("initial_state"),
+            communication_mode=communication_mode,
         )
     feature = {
         "sample_id": f"live/{trajectory.get('trajectory_id')}/turn_{step_index}",
@@ -2496,7 +2967,7 @@ def _generate_once(
         ),
         "image_paths": image_paths,
         "tool_schemas": tool_schemas,
-        "allowed_tool_specs": tool_specs,
+        "allowed_tool_specs": model_tool_specs,
     }
     from training.bc_task_vlm.prompting import append_few_shot_block
 
@@ -2510,6 +2981,7 @@ def _generate_once(
         )
     try:
         decoded = policy.generate(feature)
+        private_reasoning = str(getattr(decoded, "reasoning_text", "") or "")
         parsed = parse_first_qwen_tool_call(decoded)
         # eval-only cab<->cabinet leniency; never makes a legal call illegal
         parsed = apply_eval_fixture_aliases(parsed, tool_specs)
@@ -2526,12 +2998,25 @@ def _generate_once(
             step_index=step_index,
             agent_id=agent,
             agent_ids=AGENT_IDS,
-            allowed_tool_specs=tool_specs,
+            allowed_tool_specs=model_tool_specs,
         )
         step = payload["steps"][0]
-        return {"agent": step["agent"], "tool": step["tool"], "args": step["args"]}
+        result = {
+            "agent": step["agent"],
+            "tool": step["tool"],
+            "args": step["args"],
+        }
+        if private_reasoning:
+            result["_private_reasoning"] = private_reasoning
+        return result
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        result = {"error": f"{type(exc).__name__}: {exc}"}
+        private_reasoning = str(
+            getattr(locals().get("decoded"), "reasoning_text", "") or ""
+        )
+        if private_reasoning:
+            result["_private_reasoning"] = private_reasoning
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -2546,7 +3031,10 @@ def _latest_trajectory_records(
 
     latest: dict[tuple[str, str], dict[str, Any]] = {}
     for record in records:
-        key = (record.get("task_name"), record.get("trajectory_id"))
+        key = (
+            record.get("task_name"),
+            record.get("episode_id") or record.get("trajectory_id"),
+        )
         latest[key] = record
     return list(latest.values())
 
@@ -2557,7 +3045,10 @@ def _completed_trajectory_keys(
     """Return resumable completions, leaving latest harness errors pending."""
 
     return {
-        (record["task_name"], record["trajectory_id"])
+        (
+            record["task_name"],
+            record.get("episode_id") or record["trajectory_id"],
+        )
         for record in _latest_trajectory_records(records)
         if record.get("termination") != "harness_error"
     }
@@ -2607,6 +3098,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--record-fps", type=int, default=2)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument(
+        "--cohort-split",
+        choices=("train_task_types", "heldout_task_types"),
+        default=None,
+        help="Required for a fixed_live_sim manifest; selects one named split.",
+    )
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--layout", type=int, default=11)
@@ -2632,6 +3129,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--step-budget-factor", type=float, default=2.0)
     parser.add_argument("--max-consecutive-rejections", type=int, default=3)
     parser.add_argument("--max-trajectories", type=int, default=None)
+    parser.add_argument(
+        "--episodes-per-task",
+        type=int,
+        default=None,
+        help="Sampled-mode episodes per task (default: 10 for configuration cohorts).",
+    )
+    parser.add_argument(
+        "--cohort-mode", choices=("sampled", "full_config"), default="sampled",
+        help="Uniform sampled episodes or exhaustive configuration coverage.",
+    )
+    parser.add_argument("--episodes-per-config", type=int, default=1)
+    parser.add_argument("--max-configs-per-task", type=int, default=None)
+    parser.add_argument("--evaluation-seed", type=int, default=None)
+    parser.add_argument(
+        "--scene-compatibility-cache", type=Path, default=None,
+        help="Certified configuration-scene cache used for reproducible random scenes.",
+    )
+    parser.add_argument("--scene-sampling-seed", type=int, default=20260819)
     parser.add_argument("--tasks", type=str, default=None,
                         help="Comma-separated task filter.")
     parser.add_argument("--resume", action="store_true")
@@ -2669,6 +3184,15 @@ def parse_args() -> argparse.Namespace:
         default=180.0,
         help="Per-request timeout for the vLLM server.",
     )
+    parser.add_argument("--vllm-temperature", type=float, default=0.0)
+    parser.add_argument("--vllm-top-p", type=float, default=None)
+    parser.add_argument("--vllm-top-k", type=int, default=None)
+    parser.add_argument(
+        "--dagger-prefixes",
+        type=Path,
+        default=None,
+        help="JSONL of FSM-accepted DAgger corrections to replay before model continuation; only listed episode IDs run.",
+    )
     parser.add_argument(
         "--predict-task-complete",
         action=argparse.BooleanOptionalAction,
@@ -2683,7 +3207,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-resolution", type=int, default=512)
     parser.add_argument("--max-length", type=int, default=16384)
     parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument(
+        "--enable-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable private model reasoning for vLLM inference. Reasoning is "
+            "recorded for diagnostics but never added to either agent's history."
+        ),
+    )
     parser.add_argument("--sft-format", choices=("tool_call",), default="tool_call")
+    parser.add_argument(
+        "--communication-mode",
+        choices=COMMUNICATION_MODES,
+        default="full",
+        help=(
+            "Communication ablation. 'full' is the unchanged canonical SFT/eval "
+            "contract; other modes alter only eval-time prompts, tool exposure, "
+            "and matching protocol gates."
+        ),
+    )
     parser.add_argument("--no-forced-json", action="store_true")
     parser.add_argument(
         "--train-get-image",
@@ -2749,9 +3292,10 @@ def parse_args() -> argparse.Namespace:
     partial.add_argument(
         "--partial-step-index-mode",
         choices=("global", "local", "none"),
-        default="none",
-        help="How step indices are rendered; 'none' (default) omits them, since "
-        "a joint index leaks the other agent's hidden activity.",
+        default=DEFAULT_PARTIAL_STEP_INDEX_MODE,
+        help="How step indices are rendered; 'local' (default) uses only the "
+        "caller's private turn numbering, while 'none' omits them; "
+        "a joint global index leaks the other agent's hidden activity.",
     )
     partial.add_argument(
         "--partial-observation-mode",
@@ -2759,13 +3303,6 @@ def parse_args() -> argparse.Namespace:
         default="consume-once",
         help="'consume-once' feeds a get_image result to that agent's next call "
         "then discards it, matching the trained contract.",
-    )
-    partial.add_argument(
-        "--resource-locks",
-        choices=(RESOURCE_LOCKS_NONE, RESOURCE_LOCKS_OBJECTS, RESOURCE_LOCKS_FIXTURES),
-        default=RESOURCE_LOCKS_FIXTURES,
-        help="Which shared resources a tool call claims. Conflicts REJECT and "
-        "hand the problem back to the agent; they never queue.",
     )
     partial.add_argument(
         "--conflict-priority",
@@ -2817,20 +3354,11 @@ def parse_args() -> argparse.Namespace:
     )
     partial.add_argument(
         "--rejection-mode",
-        choices=(REJECTION_MODE_SILENT_RETRY, REJECTION_MODE_REPORT_FAILED),
-        # report-failed by default: with silent-retry the agent's history is
-        # unchanged after a rejection, so at temperature 0 it re-emits the
-        # identical call. Measured adaptation after a rejection: 8.0% when
-        # silent vs 100% once FAILED: is shown (untrained 9.4% -> 94.1%), and
-        # 28-32% of every trajectory's budget went to re-emitting known-failed
-        # calls. Trained models never saw FAILED: in training, so they are
-        # mildly OOD on it; that is the accepted cost of not wasting a third
-        # of the budget.
+        choices=(REJECTION_MODE_REPORT_FAILED,),
         default=REJECTION_MODE_REPORT_FAILED,
-        help="silent-retry: a rejected call leaves state untouched and the agent "
-        "sleeps until the next world event, then retries (no distribution "
-        "shift). report-failed: append a FAILED: line the model never saw in "
-        "training.",
+        help="Append every rejected call as a FAILED: history line. The model "
+        "may recover, while metrics separately report the counterfactual in "
+        "which the first rejection makes the trajectory unsuccessful.",
     )
     partial.add_argument(
         "--rejection-budget-ratio",
@@ -2860,12 +3388,6 @@ def parse_args() -> argparse.Namespace:
         "the teleporting executor's geometric predicates, not of the policy, "
         "and requiring both wastes budget after the task is already done.",
     )
-    partial.add_argument(
-        "--max-silent-retries",
-        type=int,
-        default=3,
-        help="Silent retries before a rejection escalates to a FAILED: entry.",
-    )
     parser.add_argument(
         "--two-pass-views",
         action=argparse.BooleanOptionalAction,
@@ -2873,6 +3395,77 @@ def parse_args() -> argparse.Namespace:
         help="Re-render canonical views for the predicted tool and re-predict.",
     )
     return parser.parse_args()
+
+
+def _manifest_episodes(
+    manifest: dict[str, Any],
+    *,
+    cohort_split: str | None,
+    episodes_per_task: int | None,
+    cohort_mode: str = "sampled",
+    episodes_per_config: int = 1,
+    max_configs_per_task: int | None = None,
+    evaluation_seed: int | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Normalize legacy and fixed manifests into task -> episode records."""
+
+    if episodes_per_task is not None and episodes_per_task < 1:
+        raise ValueError("--episodes-per-task must be positive")
+    if manifest.get("manifest_type") == "fixed_live_sim_configuration_targets":
+        from training.bc_task_vlm.fixed_cohort_selection import (
+            select_configuration_episodes,
+        )
+
+        if cohort_split is None:
+            raise ValueError("configuration cohorts require --cohort-split")
+        source = manifest.get("configurations", {}).get(cohort_split)
+        if source is None:
+            raise ValueError(f"manifest has no split {cohort_split!r}")
+        evaluation_seed = (
+            manifest.get("cohort_seed") if evaluation_seed is None else evaluation_seed
+        )
+        count = 10 if episodes_per_task is None else episodes_per_task
+        normalized = {}
+        for task, configurations in source.items():
+            rows = select_configuration_episodes(
+                configurations,
+                task_name=task,
+                split=cohort_split,
+                mode=cohort_mode,
+                evaluation_seed=evaluation_seed,
+                episodes_per_task=count,
+                episodes_per_config=episodes_per_config,
+                max_configs_per_task=max_configs_per_task,
+            )
+            normalized[task] = rows
+        return normalized
+    if manifest.get("manifest_type") == "fixed_live_sim":
+        if cohort_split is None:
+            raise ValueError("fixed_live_sim manifests require --cohort-split")
+        source = manifest.get("splits", {}).get(cohort_split)
+        if source is None:
+            raise ValueError(f"manifest has no split {cohort_split!r}")
+        normalized = {}
+        for task, episodes in source.items():
+            ordered = sorted(episodes, key=lambda row: row["episode_rank"])
+            if episodes_per_task is not None:
+                ordered = [row for row in ordered if row["episode_rank"] < episodes_per_task]
+            normalized[task] = ordered
+        return normalized
+    if cohort_split is not None:
+        raise ValueError("--cohort-split is only valid with fixed_live_sim manifests")
+    normalized = {
+        task: [
+            {"task_name": task, "trajectory_id": trajectory_id}
+            for trajectory_id in sorted(ids)
+        ]
+        for task, ids in manifest["trajectory_ids_by_task"].items()
+    }
+    if episodes_per_task is not None:
+        normalized = {
+            task: episodes[:episodes_per_task] for task, episodes in normalized.items()
+        }
+    return normalized
 
 
 def main() -> None:
@@ -2890,17 +3483,43 @@ def main() -> None:
         )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-    trajectory_ids_by_task: dict[str, list[str]] = {
-        task: sorted(ids)
-        for task, ids in manifest["trajectory_ids_by_task"].items()
-    }
+    scene_compatibility_cache = None
+    if args.scene_compatibility_cache is not None:
+        from data_generation.task_level.scene_sampling import load_compatibility_cache
+        scene_compatibility_cache = load_compatibility_cache(
+            args.scene_compatibility_cache
+        )
+    try:
+        episodes_by_task = _manifest_episodes(
+            manifest,
+            cohort_split=args.cohort_split,
+            episodes_per_task=args.episodes_per_task,
+            cohort_mode=args.cohort_mode,
+            episodes_per_config=args.episodes_per_config,
+            max_configs_per_task=args.max_configs_per_task,
+            evaluation_seed=args.evaluation_seed,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if manifest.get("manifest_type") in {
+        "fixed_live_sim", "fixed_live_sim_configuration_targets"
+    }:
+        contract = manifest.get("contract", {})
+        expected_index_mode = contract.get("partial_step_index_mode")
+        if expected_index_mode and args.partial_step_index_mode != expected_index_mode:
+            raise SystemExit(
+                "fixed cohort requires --partial-step-index-mode "
+                f"{expected_index_mode}, got {args.partial_step_index_mode}"
+            )
+        if contract.get("partial_history") and not args.partial_history:
+            raise SystemExit("fixed cohort requires --partial-history")
     if args.tasks:
         keep = {t.strip() for t in args.tasks.split(",")}
-        trajectory_ids_by_task = {
-            t: ids for t, ids in trajectory_ids_by_task.items() if t in keep
+        available = ", ".join(sorted(episodes_by_task))
+        episodes_by_task = {
+            t: episodes for t, episodes in episodes_by_task.items() if t in keep
         }
-        if not trajectory_ids_by_task:
-            available = ", ".join(sorted(manifest["trajectory_ids_by_task"]))
+        if not episodes_by_task:
             raise SystemExit(
                 f"--tasks matched no manifest tasks. Available tasks: {available}"
             )
@@ -2910,7 +3529,11 @@ def main() -> None:
         _load_task_spec_blocks,
     )
 
-    task_names = sorted(trajectory_ids_by_task)
+    task_names = sorted(episodes_by_task)
+    from data_generation.task_level.tasks.specs import load_verified_task_specs
+    verified_specs_by_composite = {
+        spec.composite_task: spec for spec in load_verified_task_specs()
+    }
     args.task_spec_blocks = (
         _load_task_spec_blocks(task_names) if args.task_spec_detail else {}
     )
@@ -2943,35 +3566,116 @@ def main() -> None:
         policy = DegeneratePolicy()
     policy_load_s = round(time.perf_counter() - policy_started, 3)
     print(f"[timing] policy_load_s={policy_load_s}", flush=True)
+    dagger_prefixes = None
+    if args.dagger_prefixes is not None:
+        dagger_prefixes = {}
+        with args.dagger_prefixes.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if (row.get("fsm_replay") or {}).get("fsm_replay_status") != "accepted":
+                    continue
+                dagger_prefixes[row["diagnostic"]["trajectory_id"]] = row
 
     total_done = len(done)
     firsts: dict[tuple[str, bool], bool] = {}
     if args.record_firsts:
-        for task_name in trajectory_ids_by_task:
+        for task_name in episodes_by_task:
             for success, label in ((True, "success"), (False, "failure")):
                 firsts[(task_name, success)] = (
                     args.output_dir / "recordings" / task_name / label
                 ).exists()
     with results_path.open("a", encoding="utf-8") as out:
-        for task_name, trajectory_ids in trajectory_ids_by_task.items():
+        for task_name, episodes in episodes_by_task.items():
             task_metadata = get_task_metadata(task_name)
             composite = task_metadata.composite_task
             session = None
-            for trajectory_id in trajectory_ids:
-                if (task_name, trajectory_id) in done:
+            session_scene = None
+            for episode in episodes:
+                trajectory_id = episode.get("trajectory_id") or episode.get("episode_id")
+                completion_id = episode.get("episode_id") or trajectory_id
+                if dagger_prefixes is not None and completion_id not in dagger_prefixes:
+                    continue
+                if (task_name, completion_id) in done:
                     continue
                 if (
                     args.max_trajectories is not None
                     and total_done >= args.max_trajectories
                 ):
                     break
-                traj_path = (
-                    args.dataset_root
-                    / task_metadata.dataset_name
-                    / trajectory_id
-                    / "original_trajectory.json"
-                )
-                trajectory = json.loads(traj_path.read_text(encoding="utf-8"))
+                if episode.get("trajectory_id"):
+                    traj_path = (
+                        args.dataset_root
+                        / task_metadata.dataset_name
+                        / trajectory_id
+                        / "original_trajectory.json"
+                    )
+                    trajectory = json.loads(traj_path.read_text(encoding="utf-8"))
+                else:
+                    from data_generation.task_level.tasks.shared.instances import (
+                        initial_state_from_configuration,
+                    )
+                    task_spec = verified_specs_by_composite[composite]
+                    trajectory = {
+                        "trajectory_id": trajectory_id,
+                        "task": task_spec.task_goal,
+                        "composite_task": composite,
+                        "initial_state": initial_state_from_configuration(
+                            task_spec.initial_state,
+                            episode["configuration"],
+                        ),
+                        "grounding_map": deepcopy(task_spec.grounding),
+                        "coordinator_id": episode["configuration"].get(
+                            "coordinator_id"
+                        ),
+                        "steps": [],
+                        "evaluation_reference_action_count": max(
+                            1,
+                            len((task_spec.example_trajectory or {}).get("steps", [])),
+                        ),
+                        "configuration_signature": episode.get(
+                            "configuration_signature"
+                        ),
+                        "physical_configuration_signature": episode.get(
+                            "physical_configuration_signature"
+                        ),
+                    }
+                episode_coordinator = episode.get("coordinator_id") or (
+                    episode.get("configuration") or {}
+                ).get("coordinator_id")
+                if episode_coordinator is not None:
+                    trajectory["coordinator_id"] = episode_coordinator
+                scene = episode.get("scene")
+                if scene is None and scene_compatibility_cache is not None:
+                    from data_generation.task_level.scene_sampling import (
+                        sample_compatible_scene,
+                    )
+                    physical_signature = episode.get(
+                        "physical_configuration_signature"
+                    )
+                    if not physical_signature:
+                        raise SystemExit(
+                            "certified scene sampling requires each episode to expose "
+                            "physical_configuration_signature"
+                        )
+                    scene = sample_compatible_scene(
+                        scene_compatibility_cache,
+                        task=composite,
+                        physical_configuration_signature=physical_signature,
+                        sampling_seed=args.scene_sampling_seed,
+                        sample_index=int(episode.get("episode_rank", 0)),
+                    )
+                if scene is None:
+                    scene = {
+                        "layout": args.layout,
+                        "style": args.style,
+                        "seed": args.seed,
+                    }
+                scene_key = (scene["layout"], scene["style"], scene["seed"])
+                if session is not None and session_scene != scene_key:
+                    session.close()
+                    session = None
                 if session is None:
                     print(f"[{task_name}] building sim session...", flush=True)
                     session_started = time.perf_counter()
@@ -2979,9 +3683,9 @@ def main() -> None:
                         session = SimSession(
                             composite_task=composite,
                             sample_trajectory=trajectory,
-                            layout=args.layout,
-                            style=args.style,
-                            seed=args.seed,
+                            layout=scene["layout"],
+                            style=scene["style"],
+                            seed=scene["seed"],
                             gl_backend=args.gl_backend,
                             render_size=args.render_size,
                             map_dpi=args.map_dpi,
@@ -2994,12 +3698,20 @@ def main() -> None:
                             f"[{task_name}] session_build_s={session_build_s}",
                             flush=True,
                         )
+                        session_scene = scene_key
                     except Exception as exc:
                         result = {
                             "task_name": task_name,
                             "composite_task": composite,
                             "trajectory_id": trajectory_id,
-                            "scene": {"layout": args.layout, "style": args.style, "seed": args.seed},
+                            "scene": scene,
+                            "episode_id": episode.get("episode_id"),
+                            "episode_rank": episode.get("episode_rank"),
+                            "cohort_split": args.cohort_split,
+                            "coordinator_id": episode_coordinator,
+                            "configuration_signature": episode.get(
+                                "configuration_signature"
+                            ),
                             "termination": "harness_error",
                             "native_success": None,
                             "fsm_goal_satisfied": None,
@@ -3036,6 +3748,10 @@ def main() -> None:
                         trajectory_policy = OraclePolicy(trajectory["steps"])
                     else:
                         trajectory_policy = policy
+                    if dagger_prefixes is not None:
+                        trajectory_policy = DaggerPrefixPolicy(
+                            trajectory_policy, dagger_prefixes[completion_id]
+                        )
                     runner = (
                         run_trajectory_partial
                         if getattr(args, "partial_history", False)
@@ -3061,6 +3777,16 @@ def main() -> None:
                         "error": f"{type(exc).__name__}: {exc}",
                         "traceback": traceback.format_exc()[-2000:],
                     }
+                result["communication_mode"] = args.communication_mode
+                result["scene"] = scene
+                if episode.get("episode_id") is not None:
+                    result["episode_id"] = episode["episode_id"]
+                    result["episode_rank"] = episode["episode_rank"]
+                    result["cohort_split"] = args.cohort_split
+                    result["coordinator_id"] = episode_coordinator
+                    result["configuration_signature"] = episode.get(
+                        "configuration_signature"
+                    )
                 result["elapsed_s"] = round(time.time() - started, 1)
                 if "session_build_s" in locals() and session_build_s is not None:
                     result["session_build_s"] = session_build_s
@@ -3134,7 +3860,24 @@ def _write_metrics(
         if r.get("native_success") is not None
         and r.get("fsm_goal_satisfied") is not None
     )
+    rejection_counts = [int(r.get("rejected_total", r.get("rejected_steps", 0))) for r in records]
+    task_action_counts = [_task_action_counts_by_agent(r) for r in records]
+    single_task_action_agent = [
+        sum(count > 0 for count in counts.values()) == 1
+        for counts in task_action_counts
+    ]
+    dominant_task_action_agent = [
+        bool(sum(counts.values()))
+        and max(counts.values(), default=0) / sum(counts.values()) >= 0.8
+        for counts in task_action_counts
+    ]
+    fsm_success = [bool(r.get("fsm_goal_satisfied")) for r in records]
+    native_success = [bool(r.get("native_success")) for r in records]
     metrics = {
+        "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+        "communication_modes": sorted(
+            {str(r.get("communication_mode", "full")) for r in records}
+        ),
         "num_trajectories": n,
         "num_jsonl_records": len(raw_records),
         "num_superseded_records": len(raw_records) - n,
@@ -3142,6 +3885,104 @@ def _write_metrics(
         "total_elapsed_s": total_elapsed_s,
         "native_success_rate": native / n,
         "fsm_goal_rate": fsm / n,
+        "trajectory_rejection_rate": sum(
+            1 for r in records if r.get("had_rejection", r.get("rejected_steps", 0) > 0)
+        ) / n,
+        "num_trajectories_with_rejection": sum(
+            1 for r in records if r.get("had_rejection", r.get("rejected_steps", 0) > 0)
+        ),
+        "total_rejected_tool_calls": sum(rejection_counts),
+        "mean_rejected_tool_calls_per_trajectory": sum(rejection_counts) / n,
+        "num_error_free_trajectories": sum(count == 0 for count in rejection_counts),
+        "error_free_trajectory_rate": sum(count == 0 for count in rejection_counts) / n,
+        "num_fsm_error_free_successes": sum(
+            success and count == 0
+            for success, count in zip(fsm_success, rejection_counts, strict=True)
+        ),
+        "fsm_error_free_success_rate": sum(
+            success and count == 0
+            for success, count in zip(fsm_success, rejection_counts, strict=True)
+        ) / n,
+        "num_native_error_free_successes": sum(
+            success and count == 0
+            for success, count in zip(native_success, rejection_counts, strict=True)
+        ),
+        "native_error_free_success_rate": sum(
+            success and count == 0
+            for success, count in zip(native_success, rejection_counts, strict=True)
+        ) / n,
+        "num_fsm_successes_with_recovery": sum(
+            success and count > 0
+            for success, count in zip(fsm_success, rejection_counts, strict=True)
+        ),
+        "fsm_success_with_recovery_rate": sum(
+            success and count > 0
+            for success, count in zip(fsm_success, rejection_counts, strict=True)
+        ) / n,
+        "num_single_task_action_agent_trajectories": sum(single_task_action_agent),
+        "single_task_action_agent_rate": sum(single_task_action_agent) / n,
+        "num_dominant_task_action_agent_trajectories_ge_0_8": sum(
+            dominant_task_action_agent
+        ),
+        "dominant_task_action_agent_rate_ge_0_8": sum(
+            dominant_task_action_agent
+        ) / n,
+        "num_single_task_action_agent_fsm_successes": sum(
+            single and success
+            for single, success in zip(single_task_action_agent, fsm_success, strict=True)
+        ),
+        "fsm_single_task_action_agent_success_rate": sum(
+            single and success
+            for single, success in zip(single_task_action_agent, fsm_success, strict=True)
+        ) / n,
+        "num_dominant_task_action_agent_fsm_successes_ge_0_8": sum(
+            dominant and success
+            for dominant, success in zip(dominant_task_action_agent, fsm_success, strict=True)
+        ),
+        "fsm_dominant_task_action_agent_success_rate_ge_0_8": sum(
+            dominant and success
+            for dominant, success in zip(dominant_task_action_agent, fsm_success, strict=True)
+        ) / n,
+        "single_task_action_agent_rate_among_fsm_successes": (
+            sum(
+                single and success
+                for single, success in zip(single_task_action_agent, fsm_success, strict=True)
+            ) / fsm
+            if fsm
+            else None
+        ),
+        "fsm_success_rate_if_terminate_on_first_rejection": sum(
+            1
+            for r in records
+            if r.get(
+                "fsm_success_if_terminate_on_first_rejection",
+                bool(r.get("fsm_goal_satisfied")) and not r.get("rejected_steps", 0),
+            )
+        ) / n,
+        "native_success_rate_if_terminate_on_first_rejection": sum(
+            1
+            for r in records
+            if r.get(
+                "native_success_if_terminate_on_first_rejection",
+                bool(r.get("native_success")) and not r.get("rejected_steps", 0),
+            )
+        ) / n,
+        "num_fsm_unsuccessful_if_terminate_on_first_rejection": n - sum(
+            1
+            for r in records
+            if r.get(
+                "fsm_success_if_terminate_on_first_rejection",
+                bool(r.get("fsm_goal_satisfied")) and not r.get("rejected_steps", 0),
+            )
+        ),
+        "num_native_unsuccessful_if_terminate_on_first_rejection": n - sum(
+            1
+            for r in records
+            if r.get(
+                "native_success_if_terminate_on_first_rejection",
+                bool(r.get("native_success")) and not r.get("rejected_steps", 0),
+            )
+        ),
         "judge_agreement_rate": agree / comparable if comparable else None,
         "declared_complete_rate": sum(
             1 for r in records if r.get("declared_complete")
@@ -3151,6 +3992,13 @@ def _write_metrics(
         ) / n,
         "terminations": {},
         "mean_steps_used": sum(r.get("steps_used", 0) for r in records) / n,
+        "mean_communication_calls": sum(
+            r.get("communication_calls", 0) for r in records
+        ) / n,
+        "mean_wait_calls": sum(r.get("wait_calls", 0) for r in records) / n,
+        "mean_release_messages": sum(
+            r.get("release_messages", 0) for r in records
+        ) / n,
         "mean_trajectory_elapsed_s": _mean_present(
             r.get("elapsed_s") for r in records
         ),
@@ -3205,9 +4053,7 @@ def _write_metrics(
     partial_records = [r for r in records if r.get("partial_history")]
     if partial_records:
         conflicts = sum(r.get("resource_conflicts", 0) for r in partial_records)
-        escalations = sum(r.get("escalations", 0) for r in partial_records)
-        silent = sum(r.get("silent_resolutions", 0) for r in partial_records)
-        rejections = escalations + silent
+        rejections = sum(r.get("rejected_steps", 0) for r in partial_records)
         cycles = sum(r.get("steps_used", 0) for r in partial_records)
         per_agent: dict[str, dict[str, float]] = {}
         for agent_id in AGENT_IDS:
@@ -3241,11 +4087,7 @@ def _write_metrics(
             ),
             "resource_conflicts": conflicts,
             "rejections_observed": rejections,
-            # Rates over rejections are only interpretable with enough of them;
-            # report the raw count alongside so a ratio from five events is
-            # visible as such.
-            "silent_resolve_rate": (silent / rejections) if rejections else None,
-            "escalation_rate": (escalations / rejections) if rejections else None,
+            "failures_reported_to_model": rejections,
             "conflict_metrics_interpretable": rejections >= 20,
             "per_agent": per_agent,
         }
@@ -3261,6 +4103,35 @@ def _write_metrics(
 def _mean_present(values) -> float | None:
     present = [float(value) for value in values if value is not None]
     return sum(present) / len(present) if present else None
+
+
+_NON_TASK_ACTION_TOOLS = {
+    "communicate",
+    "get_image",
+    "give_space",
+    "navigate_to_fixture",
+    "report_failed",
+    "task_complete",
+    "wait_for_signal",
+}
+
+
+def _task_action_counts_by_agent(record: dict) -> dict[str, int]:
+    """Count accepted task-state-changing actions, excluding coordination and motion."""
+
+    counts = {agent_id: 0 for agent_id in AGENT_IDS}
+    for step in record.get("steps", []):
+        proposal = step.get("proposal") or {}
+        tool = proposal.get("tool")
+        agent = step.get("agent") or proposal.get("agent")
+        if (
+            agent in counts
+            and step.get("executed")
+            and step.get("sim_success", True) is not False
+            and tool not in _NON_TASK_ACTION_TOOLS
+        ):
+            counts[agent] += 1
+    return counts
 
 
 def _run_lengths(turns: list[str]) -> list[int]:

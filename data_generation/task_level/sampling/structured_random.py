@@ -6,7 +6,10 @@ import random
 import re
 from typing import TYPE_CHECKING
 
-from data_generation.task_level.sampling.base import BaseSamplingStrategy
+from data_generation.task_level.sampling.base import (
+    BaseSamplingStrategy,
+    SampledTrajectoryCandidate,
+)
 from data_generation.utils import stable_json_sha256
 
 if TYPE_CHECKING:
@@ -75,20 +78,58 @@ class StructuredRandomSamplingStrategy(BaseSamplingStrategy):
             f"{base_prompt}"
         )
 
+    def extract_candidates(
+        self,
+        *,
+        raw_response: object,
+        task_definition: TaskDefinition,
+        runtime_config: RuntimeConfig,
+        variation_key: str | None = None,
+    ) -> list[SampledTrajectoryCandidate]:
+        """Parses one candidate and attaches its selected configuration."""
+
+        sampled_candidates = super().extract_candidates(
+            raw_response=raw_response,
+            task_definition=task_definition,
+            runtime_config=runtime_config,
+            variation_key=variation_key,
+        )
+        if variation_key is None:
+            return sampled_candidates
+        seed, configuration = _structured_random_seed_and_configuration(
+            task_definition=task_definition,
+            variation_key=variation_key,
+        )
+        attempt_match = re.search(r"-attempt-(\d+)$", variation_key)
+        attempt_number = int(attempt_match.group(1)) + 1 if attempt_match else None
+        return [
+            SampledTrajectoryCandidate(
+                candidate=sampled_candidate.candidate,
+                raw_output=sampled_candidate.raw_output,
+                probability=sampled_candidate.probability,
+                sampling_configuration=configuration,
+                sampling_seed=seed,
+                sampling_attempt_number=attempt_number,
+            )
+            for sampled_candidate in sampled_candidates
+        ]
+
 
 def _structured_random_seed_and_configuration(
     *,
     task_definition: TaskDefinition,
     variation_key: str,
 ) -> tuple[int, dict[str, str]]:
-    """Selects one deterministic random seed and configuration for a run."""
+    """Selects a reproducible seed and configuration for one run attempt."""
 
-    run_key = _run_level_variation_key(variation_key)
     seed_hex = stable_json_sha256(
         {
             "sampling": "structured_random",
             "task": task_definition.composite_task,
-            "run": run_key,
+            # The variation key contains both run and retry-attempt identity.
+            # Including the full key prevents a difficult configuration from
+            # being pinned across every retry while preserving reproducibility.
+            "run_attempt": variation_key,
         }
     )[:16]
     seed = int(seed_hex, 16)
@@ -98,12 +139,3 @@ def _structured_random_seed_and_configuration(
         for field_name in STRUCTURED_RANDOM_FIELDS
     }
     return seed, configuration
-
-
-def _run_level_variation_key(variation_key: str) -> str:
-    """Strips retry-attempt suffixes so retries keep the same random config."""
-
-    match = re.match(r"^(traj-\d+)-attempt-\d+$", variation_key)
-    if match is None:
-        return variation_key
-    return match.group(1)

@@ -23,6 +23,9 @@ from data_generation.task_level.generation.image.processor import (  # noqa: E40
     post_process_trajectory,
     rebuild_tick_rows_with_image_observations,
 )
+from data_generation.task_level.tasks.shared.scheduling import (  # noqa: E402
+    observation_transparent_tick_rows,
+)
 
 AGENTS = ("agent_0", "agent_1")
 
@@ -51,6 +54,15 @@ def _tick_of(rows: list[dict], agent_id: str, tool: str) -> list[int]:
 
 
 class DilationTests(unittest.TestCase):
+    def test_observation_projection_recovers_source_schedule(self) -> None:
+        rows = _rows(
+            {"agent_0": ("pick_up_object", {"object_id": "mug"}),
+             "agent_1": ("navigate_to_fixture", {"fixture_id": "sink"})},
+            {"agent_0": ("communicate", {"to": "agent_1", "message": "done"})},
+        )
+        injected = rebuild_tick_rows_with_image_observations(rows, agent_ids=AGENTS)
+        self.assertEqual(observation_transparent_tick_rows(injected), rows)
+
     def test_simultaneous_actions_stay_simultaneous(self) -> None:
         rows = _rows(
             {"agent_0": ("pick_up_object", {"object_id": "mug"}),

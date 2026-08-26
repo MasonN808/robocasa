@@ -86,7 +86,8 @@
       "tool_args": [
         "to",
         "message"
-      ]
+      ],
+      "optional_tool_args": []
     },
     "navigate_to_fixture": {
       "description": "Move the robot base to the working pose of a fixture.",

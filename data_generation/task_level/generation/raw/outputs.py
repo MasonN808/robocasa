@@ -223,6 +223,8 @@ def _build_model_config_payload(runtime_config: RuntimeConfig) -> dict[str, Any]
     return {
         "initialization": {
             "random_start_location": runtime_config.random_start_location,
+            "random_access_state": runtime_config.random_access_state,
+            "partition_policy": runtime_config.partition_policy,
         },
         "reasoning": {
             "thinking_level": runtime_config.thinking_level,
@@ -346,9 +348,15 @@ def _payload_run_state(payload: dict[str, Any]) -> dict[str, Any]:
         payload,
         completed_run_indices=completed_run_indices,
     )
+    requested = payload.get("requested_run_indices")
+    requested_run_indices = (
+        _sorted_unique_run_indices(requested)
+        if isinstance(requested, list)
+        else list(range(num_runs))
+    )
     pending_run_indices = [
         run_index
-        for run_index in range(num_runs)
+        for run_index in requested_run_indices
         if run_index not in set(completed_run_indices)
     ]
     return {
@@ -420,6 +428,8 @@ def build_summary_output_payload(payload: dict[str, Any]) -> dict[str, Any]:
         summary_payload["cost_summary"] = payload["cost_summary"]
     summary_payload.update(_summary_trajectory_stats(payload["trajectories"]))
     summary_payload.update(_payload_run_state(payload))
+    if "requested_run_indices" in payload:
+        summary_payload["requested_run_indices"] = payload["requested_run_indices"]
     summary_payload["trajectory_directory"] = TRAJECTORY_DIRECTORY_NAME
     summary_payload["trajectory_files"] = [
         _summary_trajectory_entry(trajectory) for trajectory in payload["trajectories"]
@@ -1035,6 +1045,7 @@ def load_generation_output_payload(output_paths: OutputPaths) -> dict[str, Any]:
         "trajectories": trajectories,
     }
     for field_name in (
+        "requested_run_indices",
         "completed_run_indices",
         "failed_run_indices",
         "pending_run_indices",
@@ -1053,6 +1064,7 @@ def _build_generation_payload(
     attempt_prompts: list[dict[str, Any]] | None = None,
     completed_run_indices: list[int] | None = None,
     failed_run_indices: list[int] | None = None,
+    requested_run_indices: list[int] | None = None,
 ) -> dict[str, Any]:
     generation_usages = [
         trajectory["generation_usage"] for trajectory in ordered_trajectories
@@ -1112,6 +1124,15 @@ def _build_generation_payload(
         )
     if failed_run_indices is not None:
         payload["failed_run_indices"] = _sorted_unique_run_indices(failed_run_indices)
+    selected_run_indices = (
+        requested_run_indices
+        if requested_run_indices is not None
+        else list(runtime_config.run_indices)
+    )
+    if selected_run_indices:
+        payload["requested_run_indices"] = _sorted_unique_run_indices(
+            selected_run_indices
+        )
     payload.update(_payload_run_state(payload))
     return payload
 
@@ -1177,6 +1198,10 @@ def merge_generation_output_payloads(
         ],
         completed_run_indices=list(completed_run_indices),
         failed_run_indices=list(failed_run_indices),
+        requested_run_indices=sorted(
+            set(existing_payload.get("requested_run_indices", []))
+            | set(new_payload.get("requested_run_indices", []))
+        ),
     )
 
 

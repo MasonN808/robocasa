@@ -16,12 +16,15 @@ import numpy as np
 from robocasa.models.fixtures.fixture import Fixture
 from robocasa.utils.placement import (
     _FRONT_WORKING_LATERAL_LIMITS,
+    EXCLUSIVE_WORKSPACE_CORRIDOR_WIDTH,
     front_lateral_offset,
     get_face_center,
     get_face_order,
     get_face_target_point,
+    get_front_alignment_metrics,
     get_front_working_side_clearance,
     get_fixture_aabb,
+    is_in_front_workspace_corridor,
     is_within_face_working_band,
     prepend_face_target_candidate,
 )
@@ -32,6 +35,44 @@ _SKIP_NAME_PATTERNS = ("floor",)
 # Minimum height (z) of the fixture's lowest ext_site point for it to be
 # considered "above ground" and therefore not a ground obstacle.
 _ABOVE_GROUND_Z_THRESHOLD = 0.60
+_COUNTERTOP_APPLIANCE_TOKENS = (
+    "toaster",
+    "coffee",
+    "blender",
+    "mixer",
+    "kettle",
+    # Stovetops share the same aisle-facing approach requirement. Keeping
+    # them here makes parent-surface reservation and direct stove navigation
+    # use one geometrically identical working corridor.
+    "stove",
+    "stovetop",
+    "cooktop",
+)
+_SMALL_REFERENCE_FIXTURE_TOKENS = ("stool", "chair")
+_SMALL_REFERENCE_LATERAL_EXTENSION = 0.10
+
+
+def _is_countertop_appliance(fixture: Fixture) -> bool:
+    type_name = " ".join(
+        (
+            type(fixture).__name__.lower(),
+            str(getattr(fixture, "name", "") or "").lower(),
+        )
+    )
+    return any(token in type_name for token in _COUNTERTOP_APPLIANCE_TOKENS)
+
+
+def _is_small_reference_fixture(fixture: Fixture) -> bool:
+    """Whether a narrow reference fixture may borrow nearby aisle width."""
+    type_name = " ".join(
+        (
+            type(fixture).__name__.lower(),
+            str(getattr(fixture, "name", "") or "").lower(),
+        )
+    )
+    return any(token in type_name for token in _SMALL_REFERENCE_FIXTURE_TOKENS)
+
+
 def _classify_enclosure_obstacle(name: str) -> str:
     """Return a coarse obstacle class used by local corner-trap checks."""
 
@@ -685,6 +726,34 @@ class OccupancyGrid:
 
         return candidates
 
+    def preferred_reachable_approach_face(self, fixture: Fixture) -> str:
+        """Return the face explicit unobstructed surface navigation would use.
+
+        Countertop appliance meshes do not reliably encode a usable front.
+        Match the surface-placement policy instead: inspect all four faces at
+        the normal fallback standoffs and choose the valid candidate nearest
+        the fixture center, without considering transient robot occupancy.
+        """
+        aabb = get_fixture_aabb(fixture)
+        if aabb is None:
+            return self._get_face_order(fixture)[0]
+        fmin, fmax = aabb
+        center = (np.asarray(fmin, dtype=float) + np.asarray(fmax, dtype=float)) / 2.0
+        candidate_faces = ["neg_y", "pos_y", "neg_x", "pos_x"]
+        for standoff in (
+            self._standoff,
+            self._standoff + self.cell_size,
+            self._standoff + 2 * self.cell_size,
+        ):
+            valid: list[tuple[float, str]] = []
+            for face in candidate_faces:
+                for pos, _yaw in self._sample_face(face, fmin, fmax, standoff=standoff):
+                    if self.is_standable(pos):
+                        valid.append((float(np.linalg.norm(pos - center)), face))
+            if valid:
+                return min(valid, key=lambda item: item[0])[1]
+        return self._get_face_order(fixture)[0]
+
     # ------------------------------------------------------------------
     # Placement
     # ------------------------------------------------------------------
@@ -696,6 +765,7 @@ class OccupancyGrid:
         ref_object_pos: np.ndarray | None = None,
         robot_positions: list[np.ndarray] | None = None,
         require_front: bool = False,
+        prohibited_working_fixtures: list[Fixture] | None = None,
     ) -> tuple[np.ndarray, float] | None:
         """Find a valid position near *fixture* at standoff distance.
 
@@ -708,6 +778,10 @@ class OccupancyGrid:
                 (surfaces like counters), consider ALL faces and use
                 ``ref_object_pos`` to bias toward the referenced object when
                 provided.
+            prohibited_working_fixtures: Exclusive child fixtures whose front
+                working poses must not be used for this target. This is a hard
+                constraint: if every otherwise-valid pose is reserved, return
+                None rather than silently occupying a child's workspace.
 
         Yaw is always axis-aligned (perpendicular to the fixture face).
         """
@@ -723,11 +797,35 @@ class OccupancyGrid:
             return None
         fmin, fmax = aabb
         fixture_center = np.asarray(fixture.pos[:2], dtype=float)
+        prohibited_working_fixtures = list(prohibited_working_fixtures or [])
+
+        def _occupies_prohibited_workspace(pos: np.ndarray) -> bool:
+            for prohibited in prohibited_working_fixtures:
+                countertop_appliance = _is_countertop_appliance(prohibited)
+                # Small appliances inherit the supporting counter's aisle-facing
+                # direction. Their mesh rotation is not a reliable declaration
+                # of the usable interaction face across assets.
+                front_face = (
+                    self.preferred_reachable_approach_face(prohibited)
+                    if countertop_appliance else None
+                )
+                if is_in_front_workspace_corridor(
+                    prohibited,
+                    pos,
+                    max_depth=0.75,
+                    margin=1e-6,
+                    front_face=front_face,
+                    corridor_width=EXCLUSIVE_WORKSPACE_CORRIDOR_WIDTH,
+                ):
+                    return True
+            return False
 
         def _filter_valid(candidates):
             """Filter candidates to reachable, collision-free positions."""
             valid: list[tuple[np.ndarray, float]] = []
             for pos, yaw in candidates:
+                if _occupies_prohibited_workspace(pos):
+                    continue
                 # Safety: never place inside the target fixture's AABB
                 if (pos[0] >= fmin[0] and pos[0] <= fmax[0] and
                         pos[1] >= fmin[1] and pos[1] <= fmax[1]):
@@ -846,7 +944,17 @@ class OccupancyGrid:
                 target_point = np.asarray(ref_object_pos, dtype=float)[:2]
             candidate_faces = ["neg_y", "pos_y", "neg_x", "pos_x"]
             fixture_name = str(getattr(fixture, "name", "") or "").lower()
-            if "counter_corner" in fixture_name:
+            candidate_fmin = np.asarray(fmin, dtype=float).copy()
+            candidate_fmax = np.asarray(fmax, dtype=float).copy()
+            if _is_countertop_appliance(fixture):
+                corridor_face = self.preferred_reachable_approach_face(fixture)
+                candidate_faces = [corridor_face]
+                lateral_axis = 0 if corridor_face in {"neg_y", "pos_y"} else 1
+                center = (candidate_fmin[lateral_axis] + candidate_fmax[lateral_axis]) / 2.0
+                half_width = EXCLUSIVE_WORKSPACE_CORRIDOR_WIDTH / 2.0
+                candidate_fmin[lateral_axis] = center - half_width
+                candidate_fmax[lateral_axis] = center + half_width
+            elif "counter_corner" in fixture_name:
                 candidate_faces = self._get_face_order(
                     fixture,
                     front_target_xy=ref_object_pos,
@@ -855,9 +963,40 @@ class OccupancyGrid:
                 all_candidates: list[tuple[np.ndarray, float]] = []
                 for face_key in candidate_faces:
                     all_candidates.extend(
-                        self._sample_face(face_key, fmin, fmax, standoff=standoff)
+                        self._sample_face(
+                            face_key,
+                            candidate_fmin,
+                            candidate_fmax,
+                            standoff=standoff,
+                        )
                     )
                 valid = _filter_valid(all_candidates)
                 if valid:
                     return _pick_best(valid, target_point)
+
+            # Stools and chairs are location references rather than compact
+            # single-user appliances. Their tiny AABBs can expose only one
+            # sampled pose even when the surrounding aisle visibly supports
+            # two robots. Preserve the ordinary sampler first; only after it
+            # fails, extend each face's sampling line by 10 cm at both ends.
+            if _is_small_reference_fixture(fixture):
+                for standoff in standoffs:
+                    extended_candidates: list[tuple[np.ndarray, float]] = []
+                    for face_key in candidate_faces:
+                        extended_min = candidate_fmin.copy()
+                        extended_max = candidate_fmax.copy()
+                        parallel_axis = 0 if face_key in {"neg_y", "pos_y"} else 1
+                        extended_min[parallel_axis] -= _SMALL_REFERENCE_LATERAL_EXTENSION
+                        extended_max[parallel_axis] += _SMALL_REFERENCE_LATERAL_EXTENSION
+                        extended_candidates.extend(
+                            self._sample_face(
+                                face_key,
+                                extended_min,
+                                extended_max,
+                                standoff=standoff,
+                            )
+                        )
+                    valid = _filter_valid(extended_candidates)
+                    if valid:
+                        return _pick_best(valid, target_point)
             return None

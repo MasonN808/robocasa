@@ -20,7 +20,7 @@ from typing import Any
 import torch
 from accelerate.state import PartialState
 from peft import LoraConfig, TaskType, get_peft_model
-from transformers import AutoProcessor, Trainer, TrainingArguments, set_seed
+from transformers import AutoProcessor, Trainer, TrainerCallback, TrainingArguments, set_seed
 from transformers.trainer_pt_utils import LengthGroupedSampler
 from transformers.utils import is_torch_bf16_gpu_available
 
@@ -50,6 +50,10 @@ from training.bc_task_vlm.dataset import (
 )
 from data_generation.task_level.runtime.client import load_dotenv_file
 from training.bc_task_vlm.evaluation import evaluate_structured_generation
+from training.bc_task_vlm.preprocessed_data import (
+    PreprocessedFeatureDataset,
+    load_preprocessed_artifact_from_disk,
+)
 from training.bc_task_vlm.task_registry import resolve_task_name, supported_task_names
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +63,7 @@ _DEFAULT_WANDB_PROJECT = "robocasa-bc-task-vlm"
 @dataclass(frozen=True)
 class RunConfiguration:
     dataset_root: str
+    preprocessed_data_dir: str | None
     model_name_or_path: str
     processor_name_or_path: str
     train_tasks: list[str]
@@ -86,6 +91,7 @@ class RunConfiguration:
     train_sampling_strategy: str
     num_epochs: float
     learning_rate: float
+    weight_decay: float
     max_length: int | None
     max_tokens: int | None
     image_resolution: int | None
@@ -105,6 +111,7 @@ class RunConfiguration:
     lora_dropout: float
     lora_target_modules: list[str]
     save_steps: int
+    checkpoints_per_epoch: int
     eval_steps: int
     logging_steps: int
     max_steps: int
@@ -137,6 +144,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("data_generation/task_level/data/image/20260404T191734Z"),
         help="Root directory of the rendered trajectory dataset.",
+    )
+    parser.add_argument(
+        "--preprocessed-data-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Load train/validation examples produced by preprocess.py instead "
+            "of rebuilding them from --dataset-root. The artifact contract is "
+            "checked against the runtime SFT flags before model loading."
+        ),
     )
     parser.add_argument(
         "--model-name-or-path",
@@ -353,6 +370,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-epochs", type=float, default=3.0)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.0,
+        help="AdamW decoupled weight decay applied to trainable parameters.",
+    )
+    parser.add_argument(
         "--max-length",
         type=int,
         default=16384,
@@ -453,6 +476,15 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated module names to target with LoRA.",
     )
     parser.add_argument("--save-steps", type=int, default=100)
+    parser.add_argument(
+        "--checkpoints-per-epoch",
+        type=int,
+        default=0,
+        help=(
+            "When positive, save whenever training crosses each 1/N epoch "
+            "boundary. This supersedes --save-steps and supports half-epoch saves."
+        ),
+    )
     parser.add_argument("--eval-steps", type=int, default=100)
     parser.add_argument("--logging-steps", type=int, default=10)
     parser.add_argument(
@@ -715,6 +747,11 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
     max_tokens = args.max_length if args.max_length and args.max_length > 0 else None
     return RunConfiguration(
         dataset_root=str(dataset_root),
+        preprocessed_data_dir=(
+            str(args.preprocessed_data_dir.resolve())
+            if args.preprocessed_data_dir is not None
+            else None
+        ),
         model_name_or_path=args.model_name_or_path,
         processor_name_or_path=processor_name_or_path,
         train_tasks=train_tasks,
@@ -754,6 +791,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         train_sampling_strategy=args.train_sampling_strategy,
         num_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
         max_length=max_tokens,
         max_tokens=max_tokens,
         image_resolution=(
@@ -781,6 +819,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         lora_dropout=args.lora_dropout,
         lora_target_modules=_split_csv(args.lora_target_modules),
         save_steps=args.save_steps,
+        checkpoints_per_epoch=max(args.checkpoints_per_epoch, 0),
         eval_steps=args.eval_steps,
         logging_steps=args.logging_steps,
         max_steps=args.max_steps,
@@ -1045,7 +1084,7 @@ def _build_examples_for_tasks(
     predict_task_complete: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "local",
+    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
     partial_observation_mode: str = "consume_once",
     use_example_cache: bool,
     trust_example_cache: bool,
@@ -1080,6 +1119,23 @@ def _build_examples_for_tasks(
                 dataset_root=dataset_root,
                 task_name=task_name,
                 trajectory_ids=task_trajectory_ids,
+            )
+            # Always fingerprint (and therefore validate) the raw source before
+            # trusting a cache.  --trust-example-cache may skip signature
+            # comparison, but it may not bypass the trajectory validity gate.
+            fingerprint = build_example_cache_fingerprint(
+                dataset_root=dataset_root,
+                task_name=task_name,
+                trajectory_ids=task_trajectory_ids,
+                sft_format=sft_format,
+                predict_agent=predict_agent,
+                train_get_image=train_get_image,
+                train_reasoning=train_reasoning,
+                predict_task_complete=predict_task_complete,
+                causal_single_cache=causal_single_cache,
+                partial_history=partial_history,
+                partial_step_index_mode=partial_step_index_mode,
+                partial_observation_mode=partial_observation_mode,
             )
             if trust_example_cache:
                 task_examples = load_examples_from_cache(
@@ -1415,6 +1471,65 @@ def _cap_eval_examples(
     return capped_examples
 
 
+def _validate_preprocessed_contract(
+    *, preprocess_config: dict[str, Any] | None, config: RunConfiguration
+) -> None:
+    if preprocess_config is None:
+        raise ValueError(
+            "Preprocessed artifact is missing preprocess_config.json; refusing "
+            "to train because its prompt contract cannot be verified."
+        )
+    from data_generation.task_level.tasks.shared.validation_contract import (
+        VALIDATOR_CONTRACT_VERSION,
+    )
+    from training.bc_task_vlm.prompting import PROMPT_CONTRACT_VERSION
+
+    expected = {
+        "sft_format": config.sft_format,
+        "predict_acting_agent": config.predict_acting_agent,
+        "train_get_image": config.train_get_image,
+        "train_reasoning": config.train_reasoning,
+        "causal_single_cache": config.causal_single_cache,
+        "partial_history": config.partial_history,
+        "partial_step_index_mode": config.partial_step_index_mode,
+        "partial_observation_mode": config.partial_observation_mode,
+        "trajectory_validator_contract_version": VALIDATOR_CONTRACT_VERSION,
+        "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+    }
+    mismatches: list[str] = []
+    for key, runtime_value in expected.items():
+        artifact_value = preprocess_config.get(key)
+        if key == "train_reasoning" and artifact_value is None:
+            # Artifacts created before reasoning became part of the persisted
+            # preprocessing contract are unambiguously non-reasoning.
+            artifact_value = False
+        if key == "partial_observation_mode" and isinstance(artifact_value, str):
+            artifact_value = artifact_value.replace("-", "_")
+        if artifact_value != runtime_value:
+            mismatches.append(
+                f"{key}: artifact={artifact_value!r}, runtime={runtime_value!r}"
+            )
+    if mismatches:
+        raise ValueError(
+            "Preprocessed artifact does not match the runtime prompt contract: "
+            + "; ".join(mismatches)
+        )
+
+
+def _estimate_feature_length(
+    feature: dict[str, Any], *, max_images_per_sample: int | None
+) -> int:
+    text_characters = len(
+        json.dumps(feature["messages"], ensure_ascii=False, separators=(",", ":"))
+    ) + len(
+        json.dumps(feature["tool_schemas"], ensure_ascii=False, separators=(",", ":"))
+    )
+    image_count = len(feature.get("image_paths", ()))
+    if max_images_per_sample is not None and max_images_per_sample > 0:
+        image_count = min(image_count, max_images_per_sample)
+    return max(1, math.ceil(text_characters / 4)) + image_count * 256
+
+
 def _build_training_arguments(
     *,
     config: RunConfiguration,
@@ -1430,6 +1545,7 @@ def _build_training_arguments(
         ),
         "gradient_accumulation_steps": config.grad_accum,
         "learning_rate": config.learning_rate,
+        "weight_decay": config.weight_decay,
         "num_train_epochs": config.num_epochs,
         "bf16": config.bf16,
         "fp16": config.fp16,
@@ -1437,7 +1553,9 @@ def _build_training_arguments(
         "save_steps": config.save_steps,
         "eval_steps": config.eval_steps,
         "max_steps": config.max_steps,
-        "save_strategy": "steps",
+        "save_strategy": (
+            "no" if config.checkpoints_per_epoch > 0 else "steps"
+        ),
         "save_total_limit": config.save_total_limit,
         "remove_unused_columns": False,
         "report_to": config.report_to,
@@ -1459,9 +1577,13 @@ def _build_training_arguments(
         "optim": config.optim,
         "seed": config.seed,
         "label_names": ["labels"],
-        "load_best_model_at_end": has_validation,
-        "metric_for_best_model": "eval_loss",
-        "greater_is_better": False,
+        # Keep the final trained adapter active. Reloading the "best" PEFT
+        # checkpoint is both misleading when eval/save happens only once
+        # before the final step (it discards all later updates) and currently
+        # crosses an incompatible PEFT/transformers tensor-parallel load path.
+        # Step checkpoints are still written and remain available for explicit
+        # resume/evaluation.
+        "load_best_model_at_end": False,
     }
     signature = inspect.signature(TrainingArguments.__init__)
     if "evaluation_strategy" in signature.parameters:
@@ -1517,6 +1639,25 @@ def _wandb_structured_section_metrics(
             metric_name = key.removeprefix("structured_eval_")
             grouped_metrics[f"eval_{section}/{metric_name}"] = value
     return grouped_metrics
+
+
+class FractionalEpochCheckpointCallback(TrainerCallback):
+    """Request checkpoints when training crosses fixed fractional epochs."""
+
+    def __init__(self, checkpoints_per_epoch: int) -> None:
+        if checkpoints_per_epoch <= 0:
+            raise ValueError("checkpoints_per_epoch must be positive")
+        self.checkpoints_per_epoch = checkpoints_per_epoch
+        self.next_boundary = 1.0 / checkpoints_per_epoch
+
+    def on_step_end(self, args, state, control, **kwargs):
+        epoch = float(state.epoch or 0.0)
+        epsilon = 1e-9
+        if epoch + epsilon >= self.next_boundary:
+            control.should_save = True
+            while epoch + epsilon >= self.next_boundary:
+                self.next_boundary += 1.0 / self.checkpoints_per_epoch
+        return control
 
 
 class StructuredEvalTrainer(Trainer):
@@ -1730,12 +1871,26 @@ def main() -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
+    loaded_artifact = None
+    if config.preprocessed_data_dir is not None:
+        _log_startup(
+            f"Loading preprocessed artifact from {config.preprocessed_data_dir}",
+            state=distributed_state,
+        )
+        loaded_artifact = load_preprocessed_artifact_from_disk(
+            Path(config.preprocessed_data_dir)
+        )
+        _validate_preprocessed_contract(
+            preprocess_config=loaded_artifact.preprocess_config,
+            config=config,
+        )
+
     selected_validation_trajectory_ids: dict[str, set[str]] = {}
     uses_held_out_validation = (
         config.validation_trajectories_per_task > 0
         or config.validation_trajectory_fraction > 0.0
     )
-    if uses_held_out_validation and config.val_tasks:
+    if loaded_artifact is None and uses_held_out_validation and config.val_tasks:
         selected_validation_trajectory_ids = _select_validation_trajectory_ids(
             dataset_root=dataset_root,
             val_tasks=config.val_tasks,
@@ -1755,7 +1910,7 @@ def main() -> None:
         if uses_held_out_validation and selected_validation_trajectory_ids
         else None
     )
-    train_examples = _build_examples_for_tasks(
+    train_examples = [] if loaded_artifact is not None else _build_examples_for_tasks(
         dataset_root=dataset_root,
         task_names=config.train_tasks,
         split_name="train",
@@ -1778,7 +1933,7 @@ def main() -> None:
     validation_trajectory_ids_by_task = (
         selected_validation_trajectory_ids if uses_held_out_validation else None
     )
-    val_examples = _build_examples_for_tasks(
+    val_examples = [] if loaded_artifact is not None else _build_examples_for_tasks(
         dataset_root=dataset_root,
         task_names=config.val_tasks,
         split_name="validation",
@@ -1798,31 +1953,72 @@ def main() -> None:
         example_build_workers=config.example_build_workers,
         state=distributed_state,
     )
-    train_examples, val_examples = _apply_validation_trajectory_split(
-        train_examples=train_examples,
-        val_examples=val_examples,
-        selected_validation_trajectory_ids=selected_validation_trajectory_ids,
-        config=config,
-        state=distributed_state,
-    )
-    val_examples = _cap_eval_examples(
-        val_examples=val_examples,
-        config=config,
-        state=distributed_state,
-    )
-    if not train_examples:
-        raise ValueError("Training split is empty after validation holdout filtering.")
-    train_dataset = CentralizedDataset(train_examples)
-    val_dataset = CentralizedDataset(val_examples)
+    if loaded_artifact is not None:
+        train_split = loaded_artifact.train_split
+        val_split = loaded_artifact.validation_split
+        if config.eval_max_samples is not None and len(val_split) > config.eval_max_samples:
+            rng = random.Random(config.seed)
+            selected_indices = sorted(
+                rng.sample(range(len(val_split)), config.eval_max_samples)
+            )
+            val_split = val_split.select(selected_indices)
+        if len(train_split) == 0:
+            raise ValueError("Preprocessed training split is empty.")
+        train_dataset = PreprocessedFeatureDataset(
+            train_split, artifact_root=loaded_artifact.artifact_root,
+            include_pretokenized=False,
+        )
+        val_dataset = PreprocessedFeatureDataset(
+            val_split, artifact_root=loaded_artifact.artifact_root,
+            include_pretokenized=False,
+        )
+        split_manifest = loaded_artifact.split_manifest
+        _log_startup(
+            "Loaded preprocessed splits: "
+            f"{len(train_dataset)} train / {len(val_dataset)} validation examples",
+            state=distributed_state,
+        )
+    else:
+        train_examples, val_examples = _apply_validation_trajectory_split(
+            train_examples=train_examples,
+            val_examples=val_examples,
+            selected_validation_trajectory_ids=selected_validation_trajectory_ids,
+            config=config,
+            state=distributed_state,
+        )
+        val_examples = _cap_eval_examples(
+            val_examples=val_examples,
+            config=config,
+            state=distributed_state,
+        )
+        if not train_examples:
+            raise ValueError("Training split is empty after validation holdout filtering.")
+        train_dataset = CentralizedDataset(train_examples)
+        val_dataset = CentralizedDataset(val_examples)
+        _log_startup("Building split manifest", state=distributed_state)
+        split_manifest = build_split_manifest(
+            dataset_root=dataset_root,
+            train_examples=train_examples,
+            val_examples=val_examples,
+        )
     train_example_lengths: list[int] | None = None
     if config.train_sampling_strategy == "group_by_length":
-        train_example_lengths = [
-            estimate_centralized_example_length(
-                example,
-                max_images_per_sample=config.max_images_per_sample,
-            )
-            for example in train_examples
-        ]
+        if loaded_artifact is not None:
+            train_example_lengths = [
+                _estimate_feature_length(
+                    train_dataset[index],
+                    max_images_per_sample=config.max_images_per_sample,
+                )
+                for index in range(len(train_dataset))
+            ]
+        else:
+            train_example_lengths = [
+                estimate_centralized_example_length(
+                    example,
+                    max_images_per_sample=config.max_images_per_sample,
+                )
+                for example in train_examples
+            ]
         sorted_lengths = sorted(train_example_lengths)
         percentile = lambda fraction: sorted_lengths[  # noqa: E731
             min(len(sorted_lengths) - 1, int(fraction * (len(sorted_lengths) - 1)))
@@ -1834,13 +2030,6 @@ def main() -> None:
             "The longest grouped batch is scheduled first.",
             state=distributed_state,
         )
-
-    _log_startup("Building split manifest", state=distributed_state)
-    split_manifest = build_split_manifest(
-        dataset_root=dataset_root,
-        train_examples=train_examples,
-        val_examples=val_examples,
-    )
 
     _log_startup(
         f"Loading processor from {config.processor_name_or_path}",
@@ -1889,7 +2078,11 @@ def main() -> None:
     )
 
     evaluation_strategy = "steps" if len(val_dataset) > 0 else "no"
-    if len(val_dataset) > 0 and config.save_steps % config.eval_steps != 0:
+    if (
+        len(val_dataset) > 0
+        and config.checkpoints_per_epoch == 0
+        and config.save_steps % config.eval_steps != 0
+    ):
         raise ValueError(
             "--save-steps must be a multiple of --eval-steps when validation is enabled."
         )
@@ -1901,6 +2094,11 @@ def main() -> None:
     )
 
     _log_startup("Initializing Trainer", state=distributed_state)
+    callbacks = (
+        [FractionalEpochCheckpointCallback(config.checkpoints_per_epoch)]
+        if config.checkpoints_per_epoch > 0
+        else None
+    )
     trainer = StructuredEvalTrainer(
         structured_eval_config=config if len(val_dataset) > 0 else None,
         structured_eval_output_dir=output_dir,
@@ -1910,6 +2108,7 @@ def main() -> None:
         data_collator=data_collator,
         train_dataset=train_dataset,
         eval_dataset=val_dataset if len(val_dataset) > 0 else None,
+        callbacks=callbacks,
     )
 
     _log_startup(

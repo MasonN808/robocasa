@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from training.bc_task_vlm import dataset as dataset_module
 from training.bc_task_vlm.dataset import (
+    build_same_task_trajectory_split,
     build_example_cache_fingerprint,
     build_example_cache_path,
     build_centralized_examples,
@@ -20,6 +21,29 @@ from training.bc_task_vlm.dataset import (
     load_examples_from_cache,
     save_examples_to_cache,
 )
+
+
+class SameTaskTrajectorySplitTests(unittest.TestCase):
+    @unittest.mock.patch(
+        "training.bc_task_vlm.dataset.list_task_trajectory_ids",
+        return_value=[f"traj_{index:06d}" for index in range(100)],
+    )
+    def test_seeded_split_is_reproducible_and_not_a_suffix(self, _mock_list):
+        kwargs = dict(
+            dataset_root=Path("/unused"),
+            train_task_names=["task_a"],
+            validation_task_names=["task_a"],
+            validation_fraction=0.1,
+            min_validation_trajectories_per_task=1,
+        )
+        first = build_same_task_trajectory_split(**kwargs, seed=42)
+        repeated = build_same_task_trajectory_split(**kwargs, seed=42)
+        changed = build_same_task_trajectory_split(**kwargs, seed=43)
+        held_out = first.validation_trajectory_ids_by_task["task_a"]
+        self.assertEqual(first, repeated)
+        self.assertNotEqual(first, changed)
+        self.assertEqual(len(held_out), 10)
+        self.assertNotEqual(held_out, [f"traj_{index:06d}" for index in range(90, 100)])
 
 
 # A real rendered trajectory, vendored into the repo. These tests used to copy

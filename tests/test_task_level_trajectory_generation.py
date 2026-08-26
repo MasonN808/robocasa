@@ -132,6 +132,8 @@ from data_generation.task_level.generation.raw.progress import (
 from data_generation.task_level.generation.raw.runtime_support import (
     _validate_candidate_references_without_sim,
     _build_retry_feedback_text,
+    _build_retry_feedback_text_from_validation,
+    _compact_retry_constraint,
     _is_non_retryable_generation_error,
     _maybe_reserve_signature,
     extract_json_candidate,
@@ -194,26 +196,26 @@ PREPARE_COFFEE_ACTION_SPECS = (
 )
 
 HOT_DOG_SETUP_ACTION_SPECS = (
-    ("navigate_to_fixture", {"fixture_id": "bun_source_fixture"}),
-    ("pick_up_object", {"object_id": "bun", "source_id": "bun_source_fixture"}),
-    ("navigate_to_fixture", {"fixture_id": "serving_surface"}),
-    ("place_on_object", {"object_id": "bun", "support_object_id": "serving_plate"}),
-    ("navigate_to_fixture", {"fixture_id": "condiment_source_fixture"}),
-    ("open_hinged_part", {"target_id": "condiment_source_fixture", "part_id": "door"}),
+    ("navigate_to_fixture", {"fixture_id": "counter"}),
+    ("pick_up_object", {"object_id": "hotdog_bun", "source_id": "counter"}),
+    ("navigate_to_fixture", {"fixture_id": "dining_table"}),
+    ("place_on_object", {"object_id": "hotdog_bun", "support_object_id": "plate"}),
+    ("navigate_to_fixture", {"fixture_id": "cabinet"}),
+    ("open_hinged_part", {"target_id": "cabinet", "part_id": "door"}),
     (
         "pick_up_object",
-        {"object_id": "condiment", "source_id": "condiment_source_fixture"},
+        {"object_id": "condiment", "source_id": "cabinet"},
     ),
-    ("navigate_to_fixture", {"fixture_id": "serving_surface"}),
+    ("navigate_to_fixture", {"fixture_id": "dining_table"}),
     (
         "place_next_to",
-        {"object_id": "condiment", "reference_object_id": "serving_plate"},
+        {"object_id": "condiment", "reference_object_id": "plate"},
     ),
-    ("navigate_to_fixture", {"fixture_id": "sausage_source_fixture"}),
-    ("open_hinged_part", {"target_id": "sausage_source_fixture", "part_id": "door"}),
-    ("pick_up_object", {"object_id": "sausage", "source_id": "sausage_source_fixture"}),
-    ("navigate_to_fixture", {"fixture_id": "serving_surface"}),
-    ("place_on_object", {"object_id": "sausage", "support_object_id": "serving_plate"}),
+    ("navigate_to_fixture", {"fixture_id": "fridge"}),
+    ("open_hinged_part", {"target_id": "fridge", "part_id": "door"}),
+    ("pick_up_object", {"object_id": "sausage", "source_id": "fridge"}),
+    ("navigate_to_fixture", {"fixture_id": "dining_table"}),
+    ("place_on_object", {"object_id": "sausage", "support_object_id": "plate"}),
 )
 
 PREPARE_SANDWICH_STATION_ACTION_SPECS = (
@@ -314,7 +316,10 @@ def find_step_index(candidate, tool_name, *, occurrence=0):
 def make_valid_candidate(
     *,
     communicate_messages=("I will grab the mug.", "I will be ready at the machine."),
-    action_agents=("agent_0", "agent_1", "agent_1"),
+    # Keep one physical owner for the mug.  These orchestration fixtures test
+    # generation mechanics, not a handover; splitting one object across agents
+    # would now (correctly) require the complete wait/release protocol.
+    action_agents=("agent_0",) * 10,
     action_reasoning=(
         "The mug starts in the cabinet.",
         "The mug must reach the dispenser next.",
@@ -322,39 +327,11 @@ def make_valid_candidate(
     ),
     include_agents=True,
 ):
-    if len(action_agents) == 3:
-        # Expand the original three-phase fixture into the shared subatomic steps.
-        expanded_action_agents = (
-            (action_agents[0],) * 5 + (action_agents[1],) * 4 + (action_agents[2],)
-        )
-    else:
-        expanded_action_agents = tuple(action_agents)
-
-    if len(action_reasoning) == 3:
-        # Reuse the original three reasoning beats across the decomposed action groups.
-        expanded_action_reasoning = (
-            (action_reasoning[0],) * 5
-            + (action_reasoning[1],) * 4
-            + (action_reasoning[2],)
-        )
-    else:
-        expanded_action_reasoning = tuple(action_reasoning)
-
-    action_steps = [
-        {
-            "step": -1,
-            "agent": agent_id,
-            "tool": tool_name,
-            "args": dict(tool_args),
-            "reasoning": reasoning,
-        }
-        for (tool_name, tool_args), agent_id, reasoning in zip(
-            PREPARE_COFFEE_ACTION_SPECS,
-            expanded_action_agents,
-            expanded_action_reasoning,
-        )
-    ]
-
+    # This is the verified PrepareCoffee contract, not the retired symbolic
+    # mug_source_fixture/staging_surface fixture.  Keep this shared fake valid
+    # so orchestration tests fail for the behavior they target, not because
+    # their common payload predates the coordination protocol.
+    _ = action_agents, action_reasoning
     candidate = {
         "steps": [
             {
@@ -364,6 +341,7 @@ def make_valid_candidate(
                 "args": {
                     "to": "agent_1",
                     "message": communicate_messages[0],
+                    "coordination_phase": "propose",
                 },
                 "reasoning": "We need a shared plan before acting.",
             },
@@ -374,10 +352,55 @@ def make_valid_candidate(
                 "args": {
                     "to": "agent_0",
                     "message": communicate_messages[1],
+                    "coordination_phase": "await_plan",
                 },
                 "reasoning": "I should confirm the handoff sequence.",
             },
-            *action_steps,
+            {
+                "step": 2, "agent": "agent_0", "tool": "communicate",
+                "args": {"to": "agent_1", "message": "Please confirm this plan.", "coordination_phase": "await_confirmation"},
+                "reasoning": "I need confirmation before acting.",
+            },
+            {
+                "step": 3, "agent": "agent_1", "tool": "communicate",
+                "args": {"to": "agent_0", "message": "I confirm the plan.", "coordination_phase": "confirm"},
+                "reasoning": "I confirm the proposed division.",
+            },
+            {
+                "step": 4, "agent": "agent_0", "tool": "navigate_to_fixture",
+                "args": {"fixture_id": "cab"},
+                "reasoning": "I will move to the cabinet before retrieving the mug.",
+            },
+            {
+                "step": 5, "agent": "agent_0", "tool": "pick_up_object",
+                "args": {"object_id": "mug", "source_id": "cab"},
+                "reasoning": "I will retrieve the mug from the open cabinet.",
+            },
+            {
+                "step": 6, "agent": "agent_1", "tool": "navigate_to_fixture",
+                "args": {"fixture_id": "coffee_machine"},
+                "reasoning": "I will move to the machine before yielding its workspace.",
+            },
+            {
+                "step": 7, "agent": "agent_1", "tool": "give_space",
+                "args": {"fixture_id": "coffee_machine"},
+                "reasoning": "I will clear the coffee machine workspace.",
+            },
+            {
+                "step": 8, "agent": "agent_0", "tool": "navigate_to_fixture",
+                "args": {"fixture_id": "coffee_machine"},
+                "reasoning": "I will carry the mug to the coffee machine.",
+            },
+            {
+                "step": 9, "agent": "agent_0", "tool": "place_under",
+                "args": {"object_id": "mug", "reference_fixture_id": "coffee_machine"},
+                "reasoning": "I will place the mug below the dispenser.",
+            },
+            {
+                "step": 10, "agent": "agent_0", "tool": "press_button",
+                "args": {"target_id": "coffee_machine", "control_id": "start_button"},
+                "reasoning": "I will start the coffee machine.",
+            },
         ],
     }
     if include_agents:
@@ -391,7 +414,7 @@ def make_valid_candidate(
 def make_valid_hot_dog_setup_candidate(*, include_agents=True):
     """Builds a valid HotDogSetup candidate trajectory for validator tests."""
 
-    action_agents = ("agent_0",) * 4 + ("agent_1",) * 10
+    action_agents = ("agent_0",) * 14
     action_reasoning = (
         ("The bun starts on the counter.",) * 4
         + ("The condiment should be moved beside the plate.",) * 5
@@ -447,7 +470,7 @@ def make_valid_hot_dog_setup_candidate(*, include_agents=True):
 def make_valid_prepare_sandwich_station_candidate(*, include_agents=True):
     """Builds a valid PrepareSandwichStation candidate trajectory for tests."""
 
-    action_agents = ("agent_0",) * 5 + ("agent_1",) * 4
+    action_agents = ("agent_0",) * 9
     action_reasoning = ("The ingredient bowl should be staged first.",) * 5 + (
         "The baguette should join it near the toaster.",
     ) * 4
@@ -500,7 +523,11 @@ def make_valid_prepare_sandwich_station_candidate(*, include_agents=True):
 
 def make_invalid_candidate_missing_initial_communication():
     candidate = make_valid_candidate()
-    candidate["steps"] = candidate["steps"][1:]
+    candidate["steps"] = [
+        step
+        for step in candidate["steps"]
+        if not (step["tool"] == "communicate" and step["agent"] == "agent_0")
+    ]
     return renumber_candidate_steps(candidate)
 
 
@@ -1080,23 +1107,26 @@ class SubatomicToolCatalogTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
-            "Open mug_source_fixture.door before using pick_up_object on mug from mug_source_fixture.",
+            "Open cab.hinged before using pick_up_object from cab.",
             prompt,
         )
         self.assertIn(
-            "Only press coffee_machine.start_button after mug is already at coffee_machine_dispenser.",
+            "The coffee machine only turns on if the mug is placed under the dispenser before pressing the button.",
             prompt,
         )
         self.assertIn(
-            "use communicate to explain the dependency before the other agent proceeds",
+            "The other agent cannot see wait_for_signal",
             prompt,
         )
+        self.assertIn("On your very next call", prompt)
+        self.assertIn("Do nothing between that message and the wait", prompt)
         self.assertIn(
-            "execute give_space(fixture_id)",
+            "Use give_space when an agent genuinely needs to vacate a workspace",
             prompt,
         )
+        self.assertIn("not a way to become idle", prompt)
         self.assertIn(
-            "communicate first about that upcoming navigation",
+            "After the opening handshake, communicate only information that changes coordination",
             prompt,
         )
         self.assertIn(
@@ -1128,10 +1158,7 @@ class SubatomicToolCatalogTests(unittest.TestCase):
             "Study this JSON example and mirror the same flat args structure.",
             prompt,
         )
-        self.assertIn(
-            "before agent_A arrives",
-            prompt,
-        )
+        self.assertIn("never during that give_space tick", prompt)
         self.assertIn("Initial agent positions:", prompt)
 
     def test_prepare_coffee_prompt_appends_retry_feedback(self):
@@ -1152,9 +1179,10 @@ class SubatomicToolCatalogTests(unittest.TestCase):
         self.assertIn("NavigationSemanticValidationError", prompt)
         self.assertIn("Regenerate the full trajectory from step 0.", prompt)
         self.assertIn(
-            "use communicate to explain what it is waiting on before the other agent proceeds",
+            "The other agent cannot see wait_for_signal",
             prompt,
         )
+        self.assertIn("On your very next call", prompt)
         self.assertNotIn("get_image", prompt)
         self.assertNotIn("Full subatomic tool catalog for context:", prompt)
         self.assertNotIn("Communication tool:", prompt)
@@ -1223,7 +1251,7 @@ class PrepareCoffeeTaskInstanceTests(unittest.TestCase):
             first_task_instance.initial_state, second_task_instance.initial_state
         )
 
-    def test_task_instance_sampling_allows_same_or_different_agent_starts(self):
+    def test_task_instance_sampling_allows_shared_parent_starts(self):
         sampled_locations = [
             tuple(
                 task_instance.initial_state["agents"][agent_id]["location"]
@@ -1234,18 +1262,8 @@ class PrepareCoffeeTaskInstanceTests(unittest.TestCase):
             )
         ]
 
-        self.assertTrue(
-            any(
-                agent_0_location == agent_1_location
-                for agent_0_location, agent_1_location in sampled_locations
-            )
-        )
-        self.assertTrue(
-            any(
-                agent_0_location != agent_1_location
-                for agent_0_location, agent_1_location in sampled_locations
-            )
-        )
+        self.assertTrue(any(a == b for a, b in sampled_locations))
+        self.assertNotIn("cab", {loc for pair in sampled_locations for loc in pair})
 
     def test_task_instance_keeps_canonical_start_positions_when_disabled(self):
         runtime_config = RuntimeConfig(
@@ -1282,7 +1300,7 @@ class PrepareCoffeeTaskInstanceTests(unittest.TestCase):
                 prompt,
             )
 
-    def test_build_task_instance_keeps_prepare_coffee_symbolic(self):
+    def test_build_task_instance_uses_verified_prepare_coffee_ids(self):
         runtime_config = RuntimeConfig(
             composite_task="PrepareCoffee",
             num_runs=1,
@@ -1297,20 +1315,20 @@ class PrepareCoffeeTaskInstanceTests(unittest.TestCase):
         task_instance = PREPARE_COFFEE_TASK.build_task_instance(0, runtime_config)
 
         self.assertIn("mug", task_instance.initial_state["objects"])
-        self.assertIn("mug_source_fixture", task_instance.initial_state["fixtures"])
+        self.assertIn("cab", task_instance.initial_state["fixtures"])
         self.assertFalse(hasattr(task_instance, "grounding_mode"))
         grounded_prompt = build_prepare_coffee_prompt(
             "traj-000000-attempt-00",
             task_instance=task_instance,
         )
-        self.assertIn("mug_source_fixture", grounded_prompt)
+        self.assertIn("cab", grounded_prompt)
         self.assertIn("coffee_machine", grounded_prompt)
         self.assertNotIn("cab_main", grounded_prompt)
 
     def test_validator_uses_sampled_initial_positions(self):
         initial_state = deepcopy(PREPARE_COFFEE_INITIAL_STATE)
-        initial_state["agents"]["agent_0"]["location"] = "mug_source_fixture"
-        initial_state["agents"]["agent_1"]["location"] = "staging_surface"
+        initial_state["agents"]["agent_0"]["location"] = "cab"
+        initial_state["agents"]["agent_1"]["location"] = "coffee_machine"
         validator = PrepareCoffeeValidator(TaskInstance(initial_state=initial_state))
         candidate = make_valid_candidate()
         candidate["steps"].pop(
@@ -1356,16 +1374,16 @@ class HotDogSetupTaskTests(unittest.TestCase):
 
         self.assertTrue(validation["is_valid"])
         self.assertEqual(
-            validation["final_state"]["objects"]["bun"]["location"],
-            "serving_plate",
+            validation["final_state"]["objects"]["hotdog_bun"]["location"],
+            "plate",
         )
         self.assertEqual(
             validation["final_state"]["objects"]["sausage"]["location"],
-            "serving_plate",
+            "plate",
         )
         self.assertTrue(
             validation["final_state"]["machine_state"]["hot_dog_setup"][
-                "condiment_placed_next_to_serving_plate"
+                "condiment_near_plate"
             ]
         )
 
@@ -1416,6 +1434,30 @@ class PrepareSandwichStationTaskTests(unittest.TestCase):
             validation["final_state"]["machine_state"]["prepare_sandwich_station"][
                 "baguette_staged"
             ]
+        )
+
+    def test_prepare_sandwich_station_accepts_navigation_to_reference_fixture(self):
+        validator = PrepareSandwichStationValidator(
+            TaskInstance(initial_state=deepcopy(PREPARE_SANDWICH_STATION_INITIAL_STATE))
+        )
+        candidate = make_valid_prepare_sandwich_station_candidate()
+        for step in candidate["steps"]:
+            if (
+                step["tool"] == "navigate_to_fixture"
+                and step["args"].get("fixture_id") == "staging_surface"
+            ):
+                step["args"]["fixture_id"] = "toaster_oven"
+
+        validation = validator.validate(candidate)
+
+        self.assertTrue(validation["is_valid"])
+        self.assertEqual(
+            validation["final_state"]["objects"]["ingredient_bowl"]["location"],
+            "staging_surface",
+        )
+        self.assertEqual(
+            validation["final_state"]["objects"]["baguette"]["location"],
+            "staging_surface",
         )
 
     def test_prepare_sandwich_station_validator_requires_both_items_staged(self):
@@ -2357,58 +2399,43 @@ class FiniteStateTaskValidatorTests(unittest.TestCase):
             min_steps=4,
         )
 
-        step_properties = response_schema["properties"]["steps"]["items"]["properties"]
+        variants = response_schema["properties"]["steps"]["items"]["anyOf"]
         self.assertEqual(
-            list(step_properties["tool"]["enum"]),
+            [variant["properties"]["tool"]["enum"][0] for variant in variants],
             list(allowed_tool_specs),
         )
-        args_properties = step_properties["args"]["properties"]
-        self.assertEqual(
-            step_properties["args"]["type"],
-            "OBJECT",
-        )
+        communicate = variants[0]["properties"]
+        args_properties = communicate["args"]["properties"]
+        self.assertEqual(communicate["args"]["type"], "OBJECT")
         self.assertEqual(
             list(args_properties),
-            [
-                "to",
-                "message",
-                "views",
-                "object_id",
-                "source_id",
-                "source_site_id",
-                "target_id",
-                "receptacle_id",
-                "target_site_id",
-                "relative_position",
-                "reference_id",
-                "reference_object_id",
-                "reference_fixture_id",
-                "support_object_id",
-                "control_id",
-                "goal",
-                "fixture_id",
-            ],
+            ["to", "message", "releases", "coordination_phase"],
         )
         self.assertEqual(
             args_properties["to"]["enum"],
             ["agent_0", "agent_1"],
         )
+        get_image = next(
+            variant["properties"]
+            for variant in variants
+            if variant["properties"]["tool"]["enum"] == ["get_image"]
+        )
         self.assertEqual(
-            args_properties["views"],
+            get_image["args"]["properties"]["views"],
             {
                 "type": "ARRAY",
                 "items": {"type": "STRING"},
             },
         )
         self.assertEqual(
-            step_properties["agent"]["enum"],
+            communicate["agent"]["enum"],
             ["agent_0", "agent_1"],
         )
         self.assertNotIn("agents", response_schema["properties"])
         self.assertEqual(response_schema["required"], ["steps"])
-        self.assertNotIn("image_path", step_properties)
-        self.assertNotIn("image_paths", step_properties)
-        self.assertNotIn("entity_refs", step_properties)
+        self.assertNotIn("image_path", communicate)
+        self.assertNotIn("image_paths", communicate)
+        self.assertNotIn("entity_refs", communicate)
         self.assertEqual(response_schema["properties"]["steps"]["minItems"], 4)
 
     def test_build_task_response_schema_preserves_integer_tool_arg_types(self):
@@ -2427,12 +2454,12 @@ class FiniteStateTaskValidatorTests(unittest.TestCase):
             },
         )
 
-        args_properties = response_schema["properties"]["steps"]["items"]["properties"][
-            "args"
-        ]["properties"]
-        self.assertEqual(args_properties["duration"], {"type": "INTEGER"})
+        variants = response_schema["properties"]["steps"]["items"]["anyOf"]
+        communicate_args = variants[0]["properties"]["args"]["properties"]
+        timer_args = variants[1]["properties"]["args"]["properties"]
+        self.assertEqual(timer_args["duration"], {"type": "INTEGER"})
         self.assertEqual(
-            args_properties["to"]["enum"],
+            communicate_args["to"]["enum"],
             ["agent_0", "agent_1"],
         )
 
@@ -2724,6 +2751,50 @@ class FiniteStateTaskValidatorTests(unittest.TestCase):
 
         validator = PlacementReferenceValidator()
         validation = validator.validate(make_toy_candidate(actions))
+
+        self.assertTrue(validation["is_valid"])
+        self.assertEqual(
+            validation["final_state"]["objects"]["apple_1"]["location"],
+            "shelf_1",
+        )
+
+    def test_validator_allows_place_next_to_while_at_reference_fixture(self):
+        actions = (
+            make_toy_action_spec(
+                "navigate_to_fixture",
+                {"fixture_id": "table_1"},
+            ),
+            make_toy_action_spec(
+                "pick_up_object",
+                {"object_id": "apple_1", "source_id": "table_1"},
+            ),
+            make_toy_action_spec(
+                "navigate_to_fixture",
+                {"fixture_id": "toaster_oven_1"},
+            ),
+            make_toy_action_spec(
+                "place_next_to",
+                {"object_id": "apple_1", "reference_fixture_id": "toaster_oven_1"},
+            ),
+            make_toy_action_spec(
+                "navigate_to_fixture",
+                {"fixture_id": "table_1"},
+            ),
+            make_toy_action_spec(
+                "pick_up_object",
+                {"object_id": "cup_1", "source_id": "table_1"},
+            ),
+            make_toy_action_spec(
+                "navigate_to_fixture",
+                {"fixture_id": "coffee_machine_1"},
+            ),
+            make_toy_action_spec(
+                "place_under",
+                {"object_id": "cup_1", "reference_fixture_id": "coffee_machine_1"},
+            ),
+        )
+
+        validation = PlacementReferenceValidator().validate(make_toy_candidate(actions))
 
         self.assertTrue(validation["is_valid"])
         self.assertEqual(
@@ -3526,6 +3597,7 @@ class FiniteStateTaskValidatorTests(unittest.TestCase):
             "Trajectory never satisfied the ToyFSMTask goal state.",
             str(raised.exception),
         )
+        self.assertIn("final_state", raised.exception.details)
 
     def test_validator_rejects_extra_steps_after_goal_state(self):
         actions = (
@@ -3562,6 +3634,37 @@ class FiniteStateTaskValidatorTests(unittest.TestCase):
         )
 
 
+class GarnishCakeGoalTests(unittest.TestCase):
+    def setUp(self):
+        self.validator = get_task_definition("GarnishCake").validator_factory(None)
+
+    def _runtime_state(self):
+        state = self.validator._build_runtime_state(
+            [{"agent": "agent_0"}, {"agent": "agent_1"}]
+        )
+        state.objects["strawberry1"]["location"] = "cake_plate"
+        return state
+
+    def test_accepts_exactly_one_cherry_on_cake(self):
+        state = self._runtime_state()
+        state.objects["cherry1"]["location"] = "cake"
+
+        self.assertTrue(self.validator.is_goal_state_satisfied(state))
+
+    def test_accepts_exactly_one_cherry_on_cake_plate(self):
+        state = self._runtime_state()
+        state.objects["cherry1"]["location"] = "cake_plate"
+
+        self.assertTrue(self.validator.is_goal_state_satisfied(state))
+
+    def test_rejects_two_cherries_across_the_allowed_targets(self):
+        state = self._runtime_state()
+        state.objects["cherry1"]["location"] = "cake"
+        state.objects["cherry2"]["location"] = "cake_plate"
+
+        self.assertFalse(self.validator.is_goal_state_satisfied(state))
+
+
 class PrepareCoffeeValidatorTests(unittest.TestCase):
     def setUp(self):
         self.validator = PrepareCoffeeValidator()
@@ -3569,15 +3672,49 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
     def test_validator_accepts_valid_trace(self):
         validation = self.validator.validate(make_valid_candidate())
         self.assertTrue(validation["is_valid"])
-        self.assertTrue(validation["final_state"]["coffee_machine_started"])
+        self.assertTrue(
+            validation["final_state"]["machine_state"]["coffee_machine"]["turned_on"]
+        )
         self.assertEqual(
             validation["final_state"]["objects"]["mug"]["location"],
-            "coffee_machine_dispenser",
+            "coffee_machine",
         )
 
+    def test_goal_requires_mug_under_dispenser_as_well_as_machine_on(self):
+        runtime_state = self.validator._build_runtime_state(
+            [{"agent": "agent_0"}, {"agent": "agent_1"}]
+        )
+        runtime_state.machine_state["coffee_machine"]["turned_on"] = True
+
+        self.assertFalse(self.validator.is_goal_state_satisfied(runtime_state))
+
+        runtime_state.objects["mug"]["location"] = "coffee_machine"
+        self.assertTrue(self.validator.is_goal_state_satisfied(runtime_state))
+
+    def test_button_effect_requires_mug_under_dispenser(self):
+        effect = PREPARE_COFFEE_SPEC.task_effects[0]
+
+        self.assertEqual(
+            effect["required_object_locations"],
+            [{"object_id": "mug", "location": "coffee_machine"}],
+        )
+        self.assertIn(
+            {
+                "kind": "object_location_required_for_action",
+                "tool": "press_button",
+                "object_id": "mug",
+                "required_location": "coffee_machine",
+                "message": "press_button on the coffee machine requires the mug under the coffee machine dispenser.",
+            },
+            PREPARE_COFFEE_SPEC.task_preconditions,
+        )
     def test_validator_rejects_missing_initial_communication(self):
         candidate = make_valid_candidate()
-        candidate["steps"].pop(1)
+        candidate["steps"] = [
+            step
+            for step in candidate["steps"]
+            if not (step["tool"] == "communicate" and step["agent"] == "agent_1")
+        ]
         renumber_candidate_steps(candidate)
 
         with self.assertRaises(TrajectoryValidationError):
@@ -3587,7 +3724,9 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
         validation = self.validator.validate(make_alternative_valid_candidate())
 
         self.assertTrue(validation["is_valid"])
-        self.assertTrue(validation["final_state"]["coffee_machine_started"])
+        self.assertTrue(
+            validation["final_state"]["machine_state"]["coffee_machine"]["turned_on"]
+        )
 
     def test_validator_rejects_broken_entity_continuity(self):
         candidate = make_valid_candidate()
@@ -3600,7 +3739,7 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
 
     def test_validator_rejects_legal_trace_that_never_reaches_goal(self):
         candidate = make_valid_candidate()
-        candidate["steps"] = candidate["steps"][:11]
+        candidate["steps"] = candidate["steps"][:-1]
 
         with self.assertRaises(TaskSemanticValidationError) as raised:
             self.validator.validate(candidate)
@@ -3623,21 +3762,20 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
         self.assertIsInstance(raised.exception, NavigationSemanticValidationError)
 
     def test_validator_rejects_missing_cabinet_open_before_pickup(self):
+        initial_state = deepcopy(PREPARE_COFFEE_INITIAL_STATE)
+        initial_state["fixtures"]["cab"]["parts"]["hinged"]["state"] = "closed"
+        validator = PrepareCoffeeValidator(TaskInstance(initial_state=initial_state))
         candidate = make_valid_candidate()
-        candidate["steps"].pop(
-            find_step_index(candidate, "open_hinged_part", occurrence=0)
-        )
-        renumber_candidate_steps(candidate)
 
         with self.assertRaises(TaskSemanticValidationError) as raised:
-            self.validator.validate(candidate)
+            validator.validate(candidate)
 
         self.assertIsInstance(raised.exception, TaskPreconditionSemanticValidationError)
 
     def test_validator_rejects_invalid_hold_place_ordering(self):
         candidate = make_valid_candidate()
         candidate["steps"][
-            find_step_index(candidate, "place_on_surface", occurrence=0)
+            find_step_index(candidate, "place_under", occurrence=0)
         ]["agent"] = "agent_1"
 
         with self.assertRaises(TaskSemanticValidationError):
@@ -3678,7 +3816,10 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
         with self.assertRaises(TrajectoryStructureValidationError) as raised:
             self.validator.validate(candidate)
 
-        self.assertEqual(raised.exception.step, 2)
+        self.assertEqual(
+            raised.exception.step,
+            find_step_index(candidate, "navigate_to_fixture", occurrence=0),
+        )
 
     def test_validator_rejects_missing_navigation_with_step_number(self):
         candidate = make_valid_candidate()
@@ -3691,13 +3832,13 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
             self.validator.validate(candidate)
 
         self.assertIsInstance(raised.exception, NavigationSemanticValidationError)
-        self.assertEqual(raised.exception.step, 7)
-        self.assertIn("Step 7 (pick_up_object):", str(raised.exception))
+        self.assertEqual(raised.exception.step, 8)
+        self.assertIn("Step 8 (place_under):", str(raised.exception))
         self.assertIn(
-            "must use navigate_to_fixture to reach staging_surface",
+            "must use navigate_to_fixture to reach coffee_machine",
             str(raised.exception),
         )
-        self.assertIn("before using pick_up_object", str(raised.exception))
+        self.assertIn("before using place_under", str(raised.exception))
 
     def test_extract_json_candidate_uses_response_format_error_for_invalid_payload(
         self,
@@ -3977,6 +4118,9 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
         self.assertIn("tool_call_diversity=high", prompt)
         self.assertIn("Return exactly one trajectory", prompt)
         self.assertIn("Do not return a samples array", prompt)
+        self.assertIn("Counters, islands, and dining tables are roomy", prompt)
+        self.assertIn("Do not add acknowledgements, repeated plans", prompt)
+        self.assertIn("omit that agent from later ticks", prompt)
 
     def test_structured_random_sampling_strategy_preserves_base_schema(self):
         strategy = StructuredRandomSamplingStrategy()
@@ -4025,7 +4169,39 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
         self.assertIsNone(sampled_candidates[0].sampling_configuration)
         self.assertEqual(sampled_candidates[0].candidate["steps"][0]["step"], 0)
 
-    def test_structured_random_configuration_is_seeded_by_run(self):
+    def test_structured_random_sampling_strategy_records_attempt_configuration(self):
+        strategy = StructuredRandomSamplingStrategy()
+        sampled_candidates = strategy.extract_candidates(
+            raw_response=json.dumps(make_valid_candidate(include_agents=False)),
+            task_definition=PREPARE_COFFEE_TASK,
+            runtime_config=RuntimeConfig(
+                composite_task="PrepareCoffee",
+                num_runs=1,
+                model="gemini-3-flash-preview",
+                sdk="google-genai",
+                project="demo-project",
+                location="global",
+                temperature=0.5,
+                max_workers=1,
+                max_retries=1,
+                sampling="structured_random",
+            ),
+            variation_key="traj-000000-attempt-02",
+        )
+
+        sampled_candidate = sampled_candidates[0]
+        self.assertEqual(sampled_candidate.sampling_attempt_number, 3)
+        self.assertIsInstance(sampled_candidate.sampling_seed, int)
+        self.assertEqual(
+            set(sampled_candidate.sampling_configuration or {}),
+            {
+                "communication_message_length",
+                "communication_message_complexity",
+                "tool_call_diversity",
+            },
+        )
+
+    def test_structured_random_configuration_is_seeded_by_run_attempt(self):
         first_seed, first_configuration = _structured_random_seed_and_configuration(
             task_definition=PREPARE_COFFEE_TASK,
             variation_key="traj-000000-attempt-00",
@@ -4038,10 +4214,17 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
             task_definition=PREPARE_COFFEE_TASK,
             variation_key="traj-000001-attempt-00",
         )
+        repeated_seed, repeated_configuration = (
+            _structured_random_seed_and_configuration(
+                task_definition=PREPARE_COFFEE_TASK,
+                variation_key="traj-000000-attempt-00",
+            )
+        )
 
-        self.assertEqual(first_seed, retry_seed)
-        self.assertEqual(first_configuration, retry_configuration)
+        self.assertNotEqual(first_seed, retry_seed)
         self.assertNotEqual(first_seed, second_seed)
+        self.assertEqual(first_seed, repeated_seed)
+        self.assertEqual(first_configuration, repeated_configuration)
 
 
 class GenerationTests(unittest.TestCase):
@@ -4838,6 +5021,7 @@ class GenerationTests(unittest.TestCase):
             {
                 "to": "agent_1",
                 "message": "I will grab the mug.",
+                "coordination_phase": "propose",
             },
         )
         self.assertNotIn("entity_refs", trajectory["steps"][0])
@@ -4928,7 +5112,11 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(
             payload["model_config"],
             {
-                "initialization": {"random_start_location": True},
+                "initialization": {
+                    "random_start_location": True,
+                    "random_access_state": False,
+                    "partition_policy": "weighted",
+                },
                 "reasoning": {"thinking_level": None},
                 "sampling": {"temperature": 0.5, "strategy": "base"},
             },
@@ -5290,7 +5478,19 @@ class GenerationTests(unittest.TestCase):
         )
         self.assertNotIn("verbalized_k", payload["model_config"]["sampling"])
         self.assertNotIn("samples_per_run", payload["model_config"]["sampling"])
-        self.assertNotIn("sampling_metadata", payload["trajectories"][0])
+        sampling_metadata = payload["trajectories"][0]["sampling_metadata"]
+        self.assertEqual(sampling_metadata["strategy"], "structured_random")
+        self.assertEqual(sampling_metadata["run_index"], 0)
+        self.assertEqual(sampling_metadata["attempt_number"], 1)
+        self.assertEqual(
+            set(sampling_metadata["configuration"]),
+            {
+                "communication_message_length",
+                "communication_message_complexity",
+                "tool_call_diversity",
+            },
+        )
+        self.assertIsInstance(sampling_metadata["seed"], int)
         self.assertIn(
             "Structured random configuration:",
             payload["trajectory_prompts"][0]["prompt"],
@@ -5459,7 +5659,7 @@ class GenerationTests(unittest.TestCase):
             "request": payload,
         }
 
-        self.assertEqual(measure_nested_json_depth(row), 17)
+        self.assertEqual(measure_nested_json_depth(row), 19)
 
     def test_preflight_cost_estimate_counts_verbalized_prompt_once_per_run(self):
         runtime_config = RuntimeConfig(
@@ -6036,6 +6236,37 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(payload["pending_run_indices"], [1])
         self.assertFalse(payload["is_complete"])
 
+    def test_subset_generation_tracks_only_requested_indices_as_pending(self):
+        runtime_config = RuntimeConfig(
+            composite_task="PrepareCoffee",
+            num_runs=12,
+            run_indices=(9,),
+            model="gemini-3-flash-preview",
+            sdk="google-genai",
+            project="demo-project",
+            location="global",
+            temperature=0.5,
+            max_workers=1,
+            max_retries=1,
+        )
+        client = mock.Mock(
+            generate=mock.Mock(
+                side_effect=ResponseFormatValidationError(
+                    "Model response did not contain JSON."
+                )
+            )
+        )
+
+        payload = generate_trajectories(
+            runtime_config,
+            client_factory=lambda: client,
+            show_progress=False,
+        )
+
+        self.assertEqual(payload["requested_run_indices"], [9])
+        self.assertEqual(payload["failed_run_indices"], [9])
+        self.assertEqual(payload["pending_run_indices"], [9])
+
     def test_generate_single_trajectory_updates_progress_status_with_cost(self):
         self.assertEqual(PROGRESS_BAR_WIDTH, 30)
         self.assertIn("{bar:30}", TQDM_BAR_FORMAT)
@@ -6082,7 +6313,7 @@ class GenerationTests(unittest.TestCase):
         )
         self.assertEqual(
             trajectory_progress.set_postfix_str.call_args_list[-1].args[0],
-            "done attempts=1/3 total=$0.0013 avg=$0.0013 calls=12",
+            "done attempts=1/3 total=$0.0013 avg=$0.0013 calls=11",
         )
 
     def test_generate_single_trajectory_persists_symbolic_task_metadata(self):
@@ -6148,10 +6379,10 @@ class GenerationTests(unittest.TestCase):
         retry_status = next(
             status
             for status in status_updates
-            if status.startswith("attempt 1/2 retry calls=11")
+            if status.startswith("attempt 1/2 retry calls=9")
         )
         self.assertIn(
-            "MissingInitialCommunicationSemanticValidationError step=1",
+            "MissingInitialCommunicationSemanticValidationError step=2",
             retry_status,
         )
         self.assertIn(
@@ -6164,11 +6395,11 @@ class GenerationTests(unittest.TestCase):
             if status.startswith("attempt 2/2 generating after invalid ")
         )
         self.assertIn(
-            "MissingInitialCommunicationSemanticValidationError step=1",
+            "MissingInitialCommunicationSemanticValidationError step=2",
             resumed_generation_status,
         )
         self.assertTrue(status_updates[-1].startswith("done attempts=2/2 total=$"))
-        self.assertTrue(status_updates[-1].endswith(" calls=12"))
+        self.assertTrue(status_updates[-1].endswith(" calls=11"))
 
     def test_generate_single_trajectory_feeds_validation_feedback_into_retry_prompt(
         self,
@@ -6207,8 +6438,8 @@ class GenerationTests(unittest.TestCase):
             "MissingInitialCommunicationSemanticValidationError",
             client.prompts[1],
         )
-        self.assertIn("failing_step: 1", client.prompts[1])
-        self.assertIn("Local bad example:", client.prompts[1])
+        self.assertIn("failing_step: 2", client.prompts[1])
+        self.assertIn("Latest rejected trajectory (complete):", client.prompts[1])
         self.assertIn("Regenerate the full trajectory from step 0.", client.prompts[1])
 
     def test_generate_single_trajectory_keeps_attempt_counts_in_done_status_when_validation_disabled(
@@ -6263,10 +6494,10 @@ class GenerationTests(unittest.TestCase):
         )
         self.assertNotIn("valid", status_updates)
         self.assertTrue(status_updates[-1].startswith("done attempts=2/2 total=$"))
-        self.assertIn("calls=11", status_updates[-1])
+        self.assertIn("calls=9", status_updates[-1])
         self.assertTrue(
             status_updates[-1].endswith(
-                " invalid MissingInitialCommunicationSemanticValidationError step=1"
+                " invalid MissingInitialCommunicationSemanticValidationError step=2"
             )
         )
         self.assertEqual(status_updates[0], "generating")
@@ -6288,7 +6519,7 @@ class GenerationTests(unittest.TestCase):
             "NavigationSemanticValidationError step=9",
         )
 
-    def test_build_retry_feedback_text_includes_local_bad_example(self):
+    def test_build_retry_feedback_text_includes_complete_rejected_trajectory(self):
         feedback = _build_retry_feedback_text(
             NavigationSemanticValidationError(
                 "agent_1 must navigate_to_fixture(staging_surface) before pick_up_object.",
@@ -6296,15 +6527,225 @@ class GenerationTests(unittest.TestCase):
                 details={"agent": "agent_1", "expected_location": "staging_surface"},
             ),
             candidate=make_valid_candidate(),
+            feedback_style="observational",
         )
 
         self.assertIn("Previous attempt failed validation.", feedback)
         self.assertIn("error_type: NavigationSemanticValidationError", feedback)
         self.assertIn("failing_step: 9", feedback)
-        self.assertIn("Local bad example:", feedback)
+        self.assertIn("Latest rejected trajectory (complete):", feedback)
+        self.assertIn('"steps": [', feedback)
         self.assertIn('"step": 8', feedback)
         self.assertIn('"step": 9', feedback)
+        self.assertNotIn("insert navigate_to_fixture", feedback)
         self.assertIn("Regenerate the full trajectory from step 0.", feedback)
+
+    def test_semantic_retry_history_is_observational_not_prescriptive(self):
+        feedback = _build_retry_feedback_text_from_validation(
+            {
+                "is_valid": False,
+                "error_type": "ResourceConflictSemanticValidationError",
+                "error": "At tick 4 both agents occupy exclusive fixture cab.",
+                "error_details": {"tick": 4},
+            },
+            candidate=make_valid_candidate(),
+            prior_constraints=[
+                "A prior attempt violated the validator's wait/release ordering."
+            ],
+            feedback_style="observational",
+        )
+        self.assertIn(
+            "Earlier validator observations to audit (not repair instructions):",
+            feedback,
+        )
+        self.assertIn("At tick 4 both agents occupy exclusive fixture cab.", feedback)
+        self.assertNotIn("request -> next-tick wait", feedback)
+        self.assertNotIn("Build these concrete ticks", feedback)
+
+    def test_targeted_retry_uses_full_candidate_and_concrete_guidance(self):
+        feedback = _build_retry_feedback_text_from_validation(
+            {
+                "is_valid": False,
+                "error_type": "NavigationSemanticValidationError",
+                "error": "wrong location",
+                "step": 9,
+                "error_details": {
+                    "agent": "agent_1",
+                    "tool": "pick_up_object",
+                    "current_location": "counter",
+                    "expected_location": "cab",
+                },
+            },
+            candidate=make_valid_candidate(),
+            feedback_style="targeted",
+        )
+        self.assertIn("Latest rejected trajectory (complete):", feedback)
+        self.assertIn("insert navigate_to_fixture", feedback)
+
+    def test_retry_keeps_concrete_opening_proposal_across_later_errors(self):
+        constraint = _compact_retry_constraint(
+            "TrajectoryValidationError",
+            "proposal omitted IDs",
+            {
+                "missing_ids": ["glass_cup", "lemon_wedge"],
+                "required_by_agent": {
+                    "agent_0": ["liquor"],
+                    "agent_1": ["glass_cup", "lemon_wedge"],
+                },
+            },
+        )
+        self.assertEqual(
+            constraint,
+            "A prior opening proposal omitted required assignments: "
+            "agent_0 handles liquor; agent_1 handles glass_cup, lemon_wedge.",
+        )
+
+        feedback = _build_retry_feedback_text_from_validation(
+            {
+                "is_valid": False,
+                "error_type": "NavigationSemanticValidationError",
+                "error": "wrong location",
+                "error_details": {
+                    "agent": "agent_1",
+                    "tool": "pick_up_object",
+                    "actual_ids": ["glass_cup"],
+                    "expected_location": "counter",
+                },
+            },
+            candidate=make_valid_candidate(),
+            prior_constraints=[constraint],
+        )
+        self.assertIn(constraint, feedback)
+
+    def test_partition_correction_overrides_later_navigation_repair(self):
+        ownership = (
+            "Remove agent_1's place_on_surface(bowl, dining_counter); it belongs "
+            "to agent_0. Do not repair this ownership error by navigating the "
+            "wrong agent there."
+        )
+        feedback = _build_retry_feedback_text_from_validation(
+            {
+                "is_valid": False,
+                "error_type": "NavigationSemanticValidationError",
+                "error": "wrong location",
+                "error_details": {
+                    "agent": "agent_1",
+                    "tool": "place_on_surface",
+                    "actual_ids": ["bowl", "dining_counter"],
+                    "current_location": "counter",
+                    "expected_location": "dining_counter",
+                },
+            },
+            candidate=make_valid_candidate(),
+            prior_constraints=[ownership],
+        )
+        self.assertIn("must remove that action", feedback)
+        self.assertNotIn("insert navigate_to_fixture", feedback)
+
+    def test_remote_give_space_moves_before_departure_when_partner_needs_fixture(self):
+        constraint = _compact_retry_constraint(
+            "NavigationSemanticValidationError",
+            "wrong location",
+            {
+                "agent": "agent_1",
+                "tool": "give_space",
+                "expected_location": "cab",
+                "partner_needs_location": True,
+            },
+        )
+        self.assertIn("agent_1's give_space()", constraint)
+        self.assertIn("expected cab", constraint)
+
+    def test_navigation_constraint_retains_agent_tool_and_ids(self):
+        constraint = _compact_retry_constraint(
+            "NavigationSemanticValidationError",
+            "wrong location",
+            {
+                "agent": "agent_1",
+                "tool": "pick_up_object",
+                "actual_ids": ["counter", "kettle"],
+                "expected_location": "counter",
+            },
+        )
+        self.assertEqual(
+            constraint,
+            "A prior attempt called agent_1's pick_up_object(counter, kettle) "
+            "from the wrong location; the validator expected counter.",
+        )
+
+    def test_held_receptacle_retry_states_required_order(self):
+        constraint = _compact_retry_constraint(
+            "TaskPreconditionSemanticValidationError",
+            "place_in_receptacle cannot use receptacle_id=bowl because bowl is currently held by agent_0.",
+            {},
+        )
+        self.assertIn("used bowl as a receptacle while it was being held", constraint)
+
+    def test_roomy_surface_wait_retry_removes_handover(self):
+        details = {
+            "same_tick_wait_release": ["agent_0"],
+            "tick": 12,
+            "wait_release_pairs": [
+                {
+                    "waiter": "agent_0",
+                    "releaser": "agent_1",
+                    "resource": "counter",
+                    "resource_requires_handover": False,
+                }
+            ],
+        }
+        constraint = _compact_retry_constraint(
+            "TrajectoryValidationError",
+            "same-tick wait and release",
+            details,
+        )
+        self.assertIn("unnecessary handover for roomy resource counter", constraint)
+        feedback = _build_retry_feedback_text_from_validation(
+            {
+                "is_valid": False,
+                "error_type": "TrajectoryValidationError",
+                "error": "same-tick wait and release",
+                "error_details": details,
+            },
+            candidate=make_valid_candidate(),
+            prior_constraints=[constraint],
+        )
+        self.assertIn("counter is roomy", feedback)
+        self.assertNotIn("four ticks", feedback)
+
+    def test_exclusive_same_tick_retry_states_invariant_without_skeleton(self):
+        details = {
+            "same_tick_wait_release": ["agent_0"],
+            "tick": 4,
+            "wait_release_pairs": [
+                {
+                    "waiter": "agent_0",
+                    "releaser": "agent_1",
+                    "resource": "cab",
+                    "resource_requires_handover": True,
+                }
+            ],
+        }
+        feedback = _build_retry_feedback_text_from_validation(
+            {
+                "is_valid": False,
+                "error_type": "TrajectoryValidationError",
+                "error": "same-tick wait and release",
+                "error_details": details,
+            },
+            candidate=make_valid_candidate(),
+            prior_constraints=[
+                "Prior validator observation: same-tick wait and release",
+                "Prior validator observation: same-tick wait and release",
+            ],
+        )
+
+        self.assertIn("three different ticks, in that order", feedback)
+        self.assertIn("Do not copy the rejected wait/release tick unchanged", feedback)
+        self.assertIn("Keep the task goal and chosen object ownership", feedback)
+        self.assertNotIn("four ticks", feedback)
+        self.assertNotIn("Build these concrete ticks", feedback)
+        self.assertNotIn("Preserve the valid portions", feedback)
 
     def test_generate_single_trajectory_reports_total_and_average_cost_for_verbalized_sampling(
         self,
@@ -6359,7 +6800,7 @@ class GenerationTests(unittest.TestCase):
         trajectory_progress.complete.assert_called_once_with(2)
         self.assertEqual(
             trajectory_progress.set_postfix_str.call_args_list[-1].args[0],
-            "done attempts=1/3 total=$0.0014 avg=$0.0007 success=2/2 avg_calls=12.5",
+            "done attempts=1/3 total=$0.0014 avg=$0.0007 success=2/2 avg_calls=11.5",
         )
 
     def test_generate_single_trajectory_retry_status_includes_verbalized_invalid_error(
@@ -6429,7 +6870,7 @@ class GenerationTests(unittest.TestCase):
             if status.startswith("attempt 1/2 retry calls=")
         )
         self.assertIn(
-            "MissingInitialCommunicationSemanticValidationError step=1",
+            "MissingInitialCommunicationSemanticValidationError step=2",
             retry_status,
         )
         resumed_generation_status = next(
@@ -6438,7 +6879,7 @@ class GenerationTests(unittest.TestCase):
             if status.startswith("attempt 2/2 generating after invalid ")
         )
         self.assertIn(
-            "MissingInitialCommunicationSemanticValidationError step=1",
+            "MissingInitialCommunicationSemanticValidationError step=2",
             resumed_generation_status,
         )
 
@@ -6737,7 +7178,7 @@ class GenerationTests(unittest.TestCase):
             trajectory_progress.set_postfix_str.call_args_list[-1].args[0],
         )
         self.assertIn(
-            "invalid MissingInitialCommunicationSemanticValidationError step=1",
+            "invalid MissingInitialCommunicationSemanticValidationError step=2",
             trajectory_progress.set_postfix_str.call_args_list[-1].args[0],
         )
 
@@ -7099,15 +7540,15 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(
             summary["best_case_tokens"],
             {
-                "prompt": 12440,
+                "prompt": 12000,
                 "cached_input": 0,
-                "output": 14400,
+                "output": 14000,
                 "reasoning": 0,
-                "total": 26840,
+                "total": 26000,
             },
         )
-        self.assertAlmostEqual(summary["best_case_total_usd"], 0.0494)
-        self.assertAlmostEqual(summary["worst_case_total_usd"], 0.0494)
+        self.assertAlmostEqual(summary["best_case_total_usd"], 0.048)
+        self.assertAlmostEqual(summary["worst_case_total_usd"], 0.048)
         self.assertEqual(
             summary["pricing"],
             {
@@ -7273,8 +7714,8 @@ class GenerationTests(unittest.TestCase):
             trajectory["validation"]["error_details"]["agent"],
             "agent_0",
         )
-        self.assertEqual(trajectory["validation"]["step"], 1)
-        self.assertEqual(len(trajectory["steps"]), 11)
+        self.assertEqual(trajectory["validation"]["step"], 2)
+        self.assertEqual(len(trajectory["steps"]), 9)
         self.assertNotIn(
             "successful_attempt_number",
             trajectory["generation_usage"],
@@ -8503,7 +8944,11 @@ class GenerationTests(unittest.TestCase):
             "sdk": "google-genai",
             "model": "gemini-3-flash-preview",
             "model_config": {
-                "initialization": {"random_start_location": True},
+                "initialization": {
+                    "random_start_location": True,
+                    "random_access_state": True,
+                    "partition_policy": "weighted",
+                },
                 "reasoning": {"thinking_level": None},
                 "sampling": {"temperature": 0.6, "strategy": "base"},
             },
@@ -8577,7 +9022,11 @@ class GenerationTests(unittest.TestCase):
             "sdk": "google-genai",
             "model": "gemini-3-flash-preview",
             "model_config": {
-                "initialization": {"random_start_location": True},
+                "initialization": {
+                    "random_start_location": True,
+                    "random_access_state": True,
+                    "partition_policy": "weighted",
+                },
                 "reasoning": {"thinking_level": None},
                 "sampling": {"temperature": 0.6, "strategy": "base"},
             },

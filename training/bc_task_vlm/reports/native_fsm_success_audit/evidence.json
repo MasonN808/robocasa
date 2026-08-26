@@ -1,0 +1,3010 @@
+{
+  "schema_version": 1,
+  "task_count": 53,
+  "tasks": [
+    {
+      "task": "AddLemonToFish",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/addlemontofish.json",
+      "native_path": "robocasa/environments/kitchen/composite/garnishing_dishes/add_lemon_to_fish.py",
+      "task_goal": "retrieve the lemon_wedge from the fridge and place it on the fish_plate with the fish on the dining counter.",
+      "initial_objects": [
+        "fish",
+        "fish_plate",
+        "lemon_wedge"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "lemon_wedge",
+          "location": "fish_plate"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "fish",
+          "location": "fish_plate"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "fish_plate",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "fish_plate",
+          "location": "dining_counter",
+          "message": "The fish_plate must remain on the dining counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "fish",
+          "location": "fish_plate",
+          "message": "The fish must remain on the fish_plate."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "The fridge door must be open to retrieve the lemon wedge."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        lemon_on_plate = OU.check_obj_in_receptacle(\n            self, \"lemon_wedge\", \"fish_container\"\n        )\n        fish_on_plate = OU.check_obj_in_receptacle(self, \"fish\", \"fish_container\")\n        plate_on_table = OU.check_obj_fixture_contact(\n            self, \"fish_container\", self.dining_counter\n        )\n        gripper_far = OU.gripper_obj_far(self, \"lemon_wedge\")\n        return lemon_on_plate and fish_on_plate and plate_on_table and gripper_far"
+    },
+    {
+      "task": "AddSugarCubes",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/addsugarcubes.json",
+      "native_path": "robocasa/environments/kitchen/composite/garnishing_dishes/add_sugar_cubes.py",
+      "task_goal": "place both sugar_cube_1 and sugar_cube_2 onto the cake_plate which contains the cake on the dining_counter.",
+      "initial_objects": [
+        "cake",
+        "cake_plate",
+        "sugar_cube_1",
+        "sugar_cube_2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "sugar_cube_1",
+          "location": "cake_plate"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "sugar_cube_2",
+          "location": "cake_plate"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "cake",
+          "location": "cake_plate",
+          "message": "The cake must remain on the plate."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "cake_plate",
+          "location": "dining_counter",
+          "message": "The plate must remain on the dining counter."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        sugar_cube_1_on_plate = OU.check_obj_in_receptacle(\n            self, \"sugar_cube_1\", \"cake_container\"\n        )\n        sugar_cube_2_on_plate = OU.check_obj_in_receptacle(\n            self, \"sugar_cube_2\", \"cake_container\"\n        )\n        cake_on_plate = OU.check_obj_in_receptacle(self, \"cake\", \"cake_container\")\n        plate_on_table = OU.check_obj_fixture_contact(\n            self, \"cake_container\", self.dining_counter\n        )\n        gripper_far_1 = OU.gripper_obj_far(self, \"sugar_cube_1\", th=0.15)\n        gripper_far_2 = OU.gripper_obj_far(self, \"sugar_cube_2\", th=0.15)\n        return (\n            sugar_cube_1_on_plate\n            and sugar_cube_2_on_plate\n            and cake_on_plate\n            and plate_on_table\n            and gripper_far_1\n            and gripper_far_2\n        )"
+    },
+    {
+      "task": "AlcoholServingPrep",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/alcoholservingprep.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_food/alcohol_serving_prep.py",
+      "task_goal": "Move the alcohol and the cup from the cabinet to the dining counter with the decoration on it; open the cabinet first if it is closed.",
+      "initial_objects": [
+        "alcohol",
+        "cup",
+        "decoration"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "alcohol",
+          "location": "dining_table"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cup",
+          "location": "dining_table"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cab",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open",
+          "message": "Open the cabinet before picking up items."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        gripper_alcohol_far = OU.gripper_obj_far(self, obj_name=\"alcohol\")\n        gripper_cup_far = OU.gripper_obj_far(self, obj_name=\"cup\")\n        condiment1_on_counter = OU.check_obj_fixture_contact(\n            self, \"alcohol\", self.dining_table\n        )\n        condiment2_on_counter = OU.check_obj_fixture_contact(\n            self, \"cup\", self.dining_table\n        )\n\n        return (\n            gripper_alcohol_far\n            and gripper_cup_far\n            and condiment1_on_counter\n            and condiment2_on_counter\n        )"
+    },
+    {
+      "task": "AlignSilverware",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/alignsilverware.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/align_silverware.py",
+      "task_goal": "place the fork on the left side of the plate and the spoon on the right side of the plate on the dining_counter.",
+      "initial_objects": [
+        "fork",
+        "plate",
+        "spoon"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "fork",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "spoon",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "align_silverware",
+            "fork_aligned_left"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "align_silverware",
+            "spoon_aligned_right"
+          ]
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate",
+          "location": "dining_counter",
+          "message": "The plate must remain on the dining_counter throughout the task."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "fork",
+            "reference_object_id": "plate",
+            "relative_position": "left"
+          },
+          "machine_path": [
+            "align_silverware",
+            "fork_aligned_left"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "spoon",
+            "reference_object_id": "plate",
+            "relative_position": "right"
+          },
+          "machine_path": [
+            "align_silverware",
+            "spoon_aligned_right"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        fork_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"fork\"]])\n        spoon_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"spoon\"]])\n        plate_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"plate\"]])\n\n        # transform the item positions to the local coordinate system of the dining counter\n        fork_x, fork_y = OU.transform_global_to_local(\n            fork_pos[0], fork_pos[1], -self.stool.rot + np.pi\n        )\n        spoon_x, spoon_y = OU.transform_global_to_local(\n            spoon_pos[0], spoon_pos[1], -self.stool.rot + np.pi\n        )\n        plate_x, plate_y = OU.transform_global_to_local(\n            plate_pos[0], plate_pos[1], -self.stool.rot + np.pi\n        )\n\n        lateral_threshold = 0.25\n        forward_threshold = 0.10\n\n        fork_x_dist = abs(fork_x - plate_x)\n        fork_y_dist = abs(fork_y - plate_y)\n        spoon_x_dist = abs(spoon_x - plate_x)\n        spoon_y_dist = abs(spoon_y - plate_y)\n\n        fork_left = (\n            (fork_x < plate_x)\n            and (fork_x_dist <= lateral_threshold)\n            and (fork_y_dist <= forward_threshold)\n        )\n        spoon_right = (\n            (spoon_x > plate_x)\n            and (spoon_x_dist <= lateral_threshold)\n            and (spoon_y_dist <= forward_threshold)\n        )\n\n        fork_on_table = OU.check_obj_fixture_contact(self, \"fork\", self.dining_counter)\n        spoon_on_table = OU.check_obj_fixture_contact(\n            self, \"spoon\", self.dining_counter\n        )\n        gripper_obj_far_plate = OU.gripper_obj_far(self, obj_name=\"plate\")\n\n        success = (\n            fork_left\n            and spoon_right\n            and fork_on_table\n            and spoon_on_table\n            and gripper_obj_far_plate\n        )\n\n        return success"
+    },
+    {
+      "task": "ArrangeBreadBowl",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/arrangebreadbowl.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/arrange_bread_bowl.py",
+      "task_goal": "pick up the heated bread from the toaster oven, place it in the bowl on the counter, then move the bowl containing both breads to the dining counter.",
+      "initial_objects": [
+        "bowl",
+        "bowl_bread",
+        "toaster_oven_bread"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "toaster_oven_bread",
+          "location": "bowl"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bowl_bread",
+          "location": "bowl"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bowl",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "toaster_oven",
+          "fixture_id": "toaster_oven",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "The toaster oven door must be open to retrieve the bread."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        heated_bread_direct = OU.check_obj_in_receptacle(\n            self, \"toaster_oven_bread\", \"bowl\"\n        )\n        bowl_bread_direct = OU.check_obj_in_receptacle(self, \"bowl_bread\", \"bowl\")\n\n        if not (heated_bread_direct or bowl_bread_direct):\n            breads_in_bowl = False\n        else:\n            heated_bread_touching = False\n            bowl_bread_touching = False\n\n            if heated_bread_direct and not bowl_bread_direct:\n                bowl_bread_touching = self.check_contact(\n                    self.objects[\"bowl_bread\"], self.objects[\"toaster_oven_bread\"]\n                )\n            elif bowl_bread_direct and not heated_bread_direct:\n                heated_bread_touching = self.check_contact(\n                    self.objects[\"toaster_oven_bread\"], self.objects[\"bowl_bread\"]\n                )\n\n            heated_bread_ok = heated_bread_direct or heated_bread_touching\n            bowl_bread_ok = bowl_bread_direct or bowl_bread_touching\n            breads_in_bowl = heated_bread_ok and bowl_bread_ok\n\n        bowl_on_dining = OU.check_obj_fixture_contact(self, \"bowl\", self.dining_counter)\n        gripper_far = OU.gripper_obj_far(self, obj_name=\"bowl\")\n\n        return breads_in_bowl and bowl_on_dining and gripper_far"
+    },
+    {
+      "task": "ArrangeDrinkware",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/arrangedrinkware.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/arrange_drinkware.py",
+      "task_goal": "Place the pitcher and cup on the dining counter for serving.",
+      "initial_objects": [
+        "cup",
+        "pitcher"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "pitcher",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cup",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        pitcher_on_dining = OU.check_obj_fixture_contact(\n            self, \"pitcher\", self.dining_counter\n        )\n        cup_on_dining = OU.check_obj_fixture_contact(self, \"cup\", self.dining_counter)\n\n        object_names = [\"pitcher\", \"cup\"]\n        gripper_far = all(\n            OU.gripper_obj_far(self, obj_name=name) for name in object_names\n        )\n\n        return pitcher_on_dining and cup_on_dining and gripper_far"
+    },
+    {
+      "task": "ArrangeTea",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/arrangetea.json",
+      "native_path": "robocasa/environments/kitchen/composite/brewing/arrange_tea.py",
+      "task_goal": "Pick the kettle from the counter and place it on the tray. Then pick the mug from the cabinet and place it on the tray. Finally, close the cabinet doors.",
+      "initial_objects": [
+        "kettle",
+        "mug",
+        "tray"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "kettle",
+          "location": "tray"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "mug",
+          "location": "tray"
+        },
+        {
+          "kind": "fixture_part_state",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "state": "closed"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cab",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open",
+          "message": "The cabinet must be open to retrieve the mug."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        obj1_container_contact = OU.check_obj_in_receptacle(self, \"obj\", \"container\")\n        obj2_container_contact = OU.check_obj_in_receptacle(self, \"obj2\", \"container\")\n        cab_closed = self.cab.is_closed(env=self)\n        gripper_obj_far = OU.gripper_obj_far(\n            self\n        )  # no need to check all gripper objs far bc all objs in the same place\n\n        return (\n            obj1_container_contact\n            and obj2_container_contact\n            and gripper_obj_far\n            and cab_closed\n        )"
+    },
+    {
+      "task": "BeverageOrganization",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/beverageorganization.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/beverage_organization.py",
+      "task_goal": "Move the drinks to the dining counter.",
+      "initial_objects": [
+        "drink_0",
+        "drink_1",
+        "drink_2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "drink_0",
+          "location": "dining_table"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "drink_1",
+          "location": "dining_table"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "drink_2",
+          "location": "dining_table"
+        }
+      ],
+      "task_preconditions": [],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n\n        drinks_on_dining = all(\n            [\n                OU.check_obj_fixture_contact(self, f\"obj_{i}\", self.dining_table)\n                for i in range(self.num_bev)\n            ]\n        )\n        return drinks_on_dining and OU.gripper_obj_far(self, \"obj_0\")"
+    },
+    {
+      "task": "BowlAndCup",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/bowlandcup.json",
+      "native_path": "robocasa/environments/kitchen/composite/clearing_table/bowl_and_cup.py",
+      "task_goal": "place the cup inside the bowl on the dining table, then move the bowl (containing the cup) to the kitchen counter.",
+      "initial_objects": [
+        "bowl",
+        "cup"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "cup",
+          "location": "bowl"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bowl",
+          "location": "kitchen_counter"
+        }
+      ],
+      "task_preconditions": [],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        cup_in_bowl = OU.check_obj_in_receptacle(self, \"cup\", \"bowl\")\n        bowl_on_counter = any(\n            [\n                OU.check_obj_fixture_contact(self, \"bowl\", fxtr)\n                for (_, fxtr) in self.fixtures.items()\n                if isinstance(fxtr, Counter) and fxtr != self.dining_table\n            ]\n        )\n        return cup_in_bowl and bowl_on_counter and OU.gripper_obj_far(self, \"bowl\")"
+    },
+    {
+      "task": "CandleCleanup",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/candlecleanup.json",
+      "native_path": "robocasa/environments/kitchen/composite/clearing_table/candle_cleanup.py",
+      "task_goal": "Pick the two decorations from the dining table and place them in the cabinet, opening it first if it is closed, then leave the cabinet closed.",
+      "initial_objects": [
+        "obj1",
+        "obj2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "obj1",
+          "location": "cab",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "obj2",
+          "location": "cab",
+          "machine_path": null
+        },
+        {
+          "kind": "fixture_part_state",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "state": "closed",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_action",
+          "tool": "place_in_receptacle",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open",
+          "arg_name": "receptacle_id",
+          "arg_value": "cab",
+          "message": "The cabinet must be open to place objects inside."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        obj1_inside_cab = OU.obj_inside_of(self, \"obj1\", self.cab)\n        obj2_inside_cab = OU.obj_inside_of(self, \"obj2\", self.cab)\n        cab_closed = self.cab.is_closed(env=self)\n        return cab_closed and obj1_inside_cab and obj2_inside_cab"
+    },
+    {
+      "task": "CheeseMixing",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/cheesemixing.json",
+      "native_path": "robocasa/environments/kitchen/composite/mixing_ingredients/cheese_mixing.py",
+      "task_goal": "Put the cheese in the pot filled with milk and stir it with the spatula.",
+      "initial_objects": [
+        "cheese",
+        "cheese_plate",
+        "pot",
+        "spatula"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "cheese",
+          "location": "pot",
+          "machine_path": null
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "stirring_check",
+            "stirred"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "spatula",
+          "location": "pot",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "pot",
+          "location": "stove",
+          "message": "The pot must stay on the stove burner."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_in_receptacle",
+          "args": {
+            "object_id": "spatula",
+            "receptacle_id": "pot"
+          },
+          "machine_path": [
+            "stirring_check",
+            "stirred"
+          ],
+          "value": true,
+          "required_object_locations": [
+            {
+              "object_id": "cheese",
+              "location": "pot"
+            }
+          ]
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n\n        cheese_in_pot = OU.check_obj_in_receptacle(self, \"cheese\", \"pot\")\n\n        pot_loc = (\n            self.stove.check_obj_location_on_stove(\n                env=self, obj_name=\"pot\", threshold=0.15\n            )\n            == self.knob\n        )\n\n        objects_stirred = self._detect_stirring([\"cheese\"])\n\n        if pot_loc and cheese_in_pot and objects_stirred:\n            self.success_time += 1\n\n        return self.success_time > 2"
+    },
+    {
+      "task": "ClusterItemsForClearing",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/clusteritemsforclearing.json",
+      "native_path": "robocasa/environments/kitchen/composite/clearing_table/cluster_items_for_clearing.py",
+      "task_goal": "Move the two items to cluster with the anchor item on the dining counter for efficient clearing.",
+      "initial_objects": [
+        "anchor_item",
+        "item1",
+        "item2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "item1",
+          "location": "dining_table",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "item2",
+          "location": "dining_table",
+          "machine_path": null
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "clustering",
+            "item1_clustered"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "clustering",
+            "item2_clustered"
+          ]
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "anchor_item",
+          "location": "dining_table",
+          "message": "The anchor item must stay on the dining table to serve as the cluster center."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "item2",
+            "reference_object_id": "item1"
+          },
+          "machine_path": [
+            "clustering",
+            "item2_clustered"
+          ],
+          "value": true,
+          "required_machine_values": [
+            {
+              "machine_path": [
+                "clustering",
+                "item1_clustered"
+              ],
+              "value": true
+            }
+          ]
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "item1",
+            "reference_object_id": "anchor_item"
+          },
+          "machine_path": [
+            "clustering",
+            "item1_clustered"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "item2",
+            "reference_object_id": "anchor_item"
+          },
+          "machine_path": [
+            "clustering",
+            "item2_clustered"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        cluster_threshold = 0.3\n\n        all_on_counter = all(\n            OU.check_obj_fixture_contact(self, name, self.dining_table)\n            for name in [\"anchor_item\", \"item1\", \"item2\"]\n        )\n\n        item_positions = {\n            name: self.sim.data.body_xpos[self.obj_body_id[name]][:2]\n            for name in [\"anchor_item\", \"item1\", \"item2\"]\n        }\n\n        all_clustered = True\n        item_names = [\"anchor_item\", \"item1\", \"item2\"]\n        for i, name_i in enumerate(item_names):\n            pi = item_positions[name_i]\n            dists = [\n                np.linalg.norm(pi - item_positions[name_j])\n                for j, name_j in enumerate(item_names)\n                if j != i\n            ]\n            if min(dists) > cluster_threshold:\n                all_clustered = False\n                break\n\n        all_far = all(\n            OU.gripper_obj_far(self, obj_name=name, th=0.15)\n            for name in [\"anchor_item\", \"item1\", \"item2\"]\n        )\n\n        return all_on_counter and all_clustered and all_far"
+    },
+    {
+      "task": "ColorfulSalsa",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/colorfulsalsa.json",
+      "native_path": "robocasa/environments/kitchen/composite/mixing_and_blending/colorful_salsa.py",
+      "task_goal": "Place the avocado, onion, tomato, and bell pepper on the cutting board.",
+      "initial_objects": [
+        "avocado",
+        "bell_pepper",
+        "onion",
+        "receptacle",
+        "tomato"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "onion",
+          "location": "receptacle",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "avocado",
+          "location": "receptacle",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "tomato",
+          "location": "receptacle",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bell_pepper",
+          "location": "receptacle",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "receptacle",
+          "location": "counter",
+          "message": "The cutting board must stay on the counter."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        vegetables_on_board = (\n            OU.check_obj_in_receptacle(self, \"onion\", \"receptacle\")\n            and OU.check_obj_in_receptacle(self, \"avocado\", \"receptacle\")\n            and OU.check_obj_in_receptacle(self, \"tomato\", \"receptacle\")\n            and OU.check_obj_in_receptacle(self, \"bell_pepper\", \"receptacle\")\n        )\n\n        return vegetables_on_board and OU.gripper_obj_far(self, \"receptacle\")"
+    },
+    {
+      "task": "CondimentCollection",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/condimentcollection.json",
+      "native_path": "robocasa/environments/kitchen/composite/clearing_table/condiment_collection.py",
+      "task_goal": "Pick the condiments from the counter and place them in the cabinet.",
+      "initial_objects": [
+        "condiment1",
+        "condiment2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment1",
+          "location": "cab",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment2",
+          "location": "cab",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_action",
+          "tool": "place_in_receptacle",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open",
+          "arg_name": "receptacle_id",
+          "arg_value": "cab",
+          "message": "cab.hinged must be open before placing objects into cab."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        gripper_obj_far_condiment1 = OU.gripper_obj_far(self, obj_name=\"condiment1\")\n        gripper_obj_far_condiment2 = OU.gripper_obj_far(self, obj_name=\"condiment2\")\n        condiment1_inside_cab = OU.obj_inside_of(self, \"condiment1\", self.cab)\n        condiment2_inside_cab = OU.obj_inside_of(self, \"condiment2\", self.cab)\n        return (\n            condiment1_inside_cab\n            and condiment2_inside_cab\n            and gripper_obj_far_condiment1\n            and gripper_obj_far_condiment2\n        )"
+    },
+    {
+      "task": "CutBuffetPizza",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/cutbuffetpizza.json",
+      "native_path": "robocasa/environments/kitchen/composite/arranging_buffet/cut_buffet_pizza.py",
+      "task_goal": "Take the pizza cutter from the drawer and place it on the dining counter for cutting.",
+      "initial_objects": [
+        "pizza",
+        "pizza_cutter"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "pizza_cutter",
+          "location": "dining_counter",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "pizza",
+          "location": "dining_counter",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "drawer",
+          "fixture_id": "drawer",
+          "part_id": "sliding",
+          "required_state": "open",
+          "message": "The drawer must be open to retrieve the pizza cutter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "pizza",
+          "location": "dining_counter",
+          "message": "The pizza must stay on the dining counter."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        pizza_cutter_on_counter = OU.check_obj_fixture_contact(\n            self, \"pizza_cutter\", self.dining_counter\n        )\n\n        pizza_on_counter = OU.check_obj_fixture_contact(\n            self, \"pizza\", self.dining_counter\n        )\n\n        gripper_far = OU.gripper_obj_far(\n            self, obj_name=\"pizza_cutter\", th=0.15\n        ) and OU.gripper_obj_far(self, obj_name=\"pizza\", th=0.15)\n\n        return pizza_cutter_on_counter and pizza_on_counter and gripper_far"
+    },
+    {
+      "task": "DateNight",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/datenight.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/date_night.py",
+      "task_goal": "Get the decoration and the alcohol from the cabinet and move them to the dining counter.",
+      "initial_objects": [
+        "alcohol",
+        "decoration"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "decoration",
+          "location": "dining_table"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "alcohol",
+          "location": "dining_table"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cab",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open"
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        gripper_obj_far = OU.gripper_obj_far(\n            self, obj_name=\"decoration\"\n        ) and OU.gripper_obj_far(self, obj_name=\"alcohol\")\n        alcohol_on_dining_table = OU.check_obj_fixture_contact(\n            self, \"alcohol\", self.dining_table\n        )\n        decoration_on_dining_table = OU.check_obj_fixture_contact(\n            self, \"decoration\", self.dining_table\n        )\n\n        return (\n            gripper_obj_far and decoration_on_dining_table and alcohol_on_dining_table\n        )"
+    },
+    {
+      "task": "DeliverStraw",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/deliverstraw.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_beverages/deliver_straw.py",
+      "task_goal": "Take a straw from the drawer and place it inside the glass cup on the dining counter.",
+      "initial_objects": [
+        "glass_cup",
+        "straw"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "straw",
+          "location": "glass_cup"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "drawer",
+          "fixture_id": "drawer",
+          "part_id": "sliding",
+          "required_state": "open",
+          "message": "The drawer must be open to retrieve the straw."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        straw_in_glass_cup = OU.check_obj_in_receptacle(\n            self, \"straw\", \"glass_cup\", th=0.5\n        )\n        gripper_far = OU.gripper_obj_far(self, obj_name=\"straw\")\n        return straw_in_glass_cup and gripper_far"
+    },
+    {
+      "task": "DessertAssembly",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/dessertassembly.json",
+      "native_path": "robocasa/environments/kitchen/composite/clearing_table/dessert_assembly.py",
+      "task_goal": "place the dessert_bowl (containing dessert1) and the cupcake onto the tray on the counter.",
+      "initial_objects": [
+        "cupcake",
+        "dessert1",
+        "dessert_bowl",
+        "tray"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "dessert_bowl",
+          "location": "tray"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cupcake",
+          "location": "tray"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "tray",
+          "location": "counter",
+          "message": "The tray must remain on the counter throughout the task."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "dessert1",
+          "location": "dessert_bowl",
+          "message": "The dessert must remain in its bowl during assembly."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        sweets_on_tray = (\n            OU.check_obj_in_receptacle(self, \"dessert1\", \"dessert1_container\")\n            and OU.check_obj_in_receptacle(self, \"dessert2\", \"receptacle\")\n            and OU.check_obj_in_receptacle(self, \"dessert1_container\", \"receptacle\")\n        )\n\n        return sweets_on_tray and OU.gripper_obj_far(self, \"receptacle\")"
+    },
+    {
+      "task": "DisplayMeatVariety",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/displaymeatvariety.json",
+      "native_path": "robocasa/environments/kitchen/composite/filling_serving_dishes/display_meat_variety.py",
+      "task_goal": "Retrieve the chicken, shrimp, and beef from the fridge and place them on the serving tray on the dining counter.",
+      "initial_objects": [
+        "beef",
+        "chicken",
+        "serving_tray",
+        "shrimp"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "chicken",
+          "location": "serving_tray",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "shrimp",
+          "location": "serving_tray",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "beef",
+          "location": "serving_tray",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "serving_tray",
+          "location": "dining_table",
+          "message": "The serving tray must stay on the dining table."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "hinged",
+          "required_state": "open",
+          "message": "The fridge door must be open to retrieve the meat."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        chicken_on_tray = OU.check_obj_in_receptacle(self, \"chicken\", \"serving_tray\")\n        shrimp_on_tray = OU.check_obj_in_receptacle(self, \"shrimp\", \"serving_tray\")\n        beef_on_tray = OU.check_obj_in_receptacle(self, \"beef\", \"serving_tray\")\n\n        tray_on_table = OU.check_obj_fixture_contact(\n            self, \"serving_tray\", self.dining_table\n        )\n\n        gripper_far = (\n            OU.gripper_obj_far(self, \"chicken\")\n            and OU.gripper_obj_far(self, \"shrimp\")\n            and OU.gripper_obj_far(self, \"beef\")\n        )\n\n        return (\n            chicken_on_tray\n            and shrimp_on_tray\n            and beef_on_tray\n            and tray_on_table\n            and gripper_far\n        )"
+    },
+    {
+      "task": "DistributeChicken",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/distributechicken.json",
+      "native_path": "robocasa/environments/kitchen/composite/portioning_meals/distribute_chicken.py",
+      "task_goal": "Take the chicken drumsticks from the pan and place one on each plate on the dining counter.",
+      "initial_objects": [
+        "chicken_drumstick1",
+        "chicken_drumstick2",
+        "pan",
+        "plate1",
+        "plate2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "chicken_drumstick1",
+            "chicken_drumstick2"
+          ],
+          "location": "plate1",
+          "count": 1,
+          "machine_path": null
+        },
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "chicken_drumstick1",
+            "chicken_drumstick2"
+          ],
+          "location": "plate2",
+          "count": 1,
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate1",
+          "location": "dining_counter",
+          "message": "The first plate must stay on the dining counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate2",
+          "location": "dining_counter",
+          "message": "The second plate must stay on the dining counter."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        drumsticks_in_plate1 = 0\n        for drumstick_name in [\"chicken_drumstick1\", \"chicken_drumstick2\"]:\n            if OU.check_obj_in_receptacle(self, drumstick_name, \"plate1\"):\n                drumsticks_in_plate1 += 1\n\n        drumsticks_in_plate2 = 0\n        for drumstick_name in [\"chicken_drumstick1\", \"chicken_drumstick2\"]:\n            if OU.check_obj_in_receptacle(self, drumstick_name, \"plate2\"):\n                drumsticks_in_plate2 += 1\n\n        gripper_far = True\n        for drumstick_name in [\"chicken_drumstick1\", \"chicken_drumstick2\"]:\n            if not OU.gripper_obj_far(self, drumstick_name):\n                gripper_far = False\n                break\n\n        return drumsticks_in_plate1 == 1 and drumsticks_in_plate2 == 1 and gripper_far"
+    },
+    {
+      "task": "GarnishCake",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/garnishcake.json",
+      "native_path": "robocasa/environments/kitchen/composite/garnishing_dishes/garnish_cake.py",
+      "task_goal": "Place exactly one cherry on either the cake or cake_plate, and place exactly one strawberry on the cake_plate next to the cake.",
+      "initial_objects": [
+        "cake",
+        "cake_plate",
+        "cherry1",
+        "cherry2",
+        "fruit_plate",
+        "strawberry1",
+        "strawberry2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_count_at_locations",
+          "object_ids": [
+            "cherry1",
+            "cherry2"
+          ],
+          "locations": [
+            "cake",
+            "cake_plate"
+          ],
+          "count": 1
+        },
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "strawberry1",
+            "strawberry2"
+          ],
+          "location": "cake_plate",
+          "count": 1
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "cake_plate",
+          "location": "dining_counter",
+          "message": "cake_plate must remain on the dining_counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "fruit_plate",
+          "location": "dining_counter",
+          "message": "fruit_plate must remain on the dining_counter."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        cherry1_in_contact = OU.check_obj_in_receptacle(\n            self, \"cherry1\", \"cake\"\n        ) or OU.check_obj_in_receptacle(self, \"cherry1\", \"cake_plate\")\n        cherry2_in_contact = OU.check_obj_in_receptacle(\n            self, \"cherry2\", \"cake\"\n        ) or OU.check_obj_in_receptacle(self, \"cherry2\", \"cake_plate\")\n        exactly_one_cherry_in_contact = (\n            sum([cherry1_in_contact, cherry2_in_contact]) == 1\n        )\n\n        strawberry1_on_plate = OU.check_obj_in_receptacle(\n            self, \"strawberry1\", \"cake_plate\"\n        )\n        strawberry2_on_plate = OU.check_obj_in_receptacle(\n            self, \"strawberry2\", \"cake_plate\"\n        )\n        strawberry_count_on_plate = sum([strawberry1_on_plate, strawberry2_on_plate])\n        exactly_one_strawberry_on_plate = strawberry_count_on_plate == 1\n\n        plate_on_counter = OU.check_obj_fixture_contact(\n            self, \"cake_plate\", self.dining_counter\n        )\n        gripper_away = OU.gripper_obj_far(self, \"cake_plate\")\n\n        return (\n            exactly_one_cherry_in_contact\n            and exactly_one_strawberry_on_plate\n            and plate_on_counter\n            and gripper_away\n        )"
+    },
+    {
+      "task": "GarnishCupcake",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/garnishcupcake.json",
+      "native_path": "robocasa/environments/kitchen/composite/garnishing_dishes/garnish_cupcake.py",
+      "task_goal": "retrieve cinnamon from cabinet and place it next to cupcake_plate on dining_counter, then place chocolate onto cupcake_plate.",
+      "initial_objects": [
+        "chocolate",
+        "cinnamon",
+        "cupcake",
+        "cupcake_plate"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "garnish_cupcake",
+            "cinnamon_placed_next_to_plate"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "chocolate",
+          "location": "cupcake_plate"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cupcake_plate",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cinnamon",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "cupcake_plate",
+          "location": "dining_counter",
+          "message": "cupcake_plate must remain on dining_counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "cupcake",
+          "location": "cupcake_plate",
+          "message": "cupcake must remain on cupcake_plate."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cabinet",
+          "fixture_id": "cabinet",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "cabinet door must be open to retrieve cinnamon."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "cinnamon",
+            "reference_object_id": "cupcake_plate"
+          },
+          "machine_path": [
+            "garnish_cupcake",
+            "cinnamon_placed_next_to_plate"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        cupcake_container_name = \"cupcake_container\"\n        cinnamon_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"cinnamon\"]])\n        plate_pos = np.array(\n            self.sim.data.body_xpos[self.obj_body_id[cupcake_container_name]]\n        )\n        cinnamon_distance = np.linalg.norm(cinnamon_pos[:2] - plate_pos[:2])\n        cinnamon_next_to_plate = cinnamon_distance <= 0.3\n\n        chocolate_on_plate = OU.check_obj_in_receptacle(\n            self, \"chocolate\", cupcake_container_name\n        )\n        cupcake_on_plate = OU.check_obj_in_receptacle(\n            self, \"cupcake\", cupcake_container_name\n        )\n        plate_on_table = OU.check_obj_fixture_contact(\n            self, cupcake_container_name, self.dining_counter\n        )\n\n        gripper_far_cinnamon = OU.gripper_obj_far(self, \"cinnamon\")\n        gripper_far_chocolate = OU.gripper_obj_far(self, \"chocolate\")\n        return (\n            cinnamon_next_to_plate\n            and chocolate_on_plate\n            and cupcake_on_plate\n            and plate_on_table\n            and gripper_far_cinnamon\n            and gripper_far_chocolate\n        )"
+    },
+    {
+      "task": "GarnishPancake",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/garnishpancake.json",
+      "native_path": "robocasa/environments/kitchen/composite/garnishing_dishes/garnish_pancake.py",
+      "task_goal": "retrieve the strawberry from the fridge and place it on top of the pancake which is on a plate on the dining counter.",
+      "initial_objects": [
+        "pancake",
+        "plate",
+        "strawberry"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "strawberry",
+          "location": "pancake"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "pancake",
+          "location": "plate"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "plate",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate",
+          "location": "dining_counter",
+          "message": "The plate must stay on the dining counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "pancake",
+          "location": "plate",
+          "message": "The pancake must stay on the plate."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "The fridge door must be open to retrieve the strawberry."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        strawberry_on_pancake = OU.check_obj_in_receptacle(\n            self, \"strawberry\", \"pancake\"\n        )\n        pancake_on_plate = OU.check_obj_in_receptacle(\n            self, \"pancake\", \"pancake_container\"\n        )\n        plate_on_table = OU.check_obj_fixture_contact(\n            self, \"pancake_container\", self.dining_counter\n        )\n        gripper_far_strawberry = OU.gripper_obj_far(self, \"strawberry\")\n        return (\n            strawberry_on_pancake\n            and pancake_on_plate\n            and plate_on_table\n            and gripper_far_strawberry\n        )"
+    },
+    {
+      "task": "GatherMarinadeIngredients",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/gathermarinadeingredients.json",
+      "native_path": "robocasa/environments/kitchen/composite/preparing_marinade/gather_marinade_ingredients.py",
+      "task_goal": "Retrieve the bottle and the shaker from the cabinet and place them next to the mixing bowl on the counter. Then add garlic from the fridge to the mixing bowl.",
+      "initial_objects": [
+        "garlic",
+        "mixing_bowl",
+        "oil_or_vinegar_bottle",
+        "shaker"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "garlic",
+          "location": "mixing_bowl",
+          "machine_path": null
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "oil_near_bowl"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "shaker_near_bowl"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "oil_or_vinegar_bottle",
+          "location": "counter",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "shaker",
+          "location": "counter",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "mixing_bowl",
+          "location": "counter",
+          "message": "The mixing bowl must stay on the counter to receive ingredients."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "oil_or_vinegar_bottle",
+            "reference_object_id": "mixing_bowl"
+          },
+          "machine_path": [
+            "proximity",
+            "oil_near_bowl"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "shaker",
+            "reference_object_id": "mixing_bowl"
+          },
+          "machine_path": [
+            "proximity",
+            "shaker_near_bowl"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        garlic_in_bowl = OU.check_obj_in_receptacle(self, \"garlic\", \"mixing_bowl\")\n\n        oil_on_counter = OU.check_obj_any_counter_contact(self, \"oil_or_vinegar_bottle\")\n        shaker_on_counter = OU.check_obj_any_counter_contact(self, \"shaker\")\n\n        bowl_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"mixing_bowl\"]])[\n            :2\n        ]\n        oil_pos = np.array(\n            self.sim.data.body_xpos[self.obj_body_id[\"oil_or_vinegar_bottle\"]]\n        )[:2]\n        cond_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"shaker\"]])[:2]\n\n        oil_near_bowl = np.linalg.norm(oil_pos - bowl_pos) <= 0.3\n        cond_near_bowl = np.linalg.norm(cond_pos - bowl_pos) <= 0.3\n\n        all_far = all(\n            OU.gripper_obj_far(self, obj_name=name)\n            for name in (\n                \"garlic\",\n                \"oil_or_vinegar_bottle\",\n                \"shaker\",\n            )\n        )\n\n        bowl_on_counter = OU.check_obj_fixture_contact(\n            self, \"mixing_bowl\", self.counter\n        )\n\n        return (\n            garlic_in_bowl\n            and oil_on_counter\n            and shaker_on_counter\n            and oil_near_bowl\n            and cond_near_bowl\n            and all_far\n            and bowl_on_counter\n        )"
+    },
+    {
+      "task": "HotDogSetup",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/hotdogsetup.json",
+      "native_path": "robocasa/environments/kitchen/composite/preparing_sandwiches/hot_dog_setup.py",
+      "task_goal": "place the hotdog_bun and sausage on the plate on the dining_table, and place the condiment bottle next to the plate.",
+      "initial_objects": [
+        "condiment",
+        "hotdog_bun",
+        "plate",
+        "sausage"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "hotdog_bun",
+          "location": "plate"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "sausage",
+          "location": "plate"
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "hot_dog_setup",
+            "condiment_near_plate"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment",
+          "location": "dining_table"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate",
+          "location": "dining_table",
+          "message": "The plate must remain on the dining table."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "The fridge door must be open to retrieve the sausage."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cabinet",
+          "fixture_id": "cabinet",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "The cabinet door must be open to retrieve the condiment."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "condiment",
+            "reference_object_id": "plate"
+          },
+          "machine_path": [
+            "hot_dog_setup",
+            "condiment_near_plate"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        \"\"\"\n        Ensure the hot dog ingredients are properly set up:\n        1. The hot dog bun and sausage are on the plate.\n        2. The plate is placed on the dining table.\n        3. The condiment bottle is placed near the plate (within a certain XY distance).\n        4. The gripper is far from all objects.\n        \"\"\"\n\n        bun_on_plate = OU.check_obj_in_receptacle(self, \"hotdog_bun\", \"plate\")\n        sausage_on_plate = OU.check_obj_in_receptacle(self, \"sausage\", \"plate\")\n\n        plate_on_table = OU.check_obj_fixture_contact(self, \"plate\", self.dining_table)\n\n        plate_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"plate\"]])\n        condiment_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"condiment\"]])\n\n        max_xy_distance = 0.35\n        condiment_near_plate = (\n            np.linalg.norm(plate_pos[:2] - condiment_pos[:2]) < max_xy_distance\n        )\n        condiment_on_table = OU.check_obj_fixture_contact(\n            self, \"condiment\", self.dining_table\n        )\n\n        gripper_far_from_objects = (\n            OU.gripper_obj_far(self, \"hotdog_bun\")\n            and OU.gripper_obj_far(self, \"sausage\")\n            and OU.gripper_obj_far(self, \"condiment\")\n            and OU.gripper_obj_far(self, \"plate\")\n        )\n\n        return (\n            bun_on_plate\n            and sausage_on_plate\n            and plate_on_table\n            and condiment_near_plate\n            and condiment_on_table\n            and gripper_far_from_objects\n        )"
+    },
+    {
+      "task": "LemonSeasoningFish",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/lemonseasoningfish.json",
+      "native_path": "robocasa/environments/kitchen/composite/seasoning_food/lemon_seasoning_fish.py",
+      "task_goal": "Retrieve a lemon from the fridge and place it on the cutting board with the fish.",
+      "initial_objects": [
+        "cutting_board",
+        "fish",
+        "lemon"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "lemon",
+          "location": "cutting_board",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "hinged",
+          "required_state": "open",
+          "message": "Open the fridge door before picking up the lemon."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        return OU.check_obj_in_receptacle(\n            self, \"lemon\", \"fish_container\"\n        ) and OU.gripper_obj_far(self, \"lemon\")"
+    },
+    {
+      "task": "LineUpCondiments",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/lineupcondiments.json",
+      "native_path": "robocasa/environments/kitchen/composite/arranging_condiments/line_up_condiments.py",
+      "task_goal": "Take two condiments from the cabinet and move them on the counter near the stove, lined up next to each other.",
+      "initial_objects": [
+        "condiment1",
+        "condiment2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment1",
+          "location": "counter",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment2",
+          "location": "counter",
+          "machine_path": null
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "condiments_lined_up"
+          ]
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cab",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open"
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "condiment2",
+            "reference_object_id": "condiment1"
+          },
+          "machine_path": [
+            "proximity",
+            "condiments_lined_up"
+          ],
+          "value": true,
+          "required_object_locations": [
+            {
+              "object_id": "condiment1",
+              "location": "counter"
+            }
+          ]
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "condiment1",
+            "reference_object_id": "condiment2"
+          },
+          "machine_path": [
+            "proximity",
+            "condiments_lined_up"
+          ],
+          "value": true,
+          "required_object_locations": [
+            {
+              "object_id": "condiment2",
+              "location": "counter"
+            }
+          ]
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        condiment1_on_counter = OU.check_obj_any_counter_contact(self, \"condiment1\")\n        condiment2_on_counter = OU.check_obj_any_counter_contact(self, \"condiment2\")\n\n        condiment1_stove_dist = OU.obj_fixture_bbox_min_dist(\n            self, \"condiment1\", self.stove\n        )\n        condiment2_stove_dist = OU.obj_fixture_bbox_min_dist(\n            self, \"condiment2\", self.stove\n        )\n        condiments_near_stove = (condiment1_stove_dist < 0.35) and (\n            condiment2_stove_dist < 0.35\n        )\n\n        condiment1_pos = np.array(\n            self.sim.data.body_xpos[self.obj_body_id[\"condiment1\"]]\n        )[:2]\n        condiment2_pos = np.array(\n            self.sim.data.body_xpos[self.obj_body_id[\"condiment2\"]]\n        )[:2]\n\n        x_distance = abs(condiment1_pos[0] - condiment2_pos[0])\n        y_distance = abs(condiment1_pos[1] - condiment2_pos[1])\n\n        x_spacing_correct = x_distance <= 0.2\n        y_spacing_correct = y_distance <= 0.05\n\n        gripper_far = OU.gripper_obj_far(self, \"condiment1\") and OU.gripper_obj_far(\n            self, \"condiment2\"\n        )\n\n        return (\n            condiment1_on_counter\n            and condiment2_on_counter\n            and condiments_near_stove\n            and x_spacing_correct\n            and y_spacing_correct\n            and gripper_far\n        )"
+    },
+    {
+      "task": "MatchCupAndDrink",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/matchcupanddrink.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_beverages/match_cup_and_drink.py",
+      "task_goal": "Place the wine bottle next to the wine glass and the juice bottle next to the glass cup on the dining counter.",
+      "initial_objects": [
+        "glass_cup",
+        "juice_bottle",
+        "wine_bottle",
+        "wine_glass"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "wine_bottle_near_glass"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "juice_bottle_near_cup"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "wine_bottle",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "juice_bottle",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "wine_glass",
+          "location": "dining_counter",
+          "message": "The wine glass must stay on the dining counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "glass_cup",
+          "location": "dining_counter",
+          "message": "The glass cup must stay on the dining counter."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "wine_bottle",
+            "reference_object_id": "wine_glass"
+          },
+          "machine_path": [
+            "proximity",
+            "wine_bottle_near_glass"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "juice_bottle",
+            "reference_object_id": "glass_cup"
+          },
+          "machine_path": [
+            "proximity",
+            "juice_bottle_near_cup"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        wine_bottle_near_glass = False\n        juice_bottle_near_cup = False\n\n        wine_glass_pos = self.sim.data.body_xpos[self.obj_body_id[\"wine_glass\"]][:2]\n        wine_bottle_pos = self.sim.data.body_xpos[self.obj_body_id[\"wine_bottle\"]][:2]\n        wine_dist = np.linalg.norm(wine_glass_pos - wine_bottle_pos)\n        wine_bottle_near_glass = wine_dist <= 0.25\n\n        cup_pos = self.sim.data.body_xpos[self.obj_body_id[\"glass_cup\"]][:2]\n        juice_bottle_pos = self.sim.data.body_xpos[self.obj_body_id[\"juice_bottle\"]][:2]\n        juice_dist = np.linalg.norm(cup_pos - juice_bottle_pos)\n        juice_bottle_near_cup = juice_dist <= 0.25\n\n        gripper_far = OU.gripper_obj_far(\n            self, obj_name=\"wine_bottle\"\n        ) and OU.gripper_obj_far(self, obj_name=\"juice_bottle\")\n        return wine_bottle_near_glass and juice_bottle_near_cup and gripper_far"
+    },
+    {
+      "task": "MeatSkewerAssembly",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/meatskewerassembly.json",
+      "native_path": "robocasa/environments/kitchen/composite/filling_serving_dishes/meat_skewer_assembly.py",
+      "task_goal": "Move the kebab skewers from the plate to the oven tray for oven preparation.",
+      "initial_objects": [
+        "oven_tray",
+        "skewer1",
+        "skewer2",
+        "skewer_plate"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "skewer1",
+          "location": "oven_tray",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "skewer2",
+          "location": "oven_tray",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "oven_tray",
+          "location": "dining_counter",
+          "message": "The oven tray must stay on the counter during assembly."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        skewer1_on_tray = OU.check_obj_in_receptacle(self, \"skewer1\", \"oven_tray\")\n        skewer2_on_tray = OU.check_obj_in_receptacle(self, \"skewer2\", \"oven_tray\")\n\n        tray_on_counter = OU.check_obj_fixture_contact(\n            self, \"oven_tray\", self.dining_counter\n        )\n\n        gripper_far = OU.gripper_obj_far(self, \"skewer1\") and OU.gripper_obj_far(\n            self, \"skewer2\"\n        )\n\n        return skewer1_on_tray and skewer2_on_tray and tray_on_counter and gripper_far"
+    },
+    {
+      "task": "OrganizeCondiments",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/organizecondiments.json",
+      "native_path": "robocasa/environments/kitchen/composite/arranging_condiments/organize_condiments.py",
+      "task_goal": "Move the three condiments from the counter into the cabinet.",
+      "initial_objects": [
+        "condiment1",
+        "condiment2",
+        "condiment3"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment1",
+          "location": "cab",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment2",
+          "location": "cab",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment3",
+          "location": "cab",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_action",
+          "tool": "place_in_receptacle",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open",
+          "arg_name": "receptacle_id",
+          "arg_value": "cab",
+          "message": "The cabinet must be open to place items inside."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        condiment1_in_cab = OU.obj_inside_of(self, \"condiment1\", self.cab)\n        condiment2_in_cab = OU.obj_inside_of(self, \"condiment2\", self.cab)\n        condiment3_in_cab = OU.obj_inside_of(self, \"condiment3\", self.cab)\n\n        distractor_on_counter = OU.check_obj_fixture_contact(\n            self, \"distractor\", self.counter\n        )\n\n        gripper_far = (\n            OU.gripper_obj_far(self, \"condiment1\")\n            and OU.gripper_obj_far(self, \"condiment2\")\n            and OU.gripper_obj_far(self, \"condiment3\")\n            and OU.gripper_obj_far(self, \"distractor\")\n        )\n\n        return (\n            condiment1_in_cab\n            and condiment2_in_cab\n            and condiment3_in_cab\n            and distractor_on_counter\n            and gripper_far\n        )"
+    },
+    {
+      "task": "PlateStoreDinner",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/platestoredinner.json",
+      "native_path": "robocasa/environments/kitchen/composite/plating_food/plate_store_dinner.py",
+      "task_goal": "place one steak on the plate and the other steak in the bowl, then store the bowl in the fridge.",
+      "initial_objects": [
+        "bowl",
+        "meat1",
+        "meat2",
+        "pan",
+        "plate"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location_one_of",
+          "object_id": "meat1",
+          "locations": [
+            "plate",
+            "bowl"
+          ],
+          "exclusive": true
+        },
+        {
+          "kind": "object_at_location_one_of",
+          "object_id": "meat2",
+          "locations": [
+            "plate",
+            "bowl"
+          ],
+          "exclusive": true
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bowl",
+          "location": "fridge"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate",
+          "location": "counter",
+          "message": "The plate must remain on the counter."
+        },
+        {
+          "kind": "fixture_part_state_required_for_action",
+          "tool": "place_in_receptacle",
+          "fixture_id": "fridge",
+          "part_id": "door",
+          "required_state": "open",
+          "arg_name": "receptacle_id",
+          "arg_value": "fridge",
+          "message": "The fridge door must be open to place the bowl inside."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        meat1_on_plate = OU.check_obj_in_receptacle(self, \"meat1\", \"plate\")\n\n        meat2_on_plate = OU.check_obj_in_receptacle(self, \"meat2\", \"plate\")\n\n        meat1_in_tupper = OU.check_obj_in_receptacle(self, \"meat1\", \"bowl\")\n\n        meat2_in_tupper = OU.check_obj_in_receptacle(self, \"meat2\", \"bowl\")\n\n        gripper_far = OU.gripper_obj_far(self, \"meat1\") and OU.gripper_obj_far(\n            self, \"meat2\"\n        )\n\n        meat2_in_fridge = OU.obj_inside_of(self, \"meat2\", self.fridge)\n\n        meat1_in_fridge = OU.obj_inside_of(self, \"meat1\", self.fridge)\n\n        return (\n            meat1_on_plate and meat2_in_tupper and meat2_in_fridge and gripper_far\n        ) or (meat2_on_plate and meat1_in_tupper and meat1_in_fridge and gripper_far)"
+    },
+    {
+      "task": "PortionHotDogs",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/portionhotdogs.json",
+      "native_path": "robocasa/environments/kitchen/composite/portioning_meals/portion_hot_dogs.py",
+      "task_goal": "place exactly one hotdog_bun and one sausage on plate1, and exactly one hotdog_bun and one sausage on plate2, all retrieved from the bowl on the dining_counter.",
+      "initial_objects": [
+        "bowl",
+        "hotdog_bun1",
+        "hotdog_bun2",
+        "plate1",
+        "plate2",
+        "sausage1",
+        "sausage2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "hotdog_bun1",
+            "hotdog_bun2"
+          ],
+          "location": "plate1",
+          "count": 1
+        },
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "sausage1",
+            "sausage2"
+          ],
+          "location": "plate1",
+          "count": 1
+        },
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "hotdog_bun1",
+            "hotdog_bun2"
+          ],
+          "location": "plate2",
+          "count": 1
+        },
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "sausage1",
+            "sausage2"
+          ],
+          "location": "plate2",
+          "count": 1
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate1",
+          "location": "dining_counter",
+          "message": "plate1 must remain on the dining_counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate2",
+          "location": "dining_counter",
+          "message": "plate2 must remain on the dining_counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "bowl",
+          "location": "dining_counter",
+          "message": "bowl must remain on the dining_counter."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        buns_in_plate1 = 0\n        sausages_in_plate1 = 0\n        for bun_name in [\"hotdog_bun1\", \"hotdog_bun2\"]:\n            if OU.check_obj_in_receptacle(self, bun_name, \"plate1\"):\n                buns_in_plate1 += 1\n        for sausage_name in [\"sausage1\", \"sausage2\"]:\n            if OU.check_obj_in_receptacle(self, sausage_name, \"plate1\"):\n                sausages_in_plate1 += 1\n\n        buns_in_plate2 = 0\n        sausages_in_plate2 = 0\n        for bun_name in [\"hotdog_bun1\", \"hotdog_bun2\"]:\n            if OU.check_obj_in_receptacle(self, bun_name, \"plate2\"):\n                buns_in_plate2 += 1\n        for sausage_name in [\"sausage1\", \"sausage2\"]:\n            if OU.check_obj_in_receptacle(self, sausage_name, \"plate2\"):\n                sausages_in_plate2 += 1\n\n        gripper_far = True\n        for obj_name in [\"hotdog_bun1\", \"hotdog_bun2\", \"sausage1\", \"sausage2\"]:\n            if not OU.gripper_obj_far(self, obj_name):\n                gripper_far = False\n                break\n\n        return (\n            buns_in_plate1 == 1\n            and sausages_in_plate1 == 1\n            and buns_in_plate2 == 1\n            and sausages_in_plate2 == 1\n            and gripper_far\n        )"
+    },
+    {
+      "task": "PortionYogurt",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/portionyogurt.json",
+      "native_path": "robocasa/environments/kitchen/composite/portioning_meals/portion_yogurt.py",
+      "task_goal": "place exactly two yogurt containers on plate1 and exactly two yogurt containers on plate2.",
+      "initial_objects": [
+        "plate1",
+        "plate2",
+        "yogurt1",
+        "yogurt2",
+        "yogurt3",
+        "yogurt4"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "yogurt1",
+            "yogurt2",
+            "yogurt3",
+            "yogurt4"
+          ],
+          "location": "plate1",
+          "count": 2
+        },
+        {
+          "kind": "object_count_at_location",
+          "object_ids": [
+            "yogurt1",
+            "yogurt2",
+            "yogurt3",
+            "yogurt4"
+          ],
+          "location": "plate2",
+          "count": 2
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate1",
+          "location": "dining_counter",
+          "message": "plate1 must remain on the dining counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate2",
+          "location": "dining_counter",
+          "message": "plate2 must remain on the dining counter."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        yogurts_in_plate1 = 0\n        for yogurt_name in [\"yogurt1\", \"yogurt2\", \"yogurt3\", \"yogurt4\"]:\n            if OU.check_obj_in_receptacle(self, yogurt_name, \"plate1\"):\n                yogurts_in_plate1 += 1\n\n        yogurts_in_plate2 = 0\n        for yogurt_name in [\"yogurt1\", \"yogurt2\", \"yogurt3\", \"yogurt4\"]:\n            if OU.check_obj_in_receptacle(self, yogurt_name, \"plate2\"):\n                yogurts_in_plate2 += 1\n\n        gripper_far = True\n        for yogurt_name in [\"yogurt1\", \"yogurt2\", \"yogurt3\", \"yogurt4\"]:\n            if not OU.gripper_obj_far(self, yogurt_name):\n                gripper_far = False\n                break\n\n        return yogurts_in_plate1 == 2 and yogurts_in_plate2 == 2 and gripper_far"
+    },
+    {
+      "task": "PrepareCheeseStation",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/preparecheesestation.json",
+      "native_path": "robocasa/environments/kitchen/composite/making_salads/prepare_cheese_station.py",
+      "task_goal": "Pick the cheese from the fridge and the cheese grater from the cabinet and place them next to the salad bowl on the counter.",
+      "initial_objects": [
+        "cheese",
+        "grater",
+        "lettuce",
+        "salad_bowl"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "cheese_station",
+            "cheese_near_bowl"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "cheese_station",
+            "grater_near_bowl"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cheese",
+          "location": "counter",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "grater",
+          "location": "counter",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "door",
+          "required_state": "open"
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cabinet",
+          "fixture_id": "cabinet",
+          "part_id": "door",
+          "required_state": "open"
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "cheese",
+            "reference_object_id": "salad_bowl"
+          },
+          "machine_path": [
+            "cheese_station",
+            "cheese_near_bowl"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "grater",
+            "reference_object_id": "salad_bowl"
+          },
+          "machine_path": [
+            "cheese_station",
+            "grater_near_bowl"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        distance_thresh = 0.25\n\n        bowl_pos_xy = self.sim.data.body_xpos[self.obj_body_id[\"lettuce_container\"]][\n            0:2\n        ]\n        bowl_radius = np.linalg.norm(\n            self.objects[\"lettuce_container\"].horizontal_radius\n        )\n\n        grater_pos_xy = self.sim.data.body_xpos[self.obj_body_id[\"grater\"]][0:2]\n\n        cheese_pos_xy = self.sim.data.body_xpos[self.obj_body_id[\"cheese\"]][0:2]\n\n        cheese_on_counter = OU.check_obj_fixture_contact(self, \"cheese\", self.counter)\n        grater_on_counter = OU.check_obj_fixture_contact(self, \"grater\", self.counter)\n        cheese_far = OU.gripper_obj_far(self, \"cheese\")\n        grater_far = OU.gripper_obj_far(self, \"grater\")\n\n        objs_on_counter = cheese_on_counter and grater_on_counter\n        objs_gripper_far = cheese_far and grater_far\n        objs_close = (\n            np.linalg.norm(bowl_pos_xy - grater_pos_xy) - bowl_radius\n        ) < distance_thresh\n        objs_close = (\n            objs_close\n            and (np.linalg.norm(bowl_pos_xy - cheese_pos_xy) - bowl_radius)\n            < distance_thresh\n        )\n        return objs_on_counter and objs_gripper_far and objs_close"
+    },
+    {
+      "task": "PrepareCocktailStation",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/preparecocktailstation.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_beverages/prepare_cocktail_station.py",
+      "task_goal": "Place the lemon wedge in the bowl on the dining counter, then place the liquor bottle and glass cup next to the bowl.",
+      "initial_objects": [
+        "bowl",
+        "glass_cup",
+        "lemon_wedge",
+        "liquor"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "lemon_wedge",
+          "location": "bowl"
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "liquor_near_bowl"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "glass_cup_near_bowl"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "liquor",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "glass_cup",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "hinged",
+          "required_state": "open",
+          "message": "Open the fridge before picking up the lemon wedge."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "bowl",
+          "location": "dining_counter",
+          "message": "The bowl must stay on the dining counter."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "liquor",
+            "reference_object_id": "bowl"
+          },
+          "machine_path": [
+            "liquor_near_bowl"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "glass_cup",
+            "reference_object_id": "bowl"
+          },
+          "machine_path": [
+            "glass_cup_near_bowl"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        bowl_pos = self.sim.data.body_xpos[self.obj_body_id[\"bowl\"]][:2]\n        lemon_pos = self.sim.data.body_xpos[self.obj_body_id[\"lemon_wedge\"]][:2]\n        lemon_in_bowl = OU.check_obj_in_receptacle(self, \"lemon_wedge\", \"bowl\")\n\n        liquor_on_counter = OU.check_obj_fixture_contact(\n            self, \"liquor\", self.dining_counter\n        )\n        glass_cup_on_counter = OU.check_obj_fixture_contact(\n            self, \"glass_cup\", self.dining_counter\n        )\n\n        liquor_pos = self.sim.data.body_xpos[self.obj_body_id[\"liquor\"]][:2]\n        glass_cup_pos = self.sim.data.body_xpos[self.obj_body_id[\"glass_cup\"]][:2]\n        liquor_near_bowl = np.linalg.norm(bowl_pos - liquor_pos) <= 0.35\n        glass_cup_near_bowl = np.linalg.norm(bowl_pos - glass_cup_pos) <= 0.35\n\n        gripper_far = (\n            OU.gripper_obj_far(self, obj_name=\"lemon_wedge\")\n            and OU.gripper_obj_far(self, obj_name=\"liquor\")\n            and OU.gripper_obj_far(self, obj_name=\"glass_cup\")\n        )\n\n        return (\n            lemon_in_bowl\n            and liquor_on_counter\n            and liquor_near_bowl\n            and glass_cup_on_counter\n            and glass_cup_near_bowl\n            and gripper_far\n        )"
+    },
+    {
+      "task": "PrepareCoffee",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/preparecoffee.json",
+      "native_path": "robocasa/environments/kitchen/composite/brewing/prepare_coffee.py",
+      "task_goal": "Pick the mug from the cabinet, place it under the coffee machine dispenser, and press the start button.",
+      "initial_objects": [
+        "mug"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "mug",
+          "location": "coffee_machine"
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "coffee_machine",
+            "turned_on"
+          ]
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cab",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open"
+        },
+        {
+          "kind": "object_location_required_for_action",
+          "tool": "press_button",
+          "object_id": "mug",
+          "required_location": "coffee_machine",
+          "message": "press_button on the coffee machine requires the mug under the coffee machine dispenser."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "press_button",
+          "args": {
+            "target_id": "coffee_machine",
+            "control_id": "start_button"
+          },
+          "machine_path": [
+            "coffee_machine",
+            "turned_on"
+          ],
+          "value": true,
+          "required_object_locations": [
+            {
+              "object_id": "mug",
+              "location": "coffee_machine"
+            }
+          ]
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        gripper_obj_far = OU.gripper_obj_far(self)\n        contact_check = self.coffee_machine.check_receptacle_placement_for_pouring(\n            self, \"obj\"\n        )\n        gripper_button_far = self.coffee_machine.gripper_button_far(self)\n        return (\n            contact_check\n            and gripper_obj_far\n            and self.coffee_machine._turned_on\n            and gripper_button_far\n        )"
+    },
+    {
+      "task": "PrepareDrinkStation",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/preparedrinkstation.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_beverages/prepare_drink_station.py",
+      "task_goal": "Prepare a drink station by placing the cup and mug on the tray and the pitcher next to the tray on the dining counter.",
+      "initial_objects": [
+        "cup",
+        "mug",
+        "pitcher",
+        "tray"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "cup",
+          "location": "tray"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "mug",
+          "location": "tray"
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "pitcher_near_tray"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "pitcher",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "tray",
+          "location": "dining_counter",
+          "message": "The tray must stay on the dining counter."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "pitcher",
+            "reference_object_id": "tray"
+          },
+          "machine_path": [
+            "proximity",
+            "pitcher_near_tray"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        cup_on_tray = OU.check_obj_in_receptacle(self, \"cup\", \"tray\")\n        mug_on_tray = OU.check_obj_in_receptacle(self, \"mug\", \"tray\")\n        pitcher_near_tray = False\n        tray_pos = self.sim.data.body_xpos[self.obj_body_id[\"tray\"]][:2]\n        pitcher_pos = self.sim.data.body_xpos[self.obj_body_id[\"pitcher\"]][:2]\n        dist = np.linalg.norm(tray_pos - pitcher_pos)\n        pitcher_near_tray = dist <= 0.3\n        gripper_far = (\n            OU.gripper_obj_far(self, obj_name=\"cup\")\n            and OU.gripper_obj_far(self, obj_name=\"mug\")\n            and OU.gripper_obj_far(self, obj_name=\"pitcher\")\n        )\n        return cup_on_tray and mug_on_tray and pitcher_near_tray and gripper_far"
+    },
+    {
+      "task": "PrepareSandwichStation",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/preparesandwichstation.json",
+      "native_path": "robocasa/environments/kitchen/composite/preparing_sandwiches/prepare_sandwich_station.py",
+      "task_goal": "retrieve ingredient_bowl and baguette from ingredient_source_fixture, then place both next to toaster_oven on staging_surface to stage them near the toaster oven.",
+      "initial_objects": [
+        "baguette",
+        "ingredient_bowl",
+        "pickle_slice",
+        "tomato_slice",
+        "turkey_slice"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "ingredient_bowl",
+          "location": "staging_surface"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "baguette",
+          "location": "staging_surface"
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "prepare_sandwich_station",
+            "ingredient_bowl_staged"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "prepare_sandwich_station",
+            "baguette_staged"
+          ]
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "tomato_slice",
+          "location": "ingredient_bowl",
+          "message": "tomato_slice must remain in ingredient_bowl during PrepareSandwichStation."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "pickle_slice",
+          "location": "ingredient_bowl",
+          "message": "pickle_slice must remain in ingredient_bowl during PrepareSandwichStation."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "turkey_slice",
+          "location": "ingredient_bowl",
+          "message": "turkey_slice must remain in ingredient_bowl during PrepareSandwichStation."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "ingredient_source_fixture",
+          "fixture_id": "ingredient_source_fixture",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "pick_up_object from ingredient_source_fixture requires the fridge door to be open."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "ingredient_bowl",
+            "reference_fixture_id": "toaster_oven"
+          },
+          "machine_path": [
+            "prepare_sandwich_station",
+            "ingredient_bowl_staged"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "baguette",
+            "reference_fixture_id": "toaster_oven"
+          },
+          "machine_path": [
+            "prepare_sandwich_station",
+            "baguette_staged"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        ingredients_in_bowl = []\n        for ingredient in [\"tomato_slice\", \"pickle_slice\", \"turkey_slice\"]:\n            if OU.check_obj_in_receptacle(self, ingredient, \"ingredient_bowl\"):\n                ingredients_in_bowl.append(ingredient)\n\n        if not ingredients_in_bowl:\n            return False\n\n        all_ingredients_ok = True\n        for ingredient in [\"tomato_slice\", \"pickle_slice\", \"turkey_slice\"]:\n            if ingredient in ingredients_in_bowl:\n                continue\n\n            touching_ingredient_in_bowl = False\n            for ingredient_in_bowl in ingredients_in_bowl:\n                if self.check_contact(\n                    self.objects[ingredient], self.objects[ingredient_in_bowl]\n                ):\n                    touching_ingredient_in_bowl = True\n                    break\n\n            if not touching_ingredient_in_bowl:\n                if not OU.check_obj_in_receptacle(self, ingredient, \"ingredient_bowl\"):\n                    all_ingredients_ok = False\n                    break\n\n        if not all_ingredients_ok:\n            return False\n\n        bowl_on_counter = OU.check_obj_any_counter_contact(self, \"ingredient_bowl\")\n        baguette_on_counter = OU.check_obj_any_counter_contact(self, \"baguette\")\n\n        max_distance = 0.35\n        bowl_close_to_toaster = (\n            OU.obj_fixture_bbox_min_dist(self, \"ingredient_bowl\", self.toaster_oven)\n            < max_distance\n        )\n        baguette_close_to_toaster = (\n            OU.obj_fixture_bbox_min_dist(self, \"baguette\", self.toaster_oven)\n            < max_distance\n        )\n\n        gripper_far = OU.gripper_obj_far(\n            self, \"ingredient_bowl\"\n        ) and OU.gripper_obj_far(self, \"baguette\")\n\n        return (\n            all_ingredients_ok\n            and bowl_on_counter\n            and baguette_on_counter\n            and bowl_close_to_toaster\n            and baguette_close_to_toaster\n            and gripper_far\n        )"
+    },
+    {
+      "task": "PrepareSausageCheese",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/preparesausagecheese.json",
+      "native_path": "robocasa/environments/kitchen/composite/preparing_sandwiches/prepare_sausage_cheese.py",
+      "task_goal": "Retrieve the sausage and cheese from the fridge and place them on the cutting board on the counter.",
+      "initial_objects": [
+        "baguette",
+        "cheese",
+        "cutting_board",
+        "knife",
+        "sausage"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "sausage",
+          "location": "cutting_board",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cheese",
+          "location": "cutting_board",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "The fridge must be open to retrieve ingredients."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        ingredients = [\"sausage\", \"cheese\"]\n        all_ingredients_on_board = all(\n            OU.check_obj_in_receptacle(self, item, \"baguette_container\")\n            for item in ingredients\n        )\n\n        all_ingredients_far = all(\n            OU.gripper_obj_far(self, obj_name=item) for item in ingredients\n        )\n\n        return all_ingredients_on_board and all_ingredients_far"
+    },
+    {
+      "task": "PrepareSoupServing",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/preparesoupserving.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_food/prepare_soup_serving.py",
+      "task_goal": "Move the ladle from the cabinet to the pot, opening the cabinet first if it is closed. Leave the cabinet closed at the end.",
+      "initial_objects": [
+        "bowl1",
+        "ladle",
+        "pot"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "pot",
+            "ladle_in_pot"
+          ]
+        },
+        {
+          "kind": "fixture_part_state",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "state": "closed",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "ladle",
+          "location": "pot",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cab",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open",
+          "message": "The cabinet must be open to pick up the ladle."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_in_receptacle",
+          "args": {
+            "object_id": "ladle",
+            "receptacle_id": "pot"
+          },
+          "machine_path": [
+            "pot",
+            "ladle_in_pot"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        ladle_in_pot = OU.check_obj_in_receptacle(self, \"ladle\", \"pot\")\n\n        cab_closed = self.cabinet.is_closed(env=self)\n\n        return ladle_in_pot and cab_closed"
+    },
+    {
+      "task": "SeasoningSteak",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/seasoningsteak.json",
+      "native_path": "robocasa/environments/kitchen/composite/seasoning_food/seasoning_steak.py",
+      "task_goal": "Retrieve the shaker from the cabinet and place it next to the steak on the dining counter.",
+      "initial_objects": [
+        "shaker",
+        "steak",
+        "steak_plate"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "shaker_near_steak"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "shaker",
+          "location": "dining_counter",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cabinet",
+          "fixture_id": "cabinet",
+          "part_id": "hinged",
+          "required_state": "open"
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "shaker",
+            "reference_object_id": "steak"
+          },
+          "machine_path": [
+            "shaker_near_steak"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        # this is necessary to detect if the dining counter is rotated around the global/absolute coordinate system\n        _, rel_rot = OU.get_rel_transform(self.dining_counter, self.stool)\n        relative_yaw = np.arctan2(rel_rot[1, 0], rel_rot[0, 0])\n\n        steak_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"steak\"]])\n        shaker_pos = np.array(self.sim.data.body_xpos[self.obj_body_id[\"shaker\"]])\n\n        forward_threshold = 0.10\n        side_threshold = 0.25\n\n        steak_x, steak_y = OU.transform_global_to_local(\n            steak_pos[0], steak_pos[1], (np.pi + relative_yaw) - self.dining_counter.rot\n        )\n        shaker_x, shaker_y = OU.transform_global_to_local(\n            shaker_pos[0],\n            shaker_pos[1],\n            (np.pi + relative_yaw) - self.dining_counter.rot,\n        )\n\n        shaker_x_dist = abs(shaker_x - steak_x)\n        shaker_y_dist = abs(shaker_y - steak_y)\n\n        shaker_near = (shaker_y_dist <= forward_threshold) and (\n            shaker_x_dist <= side_threshold\n        )\n        shaker_on_counter = OU.check_obj_fixture_contact(\n            self, \"shaker\", self.dining_counter\n        )\n\n        gripper_obj_far_steak = OU.gripper_obj_far(self, obj_name=\"steak\")\n        return shaker_near and shaker_on_counter and gripper_obj_far_steak"
+    },
+    {
+      "task": "ServeMealJuice",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/servemealjuice.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_beverages/serve_meal_juice.py",
+      "task_goal": "Pick up the orange juice cups from the counter and place one next to each plate on the dining counter.",
+      "initial_objects": [
+        "cup1",
+        "cup2",
+        "food_plate1",
+        "food_plate2",
+        "plate1",
+        "plate2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "cup1_assigned"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "cup2_assigned"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cup1",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "cup2",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "cup1",
+            "reference_object_id": "plate1"
+          },
+          "machine_path": [
+            "cup1_assigned"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "cup2",
+            "reference_object_id": "plate2"
+          },
+          "machine_path": [
+            "cup2_assigned"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        plate_names = [\"plate1\", \"plate2\"]\n        juice_names = [\"cup1\", \"cup2\"]\n\n        left_right_threshold = 0.25\n        front_back_threshold = 0.15\n\n        assigned_plates = set()\n        success = True\n\n        for juice_name in juice_names:\n            juice_obj = self.objects[juice_name]\n            best_candidate = None\n            best_score = float(\"inf\")\n\n            for idx, plate_name in enumerate(plate_names):\n                if idx in assigned_plates:\n                    continue\n\n                plate_obj = self.objects[plate_name]\n                plate_pos_global = np.array(\n                    self.sim.data.body_xpos[self.obj_body_id[plate_obj.name]]\n                )\n                juice_pos_global = np.array(\n                    self.sim.data.body_xpos[self.obj_body_id[juice_obj.name]]\n                )\n\n                stool_rot = (\n                    -self.stool1.rot + np.pi if idx == 0 else -self.stool2.rot + np.pi\n                )\n\n                plate_x, plate_y = OU.transform_global_to_local(\n                    plate_pos_global[0],\n                    plate_pos_global[1],\n                    stool_rot,\n                )\n                juice_x, juice_y = OU.transform_global_to_local(\n                    juice_pos_global[0],\n                    juice_pos_global[1],\n                    stool_rot,\n                )\n\n                x_dist = abs(juice_x - plate_x)\n                y_dist = abs(juice_y - plate_y)\n                score = x_dist + y_dist\n\n                if (\n                    x_dist < left_right_threshold\n                    and y_dist < front_back_threshold\n                    and score < best_score\n                ):\n                    best_candidate = idx\n                    best_score = score\n\n            juice_on_table = OU.check_obj_fixture_contact(\n                self, juice_name, self.dining_counter\n            )\n            if best_candidate is not None and juice_on_table:\n                assigned_plates.add(best_candidate)\n            else:\n                success = False\n\n        all_juice_far = all(\n            OU.gripper_obj_far(self, obj_name=f\"cup{i+1}\") for i in range(2)\n        )\n\n        return success and all_juice_far"
+    },
+    {
+      "task": "ServeSteak",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/servesteak.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_food/serve_steak.py",
+      "task_goal": "Pick up the pan with the steak in it and place it on the dining table. Then, place the steak on the plate.",
+      "initial_objects": [
+        "distractor_cup",
+        "pan",
+        "plate",
+        "steak"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "steak",
+          "location": "plate",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "pan",
+          "location": "dining_table",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        steak_on_plate = OU.check_obj_in_receptacle(self, \"obj\", \"plate\")\n        pan_on_table = OU.check_obj_fixture_contact(\n            self, \"obj_container\", self.dining_table\n        )\n        return steak_on_plate and pan_on_table and OU.gripper_obj_far(self)"
+    },
+    {
+      "task": "SetBowlsForSoup",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/setbowlsforsoup.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/set_bowls_for_soup.py",
+      "task_goal": "Move the bowls from the cabinet to the plates on the dining table.",
+      "initial_objects": [
+        "bowl1",
+        "bowl2",
+        "plate1",
+        "plate2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location_one_of",
+          "object_id": "bowl1",
+          "locations": [
+            "plate1",
+            "plate2"
+          ],
+          "exclusive": true
+        },
+        {
+          "kind": "object_at_location_one_of",
+          "object_id": "bowl2",
+          "locations": [
+            "plate1",
+            "plate2"
+          ],
+          "exclusive": true
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cab",
+          "fixture_id": "cab",
+          "part_id": "hinged",
+          "required_state": "open"
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        gripper_bowl1_far = OU.gripper_obj_far(self, obj_name=\"bowl1\")\n        gripper_bowl2_far = OU.gripper_obj_far(self, obj_name=\"bowl2\")\n        bowl1_on_plate1 = OU.check_obj_in_receptacle(self, \"bowl1\", \"plate1\")\n        bowl1_on_plate2 = OU.check_obj_in_receptacle(self, \"bowl1\", \"plate2\")\n        bowl2_on_plate1 = OU.check_obj_in_receptacle(self, \"bowl2\", \"plate1\")\n        bowl2_on_plate2 = OU.check_obj_in_receptacle(self, \"bowl2\", \"plate2\")\n\n        bowls_set = (bowl1_on_plate1 and bowl2_on_plate2) or (\n            bowl1_on_plate2 and bowl2_on_plate1\n        )\n\n        return gripper_bowl1_far and gripper_bowl2_far and bowls_set"
+    },
+    {
+      "task": "SetupBowls",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/setupbowls.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/setup_bowls.py",
+      "task_goal": "Pick up the bowls from the cabinet and place each bowl in front of a stool on the dining counter.",
+      "initial_objects": [
+        "bowl1",
+        "bowl2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "bowl1_placed_near_stool"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "bowl2_placed_near_stool"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bowl1",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bowl2",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cabinet",
+          "fixture_id": "cabinet",
+          "part_id": "hinged",
+          "required_state": "open"
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "bowl1",
+            "reference_fixture_id": "stool1"
+          },
+          "machine_path": [
+            "bowl1_placed_near_stool"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "bowl1",
+            "reference_fixture_id": "stool2"
+          },
+          "machine_path": [
+            "bowl1_placed_near_stool"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "bowl2",
+            "reference_fixture_id": "stool1"
+          },
+          "machine_path": [
+            "bowl2_placed_near_stool"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "bowl2",
+            "reference_fixture_id": "stool2"
+          },
+          "machine_path": [
+            "bowl2_placed_near_stool"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        lateral_threshold = 0.15\n        forward_threshold = 0.3\n\n        assigned_stools = set()\n        success = True\n\n        bowl_names = [\"bowl1\", \"bowl2\"]\n        bowl_positions = {\n            name: np.array(self.sim.data.body_xpos[self.obj_body_id[name]])\n            for name in bowl_names\n        }\n\n        for bowl_name, bowl_pos in bowl_positions.items():\n            closest_stool_idx = None\n            min_x_dist = float(\"inf\")\n            min_y_dist = float(\"inf\")\n            for idx, stool_pos in enumerate(self.stool_positions):\n                stool_rot = self.stool_rotations[idx]\n                bowl_x, bowl_y = OU.transform_global_to_local(\n                    bowl_pos[0],\n                    bowl_pos[1],\n                    -stool_rot + np.pi,\n                )\n                stool_x, stool_y = OU.transform_global_to_local(\n                    stool_pos[0],\n                    stool_pos[1],\n                    -stool_rot + np.pi,\n                )\n\n                x_dist = abs(bowl_x - stool_x)\n                y_dist = abs(bowl_y - stool_y)\n\n                if (\n                    idx not in assigned_stools\n                    and x_dist < lateral_threshold\n                    and y_dist < forward_threshold\n                ):\n                    if x_dist < min_x_dist and y_dist < min_y_dist:\n                        closest_stool_idx = idx\n                        min_x_dist = x_dist\n                        min_y_dist = y_dist\n\n            bowl_on_counter = OU.check_obj_any_counter_contact(self, bowl_name)\n\n            if closest_stool_idx is not None and bowl_on_counter:\n                assigned_stools.add(closest_stool_idx)\n            else:\n                success = False\n\n        all_bowls_far = all(\n            OU.gripper_obj_far(self, obj_name=name) for name in bowl_names\n        )\n\n        return success and all_bowls_far"
+    },
+    {
+      "task": "SetupButterPlate",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/setupbutterplate.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/setup_butter_plate.py",
+      "task_goal": "retrieve butter from fridge and place it on plate, then retrieve butter_knife from counter and place it next to plate on dining_counter.",
+      "initial_objects": [
+        "butter",
+        "butter_knife",
+        "plate"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "butter",
+          "location": "plate"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "butter_knife",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "setup_butter_plate",
+            "knife_near_plate"
+          ]
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate",
+          "location": "dining_counter",
+          "message": "plate must remain on dining_counter throughout SetupButterPlate."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "door",
+          "required_state": "open",
+          "message": "pick_up_object from fridge requires the fridge door to be open."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "butter_knife",
+            "reference_object_id": "plate"
+          },
+          "machine_path": [
+            "setup_butter_plate",
+            "knife_near_plate"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        butter_on_plate = OU.check_obj_in_receptacle(self, \"butter\", \"plate\")\n\n        knife_pos = self.sim.data.body_xpos[self.obj_body_id[\"butter_knife\"]]\n        plate_pos = self.sim.data.body_xpos[self.obj_body_id[\"plate\"]]\n\n        xy_dist = np.linalg.norm(knife_pos[:2] - plate_pos[:2])\n        knife_near_plate = xy_dist <= 0.3\n\n        knife_on_counter = OU.check_obj_any_counter_contact(self, \"butter_knife\")\n\n        gripper_obj_far_butter = OU.gripper_obj_far(self, obj_name=\"butter\")\n        gripper_obj_far_knife = OU.gripper_obj_far(self, obj_name=\"butter_knife\")\n\n        return (\n            butter_on_plate\n            and knife_near_plate\n            and gripper_obj_far_butter\n            and gripper_obj_far_knife\n            and knife_on_counter\n        )"
+    },
+    {
+      "task": "SetupSodaBowl",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/setupsodabowl.json",
+      "native_path": "robocasa/environments/kitchen/composite/serving_beverages/setup_soda_bowl.py",
+      "task_goal": "Grab two sodas from the fridge and place both inside the bowl with ice on the dining counter; open the fridge first if it is closed.",
+      "initial_objects": [
+        "ice1",
+        "ice2",
+        "ice3",
+        "ice_bowl",
+        "soda1",
+        "soda2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "soda1",
+          "location": "ice_bowl"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "soda2",
+          "location": "ice_bowl"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "ice_bowl",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "ice_bowl",
+          "location": "dining_counter",
+          "message": "The ice bowl must stay on the dining counter."
+        },
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "fridge",
+          "fixture_id": "fridge",
+          "part_id": "hinged",
+          "required_state": "open",
+          "message": "The fridge must be open to retrieve sodas."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        soda1_in_bowl = OU.check_obj_in_receptacle(self, \"soda1\", \"ice_bowl\")\n        soda2_in_bowl = OU.check_obj_in_receptacle(self, \"soda2\", \"ice_bowl\")\n\n        if not soda1_in_bowl:\n            return False\n\n        if not soda2_in_bowl:\n            return False\n\n        bowl_on_dining_counter = OU.check_obj_fixture_contact(\n            self, \"ice_bowl\", self.dining_counter\n        )\n\n        gripper_far = (\n            OU.gripper_obj_far(self, obj_name=\"soda1\", th=0.15)\n            and OU.gripper_obj_far(self, obj_name=\"soda2\", th=0.15)\n            and OU.gripper_obj_far(self, obj_name=\"ice_bowl\", th=0.15)\n        )\n\n        return (\n            soda1_in_bowl and soda2_in_bowl and bowl_on_dining_counter and gripper_far\n        )"
+    },
+    {
+      "task": "SetUpSpiceStation",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/setupspicestation.json",
+      "native_path": "robocasa/environments/kitchen/composite/seasoning_food/setup_spice_station.py",
+      "task_goal": "Collect the spice, bottle, and shaker from the cabinet and place them next to the stove.",
+      "initial_objects": [
+        "bottle",
+        "shaker",
+        "spice"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "spice_near_stove"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "shaker_near_stove"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "proximity",
+            "bottle_near_stove"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "spice",
+          "location": "counter_stove",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "shaker",
+          "location": "counter_stove",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bottle",
+          "location": "counter_stove",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cabinet",
+          "fixture_id": "cabinet",
+          "part_id": "hinged",
+          "required_state": "open"
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "spice",
+            "reference_fixture_id": "stove"
+          },
+          "machine_path": [
+            "proximity",
+            "spice_near_stove"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "shaker",
+            "reference_fixture_id": "stove"
+          },
+          "machine_path": [
+            "proximity",
+            "shaker_near_stove"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "bottle",
+            "reference_fixture_id": "stove"
+          },
+          "machine_path": [
+            "proximity",
+            "bottle_near_stove"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        stove_threshold = 0.2\n\n        d_spice = OU.obj_fixture_bbox_min_dist(self, \"spice\", self.stove)\n        d_bottle = OU.obj_fixture_bbox_min_dist(self, \"bottle\", self.stove)\n        d_shaker = OU.obj_fixture_bbox_min_dist(self, \"shaker\", self.stove)\n\n        spice_near = d_spice <= stove_threshold\n        bottle_near = d_bottle <= stove_threshold\n        shaker_near = d_shaker <= stove_threshold\n\n        on_counter_spice = OU.check_obj_any_counter_contact(self, \"spice\")\n        on_counter_bottle = OU.check_obj_any_counter_contact(self, \"bottle\")\n        on_counter_shaker = OU.check_obj_any_counter_contact(self, \"shaker\")\n\n        gripper_far = (\n            OU.gripper_obj_far(self, obj_name=\"spice\")\n            and OU.gripper_obj_far(self, obj_name=\"bottle\")\n            and OU.gripper_obj_far(self, obj_name=\"shaker\")\n        )\n\n        return (\n            spice_near\n            and bottle_near\n            and shaker_near\n            and on_counter_spice\n            and on_counter_bottle\n            and on_counter_shaker\n            and gripper_far\n        )"
+    },
+    {
+      "task": "SetupWineGlasses",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/setupwineglasses.json",
+      "native_path": "robocasa/environments/kitchen/composite/setting_the_table/setup_wine_glasses.py",
+      "task_goal": "Retrieve the wine glasses from the counter and place one next to each plate on the dining counter.",
+      "initial_objects": [
+        "plate1",
+        "plate2",
+        "wine_glass1",
+        "wine_glass2"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "wine_glass1_assigned"
+          ]
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "wine_glass2_assigned"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "wine_glass1",
+          "location": "dining_counter"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "wine_glass2",
+          "location": "dining_counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate1",
+          "location": "dining_counter",
+          "message": "The plates must stay on the dining counter."
+        },
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "plate2",
+          "location": "dining_counter",
+          "message": "The plates must stay on the dining counter."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "wine_glass1",
+            "reference_object_id": "plate1"
+          },
+          "machine_path": [
+            "wine_glass1_assigned"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "wine_glass1",
+            "reference_object_id": "plate2"
+          },
+          "machine_path": [
+            "wine_glass1_assigned"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "wine_glass2",
+            "reference_object_id": "plate1"
+          },
+          "machine_path": [
+            "wine_glass2_assigned"
+          ],
+          "value": true
+        },
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "wine_glass2",
+            "reference_object_id": "plate2"
+          },
+          "machine_path": [
+            "wine_glass2_assigned"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        plate_names = [f\"plate{i+1}\" for i in range(2)]\n        wine_glass_names = [f\"wine_glass{i+1}\" for i in range(2)]\n\n        left_right_threshold = 0.25\n        front_back_threshold = 0.10\n\n        assigned_plates = set()\n        success = True\n\n        # For each wine glass, compare it against the available plates.\n        for wine_glass_name in wine_glass_names:\n            wine_glass_obj = self.objects[wine_glass_name]\n            best_candidate = None\n            best_score = float(\"inf\")\n            for idx, plate_name in enumerate(plate_names):\n                if idx in assigned_plates:\n                    continue\n                plate_obj = self.objects[plate_name]\n                plate_pos_global = np.array(\n                    self.sim.data.body_xpos[self.obj_body_id[plate_obj.name]]\n                )\n                glass_pos_global = np.array(\n                    self.sim.data.body_xpos[self.obj_body_id[wine_glass_obj.name]]\n                )\n\n                plate_x, plate_y = OU.transform_global_to_local(\n                    plate_pos_global[0],\n                    plate_pos_global[1],\n                    -self.stool1.rot + np.pi,\n                )\n                wine_glass_x, wine_glass_y = OU.transform_global_to_local(\n                    glass_pos_global[0],\n                    glass_pos_global[1],\n                    -self.stool1.rot + np.pi,\n                )\n\n                x_dist = abs(wine_glass_x - plate_x)\n                y_dist = abs(wine_glass_y - plate_y)\n                score = x_dist + y_dist\n\n                if (\n                    x_dist < left_right_threshold\n                    and y_dist < front_back_threshold\n                    and score < best_score\n                ):\n                    best_candidate = idx\n                    best_score = score\n\n            # Check that the wine glass is in contact with the dining counter.\n            wine_glass_on_table = OU.check_obj_fixture_contact(\n                self, wine_glass_name, self.dining_counter\n            )\n            if best_candidate is not None and wine_glass_on_table:\n                assigned_plates.add(best_candidate)\n            else:\n                success = False\n\n        all_glasses_far = all(\n            OU.gripper_obj_far(self, obj_name=f\"wine_glass{i+1}\") for i in range(2)\n        )\n\n        return success and all_glasses_far"
+    },
+    {
+      "task": "SpicyMarinade",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/spicymarinade.json",
+      "native_path": "robocasa/environments/kitchen/composite/mixing_and_blending/spicy_marinade.py",
+      "task_goal": "Place the bowl and condiment from the cabinet on the counter, opening the cabinet first if it is closed. Then place the lime and garlic on the cutting board.",
+      "initial_objects": [
+        "bowl",
+        "condiment",
+        "garlic",
+        "lime",
+        "receptacle"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "bowl",
+          "location": "counter",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "condiment",
+          "location": "counter",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "lime",
+          "location": "receptacle",
+          "machine_path": null
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "garlic",
+          "location": "receptacle",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "cabinet",
+          "fixture_id": "cabinet",
+          "part_id": "hinged",
+          "required_state": "open",
+          "message": "Open the cabinet before picking up items inside."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        objs_on_counter = OU.check_obj_fixture_contact(\n            self, \"bowl\", self.counter\n        ) and OU.check_obj_fixture_contact(self, \"condiment\", self.counter)\n        objs_on_board = OU.check_obj_in_receptacle(\n            self, \"lime\", \"receptacle\"\n        ) and OU.check_obj_in_receptacle(self, \"garlic\", \"receptacle\")\n        gripper_far = (\n            OU.gripper_obj_far(self, \"receptacle\")\n            and OU.gripper_obj_far(self, \"bowl\")\n            and OU.gripper_obj_far(self, \"condiment\")\n        )\n\n        return objs_on_counter and objs_on_board and gripper_far"
+    },
+    {
+      "task": "SweetenCoffee",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/sweetencoffee.json",
+      "native_path": "robocasa/environments/kitchen/composite/brewing/sweeten_coffee.py",
+      "task_goal": "Take the sugar cube from the saucer and place it inside the coffee mug. Then, get the milk from the fridge and place it next to the coffee on the counter.",
+      "initial_objects": [
+        "coffee",
+        "milk",
+        "saucer_plate",
+        "sugar_cube"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "sugar_cube",
+          "location": "coffee"
+        },
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "milk_near_coffee"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "milk",
+          "location": "counter"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "coffee",
+          "location": "counter",
+          "message": "The coffee mug must stay on the counter."
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "milk",
+            "reference_object_id": "coffee"
+          },
+          "machine_path": [
+            "milk_near_coffee"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        milk_on_counter = OU.check_obj_any_counter_contact(self, \"milk\")\n        coffee_on_counter = OU.check_obj_any_counter_contact(self, \"coffee\")\n\n        if milk_on_counter and coffee_on_counter:\n            milk_pos = self.sim.data.body_xpos[self.obj_body_id[\"milk\"]][:2]\n            coffee_pos = self.sim.data.body_xpos[self.obj_body_id[\"coffee\"]][:2]\n            distance = np.linalg.norm(milk_pos - coffee_pos)\n            milk_close_to_coffee = distance <= 0.25\n        else:\n            milk_close_to_coffee = False\n\n        sugar_in_coffee = OU.check_obj_in_receptacle(self, \"sugar_cube\", \"coffee\")\n\n        gripper_far = OU.gripper_obj_far(self, obj_name=\"milk\") and OU.gripper_obj_far(\n            self, obj_name=\"sugar_cube\"\n        )\n\n        return (\n            milk_on_counter\n            and coffee_on_counter\n            and milk_close_to_coffee\n            and sugar_in_coffee\n            and gripper_far\n        )"
+    },
+    {
+      "task": "TongBuffetSetup",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/tongbuffetsetup.json",
+      "native_path": "robocasa/environments/kitchen/composite/arranging_buffet/tong_buffet_setup.py",
+      "task_goal": "Take the tongs from the drawer and place them on the dining counter next to the tray containing the food.",
+      "initial_objects": [
+        "food",
+        "food_tray",
+        "tongs"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "machine_flag_true",
+          "machine_path": [
+            "tongs_near_tray"
+          ]
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "tongs",
+          "location": "dining_counter",
+          "machine_path": null
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "fixture_part_state_required_for_pickup",
+          "tool": "pick_up_object",
+          "source_id": "drawer",
+          "fixture_id": "drawer",
+          "part_id": "sliding",
+          "required_state": "open"
+        }
+      ],
+      "task_effects": [
+        {
+          "kind": "set_machine_flag_on_action",
+          "tool": "place_next_to",
+          "args": {
+            "object_id": "tongs",
+            "reference_object_id": "food"
+          },
+          "machine_path": [
+            "tongs_near_tray"
+          ],
+          "value": true
+        }
+      ],
+      "native_check_success_source": "    def _check_success(self):\n        tongs_on_counter = OU.check_obj_fixture_contact(\n            self, \"tongs\", self.dining_counter\n        )\n        tray_on_counter = OU.check_obj_fixture_contact(\n            self, \"food_container\", self.dining_counter\n        )\n\n        if tongs_on_counter and tray_on_counter:\n            tongs_pos = self.sim.data.body_xpos[self.obj_body_id[\"tongs\"]][:2]\n            tray_pos = self.sim.data.body_xpos[self.obj_body_id[\"food_container\"]][:2]\n            distance = np.linalg.norm(tongs_pos - tray_pos)\n            tongs_near_tray = distance <= 0.5\n        else:\n            tongs_near_tray = False\n\n        gripper_far = OU.gripper_obj_far(\n            self, obj_name=\"tongs\", th=0.15\n        ) and OU.gripper_obj_far(self, obj_name=\"food_container\", th=0.15)\n\n        return tongs_on_counter and tray_on_counter and tongs_near_tray and gripper_far"
+    },
+    {
+      "task": "VeggieDipPrep",
+      "spec_path": "data_generation/task_level/tasks/specs/verified/veggiedipprep.json",
+      "native_path": "robocasa/environments/kitchen/composite/snack_preparation/veggie_dip_prep.py",
+      "task_goal": "place the cucumber, carrot, and bowl onto the tray on the counter.",
+      "initial_objects": [
+        "bowl",
+        "carrot",
+        "cucumber",
+        "tray"
+      ],
+      "goal_conditions": [
+        {
+          "kind": "object_at_location",
+          "object_id": "cucumber",
+          "location": "tray"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "carrot",
+          "location": "tray"
+        },
+        {
+          "kind": "object_at_location",
+          "object_id": "bowl",
+          "location": "tray"
+        }
+      ],
+      "task_preconditions": [
+        {
+          "kind": "object_must_remain_at_location",
+          "object_id": "tray",
+          "location": "counter",
+          "message": "The tray must stay on the counter to serve as the base for the dip station."
+        }
+      ],
+      "task_effects": [],
+      "native_check_success_source": "    def _check_success(self):\n        gripper_far = (\n            OU.gripper_obj_far(self, \"bowl\", th=0.15)\n            and OU.gripper_obj_far(self, \"cucumber\", th=0.15)\n            and OU.gripper_obj_far(self, \"carrot\", th=0.15)\n        )\n        vegetables_in_tray = OU.check_obj_in_receptacle(\n            self, \"cucumber\", \"tray\"\n        ) and OU.check_obj_in_receptacle(self, \"carrot\", \"tray\")\n        bowl_in_tray = OU.check_obj_in_receptacle(self, \"bowl\", \"tray\")\n\n        return gripper_far and vegetables_in_tray and bowl_in_tray"
+    }
+  ]
+}

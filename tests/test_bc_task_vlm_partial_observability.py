@@ -5,7 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
-from training.bc_task_vlm import dataset
+from data_generation.task_level.tasks.shared.validation_contract import (
+    VALIDATOR_CONTRACT_VERSION,
+)
+from training.bc_task_vlm import dataset, live_sim_eval, main
+from training.bc_task_vlm.prompting import PROMPT_CONTRACT_VERSION
 
 
 def _step(index: int, agent: str, tool: str, args: dict) -> dict:
@@ -36,6 +40,20 @@ def _build_loaded_trajectory(raw_steps: list[dict]) -> dict:
     return {
         "original_trajectory.json": {
             "trajectory_id": "traj_partial",
+            "task": "test partial observability",
+            "coordinator_id": "agent_0",
+            "initial_state": {
+                "agents": {
+                    "agent_0": {"location": "counter", "held_object": None},
+                    "agent_1": {"location": "counter", "held_object": None},
+                },
+                "objects": {"cheese": {"location": "counter"}},
+                "fixtures": {"counter": {"fixture_type": "counter"}},
+            },
+            "validation": {
+                "is_valid": True,
+                "validator_contract_version": VALIDATOR_CONTRACT_VERSION,
+            },
             "steps": raw_steps,
         },
         "plan.json": plan_steps,
@@ -59,6 +77,7 @@ def _build_examples(monkeypatch, tmp_path, raw_steps, **build_kwargs):
             return_value=SimpleNamespace(
                 dataset_name="synthetic_task",
                 composite_task="SyntheticTask",
+                task_goal="test partial observability",
                 allowed_tool_specs={},
             ),
         ),
@@ -68,10 +87,11 @@ def _build_examples(monkeypatch, tmp_path, raw_steps, **build_kwargs):
             side_effect=lambda path: loaded[path.name],
         ),
     ):
+        sft_format = build_kwargs.pop("sft_format", dataset.SFT_FORMAT_PLAIN)
         examples = dataset._build_centralized_examples_for_trajectory(
             task_name="synthetic_task",
             trajectory_dir=tmp_path,
-            sft_format=dataset.SFT_FORMAT_PLAIN,
+            sft_format=sft_format,
             response_schema={},
             tool_schemas=[],
             partial_history=True,
@@ -118,9 +138,8 @@ def test_partial_history_is_agent_private_under_the_default_numbering(
     assert "navigate_to_fixture" not in [s["tool"] for s in by_step[4].history_steps]
     history = by_step[4].history_steps
     assert [(s["agent"], s["tool"]) for s in history] == [("agent_0", "communicate")]
-    # "local" renumbers by position in this agent's own history, so the joint
-    # index 2 is gone -- that is the point of the mode.
-    assert [s["step"] for s in history] == [0]
+    # The production default is no indexing, so the joint index is absent.
+    assert [s["step"] for s in history] == [None]
 
     # agent_0's later example sees its own prior actions plus the delivered
     # message from agent_1, but never agent_1's private pick_up_object.
@@ -244,6 +263,88 @@ def test_partial_v3_history_stays_agent_private(monkeypatch, tmp_path):
     assert agents_in_history <= {"agent_1"}
 
 
+@pytest.mark.parametrize("index_mode", ["none", "local"])
+def test_training_and_live_eval_prompt_context_match_for_expert_prefix(
+    monkeypatch, tmp_path, index_mode
+):
+    """The same expert prefix must produce the same model-visible request."""
+
+    by_step = _build_examples(
+        monkeypatch,
+        tmp_path,
+        _V3_RAW_STEPS,
+        train_get_image=True,
+        sft_format=dataset.SFT_FORMAT_TOOL_CALL,
+        partial_step_index_mode=index_mode,
+    )
+    training_example = by_step[5]
+
+    class CapturingPolicy:
+        def __init__(self):
+            self.feature = None
+
+        def generate(self, feature):
+            self.feature = feature
+            return "invalid on purpose; only the model input is under test"
+
+    policy = CapturingPolicy()
+    raw_private_history = [
+        _step(1, "agent_1", "get_image", {"views": ["top_view", "room_view", "map"]}),
+        _step(4, "agent_1", "get_image", {"views": ["wrist"]}),
+    ]
+    args = SimpleNamespace(
+        partial_step_index_mode=index_mode,
+        train_get_image=True,
+        task_spec_detail=False,
+        few_shot=False,
+    )
+    live_sim_eval._generate_once(
+        session=None,
+        policy=policy,
+        args=args,
+        task_metadata=SimpleNamespace(
+            dataset_name="synthetic_task",
+            composite_task="SyntheticTask",
+            task_goal="test partial observability",
+        ),
+        tool_specs=training_example.allowed_tool_specs,
+        tool_schemas=training_example.tool_schemas,
+        trajectory={
+            "trajectory_id": "traj_partial",
+            "task": "test partial observability",
+            "coordinator_id": "agent_0",
+            "initial_state": _build_loaded_trajectory(_V3_RAW_STEPS)[
+                "original_trajectory.json"
+            ]["initial_state"],
+        },
+        history=raw_private_history,
+        step_index=5,
+        views=("wrist",),
+        render_dir=tmp_path,
+        pre_rendered_image_paths=["/generated/agent_1_4.png"],
+        partial_caller="agent_1",
+    )
+
+    assert policy.feature is not None
+    assert policy.feature["messages"][:2] == training_example.messages[:2]
+    assert policy.feature["image_paths"] == training_example.image_paths
+    assert policy.feature["tool_schemas"] == training_example.tool_schemas
+
+    user_text = policy.feature["messages"][1]["content"][-1]["text"]
+    assert "Physical workspace handoffs:" in user_text
+    assert "must not enter or use X in the same concurrent tick" in user_text
+    assert "following tick without calling wait_for_signal" in user_text
+    assert "remains blocked throughout a later matching release tick" in user_text
+    assert "step=4 " not in user_text
+    if index_mode == "none":
+        assert "step=" not in user_text
+        assert "Next local agent turn index:" not in user_text
+    else:
+        assert "step=0 " in user_text
+        assert "step=1 " in user_text
+        assert "Next local agent turn index: 2" in user_text
+
+
 def test_partial_history_still_rejects_agent_prediction(tmp_path):
     with pytest.raises(ValueError, match="requires predict_agent=False"):
         dataset.build_centralized_examples(
@@ -293,4 +394,55 @@ def test_partial_observation_mode_rejects_unknown_value(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="partial_observation_mode must be one of"):
         _build_examples(
             monkeypatch, tmp_path, _RAW_STEPS, partial_observation_mode="bogus"
+        )
+
+
+def test_preprocessed_contract_accepts_matching_partial_index_mode():
+    config = SimpleNamespace(
+        sft_format="tool_call",
+        predict_acting_agent=False,
+        train_get_image=True,
+        causal_single_cache=False,
+        partial_history=True,
+        partial_step_index_mode="none",
+        partial_observation_mode="consume_once",
+    )
+    main._validate_preprocessed_contract(
+        preprocess_config={
+            "sft_format": "tool_call",
+            "predict_acting_agent": False,
+            "train_get_image": True,
+            "causal_single_cache": False,
+            "partial_history": True,
+            "partial_step_index_mode": "none",
+            "partial_observation_mode": "consume-once",
+            "trajectory_validator_contract_version": VALIDATOR_CONTRACT_VERSION,
+            "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+        },
+        config=config,
+    )
+
+
+def test_preprocessed_contract_rejects_index_mode_mismatch():
+    config = SimpleNamespace(
+        sft_format="tool_call",
+        predict_acting_agent=False,
+        train_get_image=True,
+        causal_single_cache=False,
+        partial_history=True,
+        partial_step_index_mode="local",
+        partial_observation_mode="consume_once",
+    )
+    with pytest.raises(ValueError, match="partial_step_index_mode"):
+        main._validate_preprocessed_contract(
+            preprocess_config={
+                "sft_format": "tool_call",
+                "predict_acting_agent": False,
+                "train_get_image": True,
+                "causal_single_cache": False,
+                "partial_history": True,
+                "partial_step_index_mode": "none",
+                "partial_observation_mode": "consume_once",
+            },
+            config=config,
         )

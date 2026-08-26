@@ -34,6 +34,7 @@ from data_generation.task_level.generation.raw.outputs import (
     _write_generation_outputs,
     _write_request_outputs,
     build_error_summary_output_payload,
+    format_attempt_prompt_owner_id,
     load_generation_output_payload,
     merge_generation_output_payloads,
     resolve_dataset_output_path,
@@ -324,12 +325,40 @@ def _generate_or_resume_task_payload(
         pending_run_indices = tuple(existing_payload.get("pending_run_indices", []))
         if not pending_run_indices:
             return existing_payload, False
+        attempt_offsets: dict[int, int] = {index: 0 for index in pending_run_indices}
+        for event in existing_payload.get("error_events", []):
+            if not isinstance(event, dict):
+                continue
+            run_index = event.get("trajectory_index")
+            attempt_number = event.get("attempt_number")
+            if run_index in attempt_offsets and isinstance(attempt_number, int):
+                attempt_offsets[run_index] = max(
+                    attempt_offsets[run_index], attempt_number
+                )
+        run_index_by_prompt_owner = {
+            format_attempt_prompt_owner_id(task_runtime_config, run_index=index): index
+            for index in pending_run_indices
+        }
+        for entry in existing_payload.get("attempt_prompts", []):
+            if not isinstance(entry, dict):
+                continue
+            run_id = entry.get("run_id")
+            attempt_number = entry.get("attempt_number")
+            if not isinstance(run_id, str) or not isinstance(attempt_number, int):
+                continue
+            run_index = run_index_by_prompt_owner.get(run_id)
+            if run_index in attempt_offsets:
+                attempt_offsets[run_index] = max(
+                    attempt_offsets[run_index], attempt_number
+                )
+
         resumed_runtime_config = task_runtime_config.for_task(
             task_runtime_config.composite_task,
             summary_path=output_paths.summary_path,
             cost_output_path=None,
             resume_path=task_runtime_config.resume_path,
             run_indices=pending_run_indices,
+            attempt_number_offsets=tuple(sorted(attempt_offsets.items())),
         )
         new_payload = generate_trajectories(
             resumed_runtime_config,
@@ -508,6 +537,13 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         help="Number of model generation runs to execute.",
     )
     parser.add_argument(
+        "--run-indices",
+        type=int,
+        nargs="+",
+        default=(),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--num_runs",
         type=int,
         dest="num_runs",
@@ -592,6 +628,16 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--random-access-state",
+        type=_parse_bool_cli_argument,
+        default=True,
+        dest="random_access_state",
+        help=(
+            "Whether to deterministically sample open/closed access state for "
+            "eligible cabinets, refrigerators, and drawers. Default: true."
+        ),
+    )
+    parser.add_argument(
         "--sampling",
         type=str,
         choices=tuple(sorted(SAMPLING_STRATEGIES)),
@@ -622,11 +668,43 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         ),
     )
     parser.add_argument(
+        "--prompt-style",
+        choices=("legacy", "simplified", "simplified_v2", "simplified_v3"),
+        default="legacy",
+        help=(
+            "Generation prompt contract. 'legacy' preserves the existing prompt; "
+            "'simplified' preserves the first compact canary; 'simplified_v2' "
+            "adds explicit finished-agent and location transitions; "
+            "'simplified_v3' adds explicit generator-only blocked markers."
+        ),
+    )
+    parser.add_argument(
         "--thinking_level",
         type=str,
         dest="thinking_level",
         choices=THINKING_LEVEL_CHOICES,
         help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--retry-feedback-style",
+        choices=("targeted", "observational"),
+        default="targeted",
+        help=(
+            "How validator failures are supplied to retries. 'targeted' uses "
+            "local excerpts and concrete repair guidance; 'observational' supplies "
+            "the complete rejected trajectory and factual error history only."
+        ),
+    )
+    parser.add_argument(
+        "--partition-policy",
+        choices=("weighted", "balanced_local", "none"),
+        default="weighted",
+        help=(
+            "Ownership selection policy. 'weighted' preserves existing task weights; "
+            "'balanced_local' requires the best available workload balance and "
+            "chooses among the lowest-cost splits for the sampled initial state; "
+            "'none' leaves ownership to the model."
+        ),
     )
     parser.add_argument(
         "--max-workers",
@@ -781,12 +859,16 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         location=args.location,
         temperature=args.temperature,
         random_start_location=args.random_start_location,
+        random_access_state=args.random_access_state,
         sampling=args.sampling,
         verbalized_k=verbalized_k,
         thinking_level=args.thinking_level,
         max_workers=args.max_workers,
         max_retries=args.max_retries,
         tick_format=getattr(args, "tick_format", False),
+        prompt_style=args.prompt_style,
+        retry_feedback_style=args.retry_feedback_style,
+        partition_policy=args.partition_policy,
         work_partition=getattr(args, "work_partition", None),
         parallelize_tasks=args.parallelize_tasks,
         summary_path=default_summary_path,
@@ -796,6 +878,7 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         enable_static_referential_validation=args.enable_static_referential_validation,
         batch_processing=args.batch_processing,
         batch_gcs_prefix=args.batch_gcs_prefix,
+        run_indices=tuple(args.run_indices),
         composite_tasks=parsed_tasks,
         generation_timeout_sec=(
             None if args.generation_timeout_sec == 0 else args.generation_timeout_sec

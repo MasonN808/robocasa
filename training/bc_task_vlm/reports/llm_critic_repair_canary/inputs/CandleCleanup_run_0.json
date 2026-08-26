@@ -1,0 +1,266 @@
+{
+  "candidate": {
+    "format": "explicit_blocked_v1",
+    "ticks": [
+      {
+        "agent_0": {
+          "args": {
+            "coordination_phase": "propose",
+            "message": "I will transport obj1 and obj2 from the dining table to the cabinet. Agent 1, please open the cabinet door and then vacate the area. I will notify you once I have placed both items so you can close the cabinet.",
+            "to": "agent_1"
+          },
+          "reasoning": "I am initiating the coordination protocol by proposing a clear division of labor for the CandleCleanup task.",
+          "tool": "communicate"
+        },
+        "agent_1": {
+          "args": {
+            "coordination_phase": "await_plan",
+            "message": "I am standing by for the plan and will execute my part once confirmed.",
+            "to": "agent_0"
+          },
+          "reasoning": "I am following the protocol by waiting for the coordinator's proposal.",
+          "tool": "communicate"
+        },
+        "tick": 0
+      },
+      {
+        "agent_0": {
+          "args": {
+            "coordination_phase": "await_confirmation",
+            "message": "The plan is confirmed. Please proceed with opening the cabinet and clearing the workspace.",
+            "to": "agent_1"
+          },
+          "reasoning": "I am confirming the plan so we can begin the physical work.",
+          "tool": "communicate"
+        },
+        "agent_1": {
+          "args": {
+            "coordination_phase": "confirm",
+            "message": "Confirmed. I will open the cabinet and then move out of your way.",
+            "to": "agent_0"
+          },
+          "reasoning": "I am acknowledging the plan and preparing to perform the first physical action at my current location.",
+          "tool": "communicate"
+        },
+        "tick": 1
+      },
+      {
+        "agent_0": {
+          "args": {
+            "object_id": "obj1",
+            "source_id": "dining_table"
+          },
+          "reasoning": "I am starting my assigned work by picking up the first decoration from my current location.",
+          "tool": "pick_up_object"
+        },
+        "agent_1": {
+          "args": {
+            "part_id": "hinged",
+            "target_id": "cab"
+          },
+          "reasoning": "I am opening the cabinet door as agreed so agent_0 can place objects inside.",
+          "tool": "open_hinged_part"
+        },
+        "tick": 2
+      },
+      {
+        "agent_0": {
+          "args": {
+            "message": "I have the first object. Please let me know when the cabinet is clear.",
+            "to": "agent_1"
+          },
+          "reasoning": "I am requesting access to the cabinet workspace before I move there.",
+          "tool": "communicate"
+        },
+        "agent_1": {
+          "args": {
+            "fixture_id": "cab"
+          },
+          "reasoning": "I am vacating the cabinet workspace to allow agent_0 to enter and perform placements.",
+          "tool": "give_space"
+        },
+        "tick": 3
+      },
+      {
+        "agent_0": {
+          "args": {
+            "about": "cab",
+            "from": "agent_1"
+          },
+          "reasoning": "I must wait for agent_1 to signal that the cabinet area is officially released before I navigate there.",
+          "tool": "wait_for_signal"
+        },
+        "agent_1": {
+          "args": {
+            "message": "The cabinet is open and I have moved away. You may proceed.",
+            "releases": "cab",
+            "to": "agent_0"
+          },
+          "reasoning": "I am signaling to agent_0 that I have finished my initial task and released the cabinet fixture.",
+          "tool": "communicate"
+        },
+        "tick": 4
+      },
+      {
+        "agent_0": {
+          "state": "blocked"
+        },
+        "agent_1": {
+          "args": {
+            "about": "cab",
+            "from": "agent_0"
+          },
+          "reasoning": "I will now wait for agent_0 to finish placing the objects and release the cabinet back to me for closing.",
+          "tool": "wait_for_signal"
+        },
+        "tick": 5
+      },
+      {
+        "agent_0": {
+          "args": {
+            "fixture_id": "cab"
+          },
+          "reasoning": "Now that the cabinet is released, I am moving there to place the first object.",
+          "tool": "navigate_to_fixture"
+        },
+        "agent_1": {
+          "state": "blocked"
+        },
+        "tick": 6
+      },
+      {
+        "agent_0": {
+          "args": {
+            "object_id": "obj1",
+            "receptacle_id": "cab"
+          },
+          "reasoning": "I am placing the first decoration inside the cabinet.",
+          "tool": "place_in_receptacle"
+        },
+        "agent_1": {
+          "state": "blocked"
+        },
+        "tick": 7
+      },
+      {
+        "agent_0": {
+          "args": {
+            "fixture_id": "dining_table"
+          },
+          "reasoning": "I am returning to the dining table to retrieve the second decoration.",
+          "tool": "navigate_to_fixture"
+        },
+        "agent_1": {
+          "state": "blocked"
+        },
+        "tick": 8
+      },
+      {
+        "agent_0": {
+          "args": {
+            "object_id": "obj2",
+            "source_id": "dining_table"
+          },
+          "reasoning": "I am picking up the second decoration.",
+          "tool": "pick_up_object"
+        },
+        "agent_1": {
+          "state": "blocked"
+        },
+        "tick": 9
+      },
+      {
+        "agent_0": {
+          "args": {
+            "fixture_id": "cab"
+          },
+          "reasoning": "I am moving back to the cabinet with the second decoration.",
+          "tool": "navigate_to_fixture"
+        },
+        "agent_1": {
+          "state": "blocked"
+        },
+        "tick": 10
+      },
+      {
+        "agent_0": {
+          "args": {
+            "object_id": "obj2",
+            "receptacle_id": "cab"
+          },
+          "reasoning": "I am placing the second decoration into the cabinet.",
+          "tool": "place_in_receptacle"
+        },
+        "agent_1": {
+          "state": "blocked"
+        },
+        "tick": 11
+      },
+      {
+        "agent_0": {
+          "args": {
+            "fixture_id": "cab"
+          },
+          "reasoning": "I am clearing the cabinet area so agent_1 can return and close the door.",
+          "tool": "give_space"
+        },
+        "agent_1": {
+          "state": "blocked"
+        },
+        "tick": 12
+      },
+      {
+        "agent_0": {
+          "args": {
+            "coordination_phase": "portion_complete",
+            "message": "I have placed both objects. My portion is complete. You can close the cabinet now.",
+            "releases": "cab",
+            "to": "agent_1"
+          },
+          "reasoning": "I am releasing the cabinet and informing agent_1 that all my physical tasks are done.",
+          "tool": "communicate"
+        },
+        "agent_1": {
+          "state": "blocked"
+        },
+        "tick": 13
+      },
+      {
+        "agent_0": {
+          "args": {
+            "about": "cab",
+            "from": "agent_1"
+          },
+          "reasoning": "I am waiting for agent_1 to finish closing the cabinet to ensure the task is fully completed.",
+          "tool": "wait_for_signal"
+        },
+        "agent_1": {
+          "args": {
+            "fixture_id": "cab"
+          },
+          "reasoning": "I am moving back to the cabinet now that agent_0 has released it.",
+          "tool": "navigate_to_fixture"
+        },
+        "tick": 14
+      },
+      {
+        "agent_0": {
+          "state": "blocked"
+        },
+        "agent_1": {
+          "args": {
+            "part_id": "hinged",
+            "target_id": "cab"
+          },
+          "reasoning": "I am closing the cabinet door to complete the final step of the cleanup task.",
+          "tool": "close_hinged_part"
+        },
+        "tick": 15
+      }
+    ]
+  },
+  "validation": {
+    "is_valid": false,
+    "validator_feedback": "Failure summary:\n- error_type: TrajectoryValidationError\n- message: Tick 4 waits and releases in the same atomic cycle for: agent_0. A waiter resumes only after a release from a later tick.\n- details: {\"same_tick_wait_release\": [\"agent_0\"], \"tick\": 4, \"wait_release_pairs\": [{\"releaser\": \"agent_1\", \"resource\": \"cab\", \"resource_requires_handover\": true, \"waiter\": \"agent_0\"}]}\n\nEarlier validator observations to audit (not repair instructions):\n- A prior attempt placed both agents at the same exclusive fixture.\n- A prior attempt violated the validator's wait/release ordering.\n- Prior validator observation: Tick 4 waits and releases in the same atomic cycle for: agent_0. A waiter resumes only after a release from a later tick.\n\nRepeated-failure escalation:\n- The same kind of violation has appeared more than once. Re-check the complete revised trajectory for it before returning."
+  }
+}

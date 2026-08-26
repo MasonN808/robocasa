@@ -73,6 +73,11 @@ class GarnishCake(Kitchen):
                     ),
                     size=(1.0, 0.35),
                     pos=(0, "ref"),
+                    # The strip expresses the preferred region for the plate's
+                    # center. Requiring the full plate footprint inside this
+                    # narrow stool-relative strip makes some otherwise valid
+                    # scenes impossible to initialize.
+                    ensure_object_boundary_in_range=False,
                 ),
             )
         )

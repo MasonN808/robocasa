@@ -48,6 +48,11 @@ def _build_string_schema(
         schema["enum"] = list(agent_ids)
         return schema
 
+    declared_values = tool_spec.get("allowed_arg_values", {})
+    if isinstance(declared_values, dict) and declared_values.get(arg_name):
+        schema["enum"] = list(declared_values[arg_name])
+        return schema
+
     allowed_values_key = f"allowed_{arg_name}"
     if allowed_values_key in tool_spec:
         schema["enum"] = list(tool_spec[allowed_values_key])
@@ -66,15 +71,15 @@ def _build_parameter_schema(
 ) -> dict[str, Any]:
     schema_type = dict(tool_spec.get("tool_arg_types", {})).get(arg_name, "STRING")
     if schema_type == "STRING":
-        return _build_string_schema(
+        schema = _build_string_schema(
             arg_name=arg_name,
             agent_ids=agent_ids,
             tool_spec=tool_spec,
         )
-    if schema_type == "INTEGER":
-        return {"type": "integer"}
-    if schema_type == "STRING_ARRAY":
-        return {
+    elif schema_type == "INTEGER":
+        schema = {"type": "integer"}
+    elif schema_type == "STRING_ARRAY":
+        schema = {
             "type": "array",
             "items": _build_string_schema(
                 arg_name=arg_name,
@@ -82,7 +87,12 @@ def _build_parameter_schema(
                 tool_spec=tool_spec,
             ),
         }
-    raise ValueError(f"Unsupported tool arg schema type: {schema_type!r}")
+    else:
+        raise ValueError(f"Unsupported tool arg schema type: {schema_type!r}")
+    description = dict(tool_spec.get("tool_arg_descriptions", {})).get(arg_name)
+    if description:
+        schema["description"] = str(description)
+    return schema
 
 
 # Argument name carrying the model-chosen acting agent when agent prediction

@@ -52,9 +52,17 @@ try:
 except ImportError:  # pragma: no cover - optional fallback for old envs
     zstandard = None
 
+from data_generation.task_level.subatomic_tool_specs import (
+    build_model_tool_specs,
+    canonicalize_model_tool_args,
+)
+
 from training.bc_task_vlm.prompting import (
+    DEFAULT_PARTIAL_STEP_INDEX_MODE,
     build_messages,
+    build_partial_user_prompt,
     build_user_prompt,
+    normalize_partial_history_steps,
 )
 from training.bc_task_vlm.schema_utils import (
     TASK_COMPLETE_TOOL_NAME,
@@ -93,7 +101,6 @@ PARTIAL_STEP_INDEX_MODES = _PARTIAL_STEP_INDEX_MODES
 # "global", live_sim_eval's getattr fallback "none" -- so any run that did not
 # pass the flag explicitly evaluated a model on prompts it was never trained
 # on, and an A/B on this axis would measure the mismatch, not the ablation.
-DEFAULT_PARTIAL_STEP_INDEX_MODE = "local"
 # How partial-observability prompts supply pixels.
 #   "cache"        - persistent per-agent latest observation (design-doc default)
 #   "consume_once" - a get_image result feeds that agent's NEXT target tool
@@ -472,8 +479,9 @@ def build_same_task_trajectory_split(
     validation_task_names: list[str],
     validation_fraction: float,
     min_validation_trajectories_per_task: int,
+    seed: int = 42,
 ) -> SameTaskTrajectorySplit:
-    """Builds deterministic held-out trajectory ids for same-task validation."""
+    """Builds a reproducible, per-task shuffled same-task validation split."""
 
     if validation_fraction < 0.0 or validation_fraction > 1.0:
         raise ValueError("validation_fraction must be between 0 and 1.")
@@ -486,9 +494,11 @@ def build_same_task_trajectory_split(
     selected_validation_ids_by_task: dict[str, set[str]] = {}
 
     for task_name in all_task_names:
-        trajectory_ids = list_task_trajectory_ids(
-            dataset_root=dataset_root,
-            task_name=task_name,
+        trajectory_ids = list(
+            list_task_trajectory_ids(
+                dataset_root=dataset_root,
+                task_name=task_name,
+            )
         )
         if task_name not in validation_task_set:
             selected_validation_ids_by_task[task_name] = set()
@@ -504,8 +514,10 @@ def build_same_task_trajectory_split(
         if task_name in train_task_set:
             max_validation_count = max(max_validation_count - 1, 0)
         selected_count = min(requested_count, max_validation_count)
+        sampler = random.Random(task_split_seed(seed, task_name))
+        sampler.shuffle(trajectory_ids)
         selected_validation_ids_by_task[task_name] = set(
-            trajectory_ids[-selected_count:] if selected_count > 0 else []
+            trajectory_ids[:selected_count] if selected_count > 0 else []
         )
 
     train_trajectory_ids_by_task: dict[str, list[str]] = {}
@@ -882,18 +894,24 @@ def _build_centralized_examples_for_trajectory(
     sft_format: str,
     response_schema: dict[str, Any],
     tool_schemas: list[dict[str, Any]],
+    model_tool_specs: dict[str, dict[str, Any]] | None = None,
     predict_agent: bool = False,
     train_get_image: bool = False,
     train_reasoning: bool = False,
     predict_task_complete: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "local",
+    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
     partial_observation_mode: str = "consume_once",
 ) -> list[CentralizedExample]:
     if partial_history and predict_agent:
         raise ValueError(
             "partial_history requires predict_agent=False (the caller is the actor)"
+        )
+    if model_tool_specs is None:
+        model_tool_specs = build_model_tool_specs(
+            include_get_image=bool(train_get_image),
+            include_task_complete=bool(predict_agent and predict_task_complete),
         )
     if partial_step_index_mode not in _PARTIAL_STEP_INDEX_MODES:
         raise ValueError(
@@ -913,7 +931,13 @@ def _build_centralized_examples_for_trajectory(
         )
     elif partial_history and train_get_image:
         allowed_tool_specs = augment_tool_specs_with_get_image(allowed_tool_specs)
-    original_trajectory = _load_json(trajectory_dir / "original_trajectory.json")
+    original_trajectory_path = trajectory_dir / "original_trajectory.json"
+    original_trajectory = _load_json(original_trajectory_path)
+    from data_generation.task_level.tasks.shared.validation_contract import (
+        require_current_validation,
+    )
+
+    require_current_validation(original_trajectory, source=str(original_trajectory_path))
     plan_steps = _load_json(trajectory_dir / "plan.json")
     metadata = _load_json(trajectory_dir / "metadata.json")
 
@@ -946,12 +970,41 @@ def _build_centralized_examples_for_trajectory(
     pending_observation_by_agent: dict[str, tuple[list[str], list[str]] | None] = {}
     active_observation_agent: str | None = None
     consuming_partial_images = partial_history and partial_observation_mode != "cache"
+    tick_by_step: dict[int, int] = {}
+    flat_index = 0
+    for tick_index, row in enumerate(original_trajectory.get("tick_rows") or []):
+        if not isinstance(row, dict):
+            continue
+        for agent_id in AGENT_IDS:
+            action = row.get(agent_id)
+            if isinstance(action, dict) and action.get("tool"):
+                tick_by_step[flat_index] = tick_index
+                flat_index += 1
+    pending_tick_history: list[dict[str, Any]] = []
+    current_tick: int | None = None
+
+    def flush_tick_history() -> None:
+        """Deliver one atomic tick only after all of its targets were built."""
+
+        for normalized in pending_tick_history:
+            owner = normalized["agent"]
+            private_history[owner].append(normalized)
+            if normalized["tool"] == "communicate":
+                recipient = (normalized.get("args") or {}).get("to")
+                if recipient and recipient != owner and recipient in private_history:
+                    private_history[recipient].append(normalized)
+        pending_tick_history.clear()
+
     for raw_step, plan_step, executed_step in zip(
         raw_steps,
         plan_steps,
         executed_steps,
         strict=True,
     ):
+        raw_tick = tick_by_step.get(raw_step.get("step"))
+        if partial_history and raw_tick is not None and raw_tick != current_tick:
+            flush_tick_history()
+            current_tick = raw_tick
         if raw_step["tool"] == "get_image" and not train_get_image:
             _record_latest_observation(
                 latest_observations_by_agent=latest_observations_by_agent,
@@ -963,7 +1016,11 @@ def _build_centralized_examples_for_trajectory(
                 )
             continue
 
-        effective_raw_step = raw_step
+        effective_raw_step = deepcopy(raw_step)
+        effective_raw_step["args"] = canonicalize_model_tool_args(
+            str(effective_raw_step.get("tool", "")),
+            effective_raw_step.get("args") or {},
+        )
         if (
             not causal_single_cache
             and not partial_history
@@ -1026,29 +1083,45 @@ def _build_centralized_examples_for_trajectory(
         if partial_history and partial_step_index_mode != "global":
             # Renumber by position in this agent's own private history so the
             # index carries no information about the other agent's activity.
-            effective_history_steps = [
-                {**step, "step": (local_index if partial_step_index_mode == "local" else None)}
-                for local_index, step in enumerate(effective_history_steps)
-            ]
+            effective_history_steps = normalize_partial_history_steps(
+                effective_history_steps,
+                index_mode=partial_step_index_mode,
+            )
             if partial_step_index_mode == "local":
                 prompt_step_index = len(effective_history_steps)
                 step_index_label = "Next local agent turn index"
             else:
                 prompt_step_index = None
-        user_prompt = build_user_prompt(
-            composite_task=task_metadata.composite_task,
-            task_instruction=metadata["task"],
-            agent_id=effective_raw_step["agent"],
-            next_step_index=prompt_step_index,
-            step_index_label=step_index_label,
-            observation_views=observation_views,
-            history_steps=effective_history_steps,
-            allowed_tool_specs=allowed_tool_specs,
-            sft_format=sft_format,
-            observation_owner=active_observation_agent,
-            include_observation_owner=causal_single_cache,
-            predict_agent=predict_agent,
-        )
+        if partial_history and sft_format == SFT_FORMAT_TOOL_CALL:
+            user_prompt = build_partial_user_prompt(
+                composite_task=task_metadata.composite_task,
+                task_instruction=getattr(task_metadata, "task_goal", metadata["task"]),
+                agent_id=effective_raw_step["agent"],
+                global_step_index=raw_step["step"],
+                observation_views=observation_views,
+                history_steps=private_history[effective_raw_step["agent"]],
+                allowed_tool_specs=model_tool_specs,
+                partial_step_index_mode=partial_step_index_mode,
+                coordinator_id=original_trajectory.get("coordinator_id"),
+                initial_state=original_trajectory.get("initial_state"),
+            )
+        else:
+            user_prompt = build_user_prompt(
+                composite_task=task_metadata.composite_task,
+                task_instruction=getattr(task_metadata, "task_goal", metadata["task"]),
+                agent_id=effective_raw_step["agent"],
+                next_step_index=prompt_step_index,
+                step_index_label=step_index_label,
+                observation_views=observation_views,
+                history_steps=effective_history_steps,
+                allowed_tool_specs=model_tool_specs,
+                sft_format=sft_format,
+                observation_owner=active_observation_agent,
+                include_observation_owner=causal_single_cache,
+                predict_agent=predict_agent,
+                coordinator_id=original_trajectory.get("coordinator_id"),
+                initial_state=original_trajectory.get("initial_state"),
+            )
         message_kwargs: dict[str, Any]
         if sft_format == SFT_FORMAT_PLAIN:
             message_kwargs = {"target_text": target_text}
@@ -1077,7 +1150,7 @@ def _build_centralized_examples_for_trajectory(
                 observation_views=observation_views,
                 image_paths=list(image_paths),
                 history_steps=list(effective_history_steps),
-                allowed_tool_specs=allowed_tool_specs,
+                allowed_tool_specs=model_tool_specs,
                 tool_schemas=tool_schemas,
                 response_schema=response_schema,
                 target_payload=target_payload,
@@ -1099,12 +1172,12 @@ def _build_centralized_examples_for_trajectory(
         )
         normalized_step = _normalize_history_step(effective_raw_step)
         if partial_history:
-            owner = effective_raw_step["agent"]
-            private_history[owner].append(normalized_step)
-            if raw_step["tool"] == "communicate":
-                recipient = raw_step["args"].get("to")
-                if recipient and recipient != owner and recipient in private_history:
-                    private_history[recipient].append(normalized_step)
+            if raw_tick is None:
+                # Legacy trajectories have no canonical simultaneity metadata.
+                pending_tick_history.append(normalized_step)
+                flush_tick_history()
+            else:
+                pending_tick_history.append(normalized_step)
         else:
             history_steps.append(normalized_step)
         _record_latest_observation(
@@ -1126,6 +1199,9 @@ def _build_centralized_examples_for_trajectory(
             elif raw_step["tool"] not in {"communicate", TASK_COMPLETE_TOOL_NAME}:
                 active_observation_agent = None
 
+    if partial_history:
+        flush_tick_history()
+
     if predict_agent and predict_task_complete and examples:
         examples.append(
             _build_task_complete_example(
@@ -1137,10 +1213,12 @@ def _build_centralized_examples_for_trajectory(
                 latest_observations_by_agent=latest_observations_by_agent,
                 active_observation_agent=active_observation_agent,
                 causal_single_cache=causal_single_cache,
-                allowed_tool_specs=allowed_tool_specs,
+                allowed_tool_specs=model_tool_specs,
                 sft_format=sft_format,
                 response_schema=response_schema,
                 tool_schemas=tool_schemas,
+                coordinator_id=original_trajectory.get("coordinator_id"),
+                initial_state=original_trajectory.get("initial_state"),
             )
         )
 
@@ -1161,6 +1239,8 @@ def _build_task_complete_example(
     sft_format: str,
     response_schema: dict[str, Any],
     tool_schemas: list[dict[str, Any]],
+    coordinator_id: str | None = None,
+    initial_state: dict[str, Any] | None = None,
 ) -> CentralizedExample:
     """Synthesizes the terminal task_complete step for agent-prediction SFT.
 
@@ -1201,7 +1281,7 @@ def _build_task_complete_example(
     )
     user_prompt = build_user_prompt(
         composite_task=task_metadata.composite_task,
-        task_instruction=metadata["task"],
+        task_instruction=getattr(task_metadata, "task_goal", metadata["task"]),
         agent_id=last_agent,
         next_step_index=terminal_step_index,
         observation_views=observation_views,
@@ -1211,6 +1291,8 @@ def _build_task_complete_example(
         include_observation_owner=causal_single_cache,
         sft_format=sft_format,
         predict_agent=True,
+        coordinator_id=coordinator_id,
+        initial_state=initial_state,
     )
     if sft_format == SFT_FORMAT_PLAIN:
         message_kwargs: dict[str, Any] = {"target_text": target_text}
@@ -1265,7 +1347,7 @@ def build_centralized_examples(
     predict_task_complete: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "local",
+    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
     partial_observation_mode: str = "consume_once",
 ) -> list[CentralizedExample]:
     """Builds one SFT example per successful non-image action step.
@@ -1314,16 +1396,20 @@ def build_centralized_examples(
             task_name=task_metadata.dataset_name,
         )
 
+        model_tool_specs = build_model_tool_specs(
+            include_get_image=bool(train_get_image),
+            include_task_complete=bool(predict_agent and predict_task_complete),
+        )
         if sft_format == SFT_FORMAT_TOOL_CALL:
             response_schema = build_single_step_response_schema(
                 agent_ids=AGENT_IDS,
-                allowed_tool_specs=effective_tool_specs,
+                allowed_tool_specs=model_tool_specs,
             )
         else:
             response_schema = {}
         tool_schemas = build_tool_schemas(
             agent_ids=AGENT_IDS,
-            allowed_tool_specs=effective_tool_specs,
+            allowed_tool_specs=model_tool_specs,
             include_agent_param=predict_agent,
         )
         include_trajectory_ids = None
@@ -1344,6 +1430,7 @@ def build_centralized_examples(
                 sft_format=sft_format,
                 response_schema=response_schema,
                 tool_schemas=tool_schemas,
+                model_tool_specs=model_tool_specs,
                 predict_agent=predict_agent,
                 train_get_image=train_get_image,
                 train_reasoning=train_reasoning,
@@ -1400,7 +1487,7 @@ def build_example_cache_fingerprint(
     predict_task_complete: bool = False,
     causal_single_cache: bool = False,
     partial_history: bool = False,
-    partial_step_index_mode: str = "local",
+    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
     partial_observation_mode: str = "consume_once",
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
@@ -1416,6 +1503,17 @@ def build_example_cache_fingerprint(
         trajectory_dirs = [
             path for path in trajectory_dirs if path.name in selected_trajectory_ids
         ]
+    from data_generation.task_level.tasks.shared.validation_contract import (
+        require_current_validation,
+    )
+
+    # Validate source records even when a serialized example cache is reused.
+    # A cache is an optimization, never an alternate trust boundary.
+    for trajectory_dir in trajectory_dirs:
+        original_path = trajectory_dir / "original_trajectory.json"
+        require_current_validation(
+            _load_json(original_path), source=str(original_path)
+        )
     fingerprint: dict[str, Any] = {
         "cache_format_version": _EXAMPLE_CACHE_FORMAT_VERSION,
         "dataset_root": str(dataset_root.resolve()),

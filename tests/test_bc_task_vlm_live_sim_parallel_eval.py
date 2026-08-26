@@ -168,6 +168,38 @@ def test_prepare_is_resume_stable_and_rejects_changed_arguments(tmp_path):
         )
 
 
+def test_prepare_filters_worker_ownership_to_accepted_dagger_prefixes(tmp_path):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_manifest()), encoding="utf-8")
+    prefixes_path = tmp_path / "prefixes.jsonl"
+    rows = [
+        {
+            "diagnostic": {"task_name": "task_a", "trajectory_id": "a2"},
+            "fsm_replay": {"fsm_replay_status": "accepted"},
+        },
+        {
+            "diagnostic": {"task_name": "task_b", "trajectory_id": "b1"},
+            "fsm_replay": {"fsm_replay_status": "rejected"},
+        },
+    ]
+    prefixes_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+
+    _root, _metadata, specs = prepare_parallel_run(
+        _live_args(
+            manifest_path,
+            tmp_path / "parallel-dagger",
+            "--dagger-prefixes",
+            str(prefixes_path),
+        ),
+        requested_workers=2,
+    )
+
+    assert len(specs) == 1
+    assert specs[0].trajectory_keys == {("task_a", "a2")}
+
+
 def test_prepare_fingerprints_api_key_without_persisting_it(tmp_path):
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(_manifest()), encoding="utf-8")

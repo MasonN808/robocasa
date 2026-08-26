@@ -104,8 +104,24 @@ class SchemaTests(unittest.TestCase):
 
     def test_an_action_slot_carries_no_agent_or_step_field(self):
         row = self._definition().tick_response_schema["properties"]["ticks"]["items"]
-        self.assertNotIn("agent", row["properties"]["agent_0"]["properties"])
-        self.assertNotIn("step", row["properties"]["agent_0"]["properties"])
+        variants = row["properties"]["agent_0"]["anyOf"]
+        self.assertTrue(variants)
+        for variant in variants:
+            self.assertNotIn("agent", variant["properties"])
+            self.assertNotIn("step", variant["properties"])
+
+    def test_communication_recipient_is_the_other_agent_in_each_slot(self):
+        row = self._definition().tick_response_schema["properties"]["ticks"]["items"]
+        for agent_id, other_id in (("agent_0", "agent_1"), ("agent_1", "agent_0")):
+            variants = row["properties"][agent_id]["anyOf"]
+            communicate = next(
+                variant for variant in variants
+                if variant["properties"]["tool"]["enum"] == ["communicate"]
+            )
+            self.assertEqual(
+                communicate["properties"]["args"]["properties"]["to"]["enum"],
+                [other_id],
+            )
 
 
 class ValidationPathTests(unittest.TestCase):

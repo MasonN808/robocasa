@@ -13,11 +13,23 @@ from data_generation.task_level.tasks.shared import concurrent_fsm  # noqa: E402
 from data_generation.task_level.tasks.shared.concurrent_fsm import (  # noqa: E402
     EXECUTOR,
     LOCK_STEP,
+    VALIDATOR_CONTRACT_VERSION,
     ConcurrentTaskValidator,
+    simultaneous_contentions,
 )
 from data_generation.task_level.tasks.shared.state import (  # noqa: E402
     AgentRuntimeState,
     TaskRuntimeState,
+)
+from data_generation.task_level.tasks.shared.fsm import (  # noqa: E402
+    FiniteStateTaskValidator,
+)
+from data_generation.task_level.tasks.shared.errors import (  # noqa: E402
+    TrajectoryValidationError,
+)
+from data_generation.task_level.tasks.shared.scheduling import (  # noqa: E402
+    ConcurrentScheduler,
+    symbolic_id_mentioned,
 )
 
 AGENTS = ("agent_0", "agent_1")
@@ -38,6 +50,17 @@ def plan(*steps):
     return {"agents": [{"agent": a} for a in AGENTS], "steps": numbered}
 
 
+def tick_plan(*rows):
+    return {
+        "agents": [{"agent": a} for a in AGENTS],
+        "ticks": [{"tick": i, **row} for i, row in enumerate(rows)],
+    }
+
+
+def action(tool, **args):
+    return {"tool": tool, "args": args, "reasoning": "r"}
+
+
 class FakeValidator:
     """A minimal stand-in exposing the surface ConcurrentTaskValidator uses.
 
@@ -50,15 +73,24 @@ class FakeValidator:
     agent_ids = AGENTS
     allowed_tool_specs = {
         "navigate_to_fixture": {}, "pick_up_object": {}, "give_space": {},
-        "place_on_surface": {}, "communicate": {}, "wait_for_signal": {},
+        "place_on_surface": {}, "place_on_object": {}, "communicate": {},
+        "wait_for_signal": {},
     }
     _all_checks = ["fake"]
 
-    def __init__(self, *, goal_after: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        goal_after: int | None = None,
+        coordinator_id: str | None = None,
+        work_partition: dict | None = None,
+    ) -> None:
         self.initial_state = {"fixtures": FIXTURES, "objects": OBJECTS,
                               "agents": {a: {"location": None} for a in AGENTS}}
         self._goal_after = goal_after
         self._applied = 0
+        self.coordinator_id = coordinator_id
+        self.work_partition = work_partition
 
     # seams the concurrent validator calls
     def _normalize_agents(self, value):
@@ -121,6 +153,42 @@ class FakeValidator:
         return "sig"
 
 
+class AccessStateValidator(FakeValidator):
+    """Tiny fixture-state model used to test transactional prerequisites."""
+
+    allowed_tool_specs = {
+        **FakeValidator.allowed_tool_specs,
+        "open_hinged_part": {},
+    }
+
+    def _build_runtime_state(self, agents):
+        state = super()._build_runtime_state(agents)
+        state.fixtures = {
+            "cab": {
+                "fixture_type": "cabinet",
+                "parts": {"door": {"state": "closed"}},
+            }
+        }
+        return state
+
+    def _validate_generic_transition(self, step, state):
+        if (
+            step["tool"] == "pick_up_object"
+            and (step.get("args") or {}).get("source_id") == "cab"
+            and state.fixtures["cab"]["parts"]["door"]["state"] != "open"
+        ):
+            raise TrajectoryValidationError(
+                "cabinet must already be open at the beginning of the tick"
+            )
+
+    def _apply_generic_effects(self, step, state):
+        if step["tool"] == "open_hinged_part":
+            state.fixtures["cab"]["parts"]["door"]["state"] = "open"
+            self._applied += 1
+            return
+        super()._apply_generic_effects(step, state)
+
+
 def build(**kwargs):
     return ConcurrentTaskValidator(FakeValidator(**kwargs))
 
@@ -130,6 +198,408 @@ OPEN = (step("agent_0", "communicate", to="agent_1", message="a b c d"),
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_natural_plan_text_may_spell_symbolic_underscores_as_spaces(self):
+        self.assertTrue(symbolic_id_mentioned("I will get the glass cup.", "glass_cup"))
+        self.assertTrue(symbolic_id_mentioned("Handle lemon_wedge.", "lemon_wedge"))
+        self.assertFalse(symbolic_id_mentioned("I will get the glass.", "glass_cup"))
+
+    def test_implicit_pickup_source_marks_partner_as_needing_fixture(self):
+        validator = SimpleNamespace(
+            initial_state={"objects": OBJECTS},
+        )
+        self.assertTrue(
+            FiniteStateTaskValidator._assignment_needs_location(
+                validator,
+                ["pick_up_object bowl"],
+                "counter",
+            )
+        )
+
+    def test_goal_termination_does_not_unblock_a_waiter(self):
+        scheduler = ConcurrentScheduler(AGENTS)
+        scheduler.block(
+            "agent_0",
+            {"tool": "wait_for_signal", "args": {"from": "agent_1", "about": "bowl"}},
+            clock=3.0,
+        )
+        self.assertTrue(scheduler.finish_cycle(goal_satisfied=True))
+        self.assertTrue(scheduler.blocked("agent_0"))
+
+    def test_same_tick_action_cannot_use_partner_created_prerequisite(self):
+        validator = ConcurrentTaskValidator(AccessStateValidator())
+        state = validator.validator._build_runtime_state(None)
+        state.communicated_agents.update(AGENTS)
+        calls = [
+            step("agent_0", "open_hinged_part", target_id="cab", part_id="door"),
+            step("agent_1", "pick_up_object", object_id="bowl", source_id="cab"),
+        ]
+        errors = validator.validate_cycle_preconditions(calls, state)
+        self.assertEqual(set(errors), {"agent_1"})
+        self.assertIn("beginning of the tick", str(errors["agent_1"]))
+        reversed_errors = validator.validate_cycle_preconditions(
+            list(reversed(calls)), state
+        )
+        self.assertEqual(set(reversed_errors), set(errors))
+        self.assertEqual(
+            str(reversed_errors["agent_1"]), str(errors["agent_1"])
+        )
+
+    def test_partner_created_prerequisite_is_available_next_tick(self):
+        validator = ConcurrentTaskValidator(AccessStateValidator())
+        state = validator.validator._build_runtime_state(None)
+        state.communicated_agents.update(AGENTS)
+        opening = step(
+            "agent_0", "open_hinged_part", target_id="cab", part_id="door"
+        )
+        pickup = step(
+            "agent_1", "pick_up_object", object_id="bowl", source_id="cab"
+        )
+        self.assertFalse(validator.validate_cycle_preconditions([opening], state))
+        validator._commit(opening, state)
+        self.assertFalse(validator.validate_cycle_preconditions([pickup], state))
+
+    @staticmethod
+    def coordinator_opening(*tail):
+        return tick_plan(
+            {
+                "agent_0": action(
+                    "communicate", to="agent_1",
+                    message="I will handle bowl; you handle sink, cab, and counter.",
+                    coordination_phase="propose",
+                ),
+                "agent_1": action(
+                    "communicate", to="agent_0", message="Awaiting your plan.",
+                    coordination_phase="await_plan",
+                ),
+            },
+            {
+                "agent_0": action(
+                    "communicate", to="agent_1", message="Please confirm.",
+                    coordination_phase="await_confirmation",
+                ),
+                "agent_1": action(
+                    "communicate", to="agent_0", message="Confirmed.",
+                    coordination_phase="confirm",
+                ),
+            },
+            *tail,
+        )
+
+    def test_causal_coordinator_opening_is_accepted(self):
+        candidate = self.coordinator_opening(
+            {
+                "agent_0": action("pick_up_object", object_id="bowl"),
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            }
+        )
+        canonical = build(coordinator_id="agent_0").canonicalize(candidate)
+        self.assertEqual(len(canonical["steps"]), 6)
+
+    def test_rendered_observation_rows_do_not_shift_the_handshake(self):
+        candidate = self.coordinator_opening()
+        candidate["ticks"].insert(
+            0,
+            {
+                "tick": 0,
+                "agent_0": action("get_image", views=["top_view"]),
+                "agent_1": action("get_image", views=["top_view"]),
+            },
+        )
+        for tick, row in enumerate(candidate["ticks"]):
+            row["tick"] = tick
+        canonical = build(coordinator_id="agent_0").canonicalize(candidate)
+        self.assertEqual(canonical["steps"][0]["tool"], "communicate")
+        self.assertFalse(
+            any(step["tool"] == "get_image" for step in canonical["steps"])
+        )
+
+    def test_follower_cannot_independently_propose_on_opening_tick(self):
+        candidate = self.coordinator_opening()
+        candidate["ticks"][0]["agent_1"]["args"]["coordination_phase"] = "propose"
+        with self.assertRaisesRegex(Exception, "await_plan"):
+            build(coordinator_id="agent_0").canonicalize(candidate)
+
+    def test_ungrounded_proposal_reports_its_actual_step_and_message(self):
+        partition = {
+            "assignment": {
+                "agent_0": ["pick_up_object bowl"],
+                "agent_1": ["navigate_to_fixture sink"],
+            }
+        }
+        candidate = self.coordinator_opening()
+        candidate["ticks"][0]["agent_0"]["args"]["message"] = "I have a plan."
+        with self.assertRaises(Exception) as raised:
+            build(
+                coordinator_id="agent_0", work_partition=partition
+            ).canonicalize(candidate)
+        self.assertEqual(raised.exception.step, 0)
+        self.assertEqual(raised.exception.details["tick"], 0)
+        self.assertEqual(raised.exception.details["proposal"], "I have a plan.")
+
+    def test_global_completion_claim_is_rejected(self):
+        candidate = self.coordinator_opening(
+            {
+                "agent_0": action(
+                    "communicate", to="agent_1", message="Task complete!",
+                ),
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            }
+        )
+        with self.assertRaisesRegex(Exception, "global completion"):
+            build(coordinator_id="agent_0").canonicalize(candidate)
+
+    def test_scoped_portion_complete_is_not_global_completion(self):
+        candidate = self.coordinator_opening(
+            {
+                "agent_0": action(
+                    "communicate", to="agent_1",
+                    message="My portion of the task is complete.",
+                    coordination_phase="portion_complete",
+                ),
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            }
+        )
+        build(coordinator_id="agent_0").canonicalize(candidate)
+
+    def test_required_release_may_precede_portion_complete(self):
+        rows = [
+            {
+                "tick": 0,
+                "agent_0": action("pick_up_object", object_id="bowl"),
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            },
+            {
+                "tick": 1,
+                "agent_0": action(
+                    "communicate", to="agent_1", message="Bowl is free.",
+                    releases="bowl",
+                ),
+                "agent_1": action("navigate_to_fixture", fixture_id="cab"),
+            },
+            {
+                "tick": 2,
+                "agent_0": action(
+                    "communicate", to="agent_1", message="My portion is done.",
+                    coordination_phase="portion_complete",
+                ),
+                "agent_1": action("navigate_to_fixture", fixture_id="counter"),
+            },
+        ]
+        build()._validate_social_only_tails(rows)
+
+    def test_agent_assigned_no_physical_work_waits_without_fake_completion(self):
+        rows = [
+            {"tick": 0},
+            {"tick": 1},
+            {
+                "tick": 2,
+                "agent_0": action(
+                    "wait_for_signal", **{"from": "agent_1", "about": "bowl"}
+                ),
+                "agent_1": action("pick_up_object", object_id="bowl"),
+            },
+            {
+                "tick": 3,
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            },
+        ]
+        build()._validate_social_only_tails(rows)
+
+    def test_blocked_markers_do_not_hide_invalid_social_tail(self):
+        explicit_rows = [
+            {"tick": 0},
+            {"tick": 1},
+            {
+                "tick": 2,
+                "agent_0": action("pick_up_object", object_id="bowl"),
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            },
+            {
+                "tick": 3,
+                "agent_0": action("communicate", to="agent_1", message="Status."),
+                "agent_1": action("navigate_to_fixture", fixture_id="cab"),
+            },
+            {
+                "tick": 4,
+                "agent_0": {"state": "blocked"},
+                "agent_1": action("navigate_to_fixture", fixture_id="counter"),
+            },
+        ]
+        canonical_rows = [
+            {key: value for key, value in row.items() if value != {"state": "blocked"}}
+            for row in explicit_rows
+        ]
+        for rows in (explicit_rows, canonical_rows):
+            with self.assertRaisesRegex(Exception, "portion_complete"):
+                build()._validate_social_only_tails(rows)
+
+    def test_explicit_blocked_marker_is_validated_then_removed(self):
+        candidate = {
+            "format": "explicit_blocked_v1",
+            "ticks": [
+                {
+                    "tick": 0,
+                    "agent_0": action(
+                        "wait_for_signal", **{"from": "agent_1", "about": "bowl"}
+                    ),
+                    "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+                },
+                {
+                    "tick": 1,
+                    "agent_0": {"state": "blocked"},
+                    "agent_1": action(
+                        "communicate", to="agent_0", message="Bowl is free.",
+                        releases="bowl",
+                    ),
+                },
+                {
+                    "tick": 2,
+                    "agent_0": action("navigate_to_fixture", fixture_id="counter"),
+                    "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+                },
+            ],
+        }
+        canonical = build().canonicalize(candidate)
+        self.assertNotIn("format", canonical)
+        self.assertNotIn("agent_0", canonical["tick_rows"][1])
+
+    def test_generation_partition_rejects_wrong_action_owner(self):
+        partition = {
+            "assignment": {
+                "agent_0": ["pick_up_object bowl"],
+                "agent_1": ["navigate_to_fixture sink"],
+            }
+        }
+        candidate = self.coordinator_opening(
+            {
+                "agent_0": action("navigate_to_fixture", fixture_id="sink"),
+                "agent_1": action("pick_up_object", object_id="bowl"),
+            }
+        )
+        with self.assertRaisesRegex(Exception, "not assigned") as raised:
+            build(
+                coordinator_id="agent_0", work_partition=partition
+            ).canonicalize(candidate)
+        self.assertEqual(raised.exception.details["assigned_agent"], "agent_1")
+        self.assertEqual(raised.exception.details["tool"], "navigate_to_fixture")
+        self.assertEqual(raised.exception.details["actual_ids"], ["sink"])
+
+    def test_generation_partition_distinguishes_missing_ids_from_wrong_owner(self):
+        partition = {
+            "assignment": {
+                "agent_0": ["place_in_receptacle bowl -> cab"],
+                "agent_1": ["navigate_to_fixture sink"],
+            }
+        }
+        with self.assertRaises(Exception) as raised:
+            build(work_partition=partition)._validate_partition_actions([
+                step("agent_0", "place_in_receptacle", object_id="bowl")
+            ])
+        self.assertEqual(raised.exception.details["action_issue"], "missing_ids")
+        self.assertEqual(raised.exception.details["missing_action_ids"], ["cab"])
+
+    def test_finished_agent_reports_once_then_waits(self):
+        candidate = self.coordinator_opening(
+            {
+                "agent_0": action("pick_up_object", object_id="bowl"),
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            },
+            {
+                "agent_0": action(
+                    "communicate", to="agent_1", message="My portion is finished.",
+                    coordination_phase="portion_complete",
+                ),
+                "agent_1": action("navigate_to_fixture", fixture_id="cab"),
+            },
+            {
+                "agent_0": action(
+                    "wait_for_signal", **{"from": "agent_1", "about": "sink"}
+                ),
+                "agent_1": action("navigate_to_fixture", fixture_id="counter"),
+            },
+        )
+        partition = {
+            "assignment": {
+                "agent_0": ["pick_up_object bowl"],
+                "agent_1": [
+                    "navigate_to_fixture sink",
+                    "navigate_to_fixture cab",
+                    "navigate_to_fixture counter",
+                ],
+            }
+        }
+        build(coordinator_id="agent_0", work_partition=partition).canonicalize(candidate)
+
+    def test_live_certification_requires_ticks(self):
+        with self.assertRaisesRegex(Exception, "requires canonical ticks"):
+            build(goal_after=2).validate(plan(*OPEN), models=(LOCK_STEP,))
+
+    def test_canonical_ticks_reject_an_unblocked_omission(self):
+        candidate = tick_plan(
+            {
+                "agent_0": action("communicate", to="agent_1", message="a b c d"),
+                "agent_1": action("communicate", to="agent_0", message="a b c d"),
+            },
+            {"agent_1": action("navigate_to_fixture", fixture_id="sink")},
+        )
+        with self.assertRaisesRegex(Exception, "unblocked omitted: agent_0"):
+            build(goal_after=3).validate(candidate, models=(LOCK_STEP,))
+
+    def test_terminal_wait_needs_no_release_when_same_tick_reaches_goal(self):
+        candidate = tick_plan(
+            {
+                "agent_0": action("communicate", to="agent_1", message="a b c d"),
+                "agent_1": action("communicate", to="agent_0", message="a b c d"),
+            },
+            {
+                "agent_0": action(
+                    "communicate", to="agent_1",
+                    message='When done, send releases="bowl".',
+                ),
+                "agent_1": action("communicate", to="agent_0", message="a b c d"),
+            },
+            {
+                "agent_0": action(
+                    "wait_for_signal", **{"from": "agent_1", "about": "bowl"}
+                ),
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            },
+        )
+        validation = build(goal_after=1).validate(candidate, models=(LOCK_STEP,))
+        self.assertTrue(validation["is_valid"])
+        self.assertEqual(
+            validation["validator_contract_version"],
+            VALIDATOR_CONTRACT_VERSION,
+        )
+        self.assertEqual(validation["schedule"][LOCK_STEP]["goal_at"], 2.0)
+
+    def test_terminal_wait_needs_no_release_when_partner_finishes_later(self):
+        candidate = tick_plan(
+            {
+                "agent_0": action("communicate", to="agent_1", message="a b c d"),
+                "agent_1": action("communicate", to="agent_0", message="a b c d"),
+            },
+            {
+                "agent_0": action(
+                    "communicate", to="agent_1",
+                    message='When done, send releases="bowl".',
+                ),
+                "agent_1": action("communicate", to="agent_0", message="I will finish"),
+            },
+            {
+                "agent_0": action("wait_for_signal", **{"from": "agent_1", "about": "bowl"}),
+                "agent_1": action("navigate_to_fixture", fixture_id="sink"),
+            },
+            {
+                "agent_0": {"state": "blocked"},
+                "agent_1": action("navigate_to_fixture", fixture_id="counter"),
+            },
+        )
+        candidate["format"] = "explicit_blocked_v1"
+        validation = build(goal_after=2).validate(candidate, models=(LOCK_STEP,))
+        self.assertTrue(validation["is_valid"])
+        self.assertEqual(validation["schedule"][LOCK_STEP]["goal_at"], 3.0)
+
     def test_both_agents_advance_on_the_same_instant(self):
         run = build().replay(plan(*OPEN), model=LOCK_STEP)
         self.assertEqual([e.start for e in run.events], [0.0, 0.0])
@@ -228,6 +698,68 @@ class WaitTests(unittest.TestCase):
 
 
 class ContentionTests(unittest.TestCase):
+    def test_cabinet_door_transition_conflicts_with_content_access(self):
+        opening = step(
+            "agent_0", "open_hinged_part", target_id="cab", part_id="door"
+        )
+        pickup = step(
+            "agent_1", "pick_up_object", object_id="bowl", source_id="cab"
+        )
+        self.assertEqual(
+            simultaneous_contentions(opening, pickup, {"fixtures": FIXTURES, "objects": OBJECTS}),
+            frozenset({"cabinet_access:cab"}),
+        )
+
+    def test_distinct_objects_may_be_picked_from_open_shared_cabinet(self):
+        state = {
+            "fixtures": FIXTURES,
+            "objects": {
+                "bowl_1": {"location": "cab"},
+                "bowl_2": {"location": "cab"},
+            },
+        }
+        left = step(
+            "agent_0", "pick_up_object", object_id="bowl_1", source_id="cab"
+        )
+        right = step(
+            "agent_1", "pick_up_object", object_id="bowl_2", source_id="cab"
+        )
+        self.assertEqual(simultaneous_contentions(left, right, state), frozenset())
+
+    def test_distinct_objects_may_share_one_stationary_support(self):
+        validator = build()
+        validator.validator.initial_state["objects"].update({
+            "cube_1": {"location": "counter"},
+            "cube_2": {"location": "counter"},
+            "plate": {"location": "counter"},
+        })
+        run = validator.replay(
+            plan(
+                *OPEN,
+                step("agent_0", "place_on_object", object_id="cube_1", support_object_id="plate"),
+                step("agent_1", "place_on_object", object_id="cube_2", support_object_id="plate"),
+            ),
+            model=LOCK_STEP,
+        )
+        self.assertEqual(run.conflicts, [])
+
+    def test_moving_a_support_while_partner_uses_it_collides(self):
+        validator = build()
+        validator.validator.initial_state["objects"].update({
+            "cube": {"location": "counter"},
+            "plate": {"location": "counter"},
+            "tray": {"location": "counter"},
+        })
+        run = validator.replay(
+            plan(
+                *OPEN,
+                step("agent_0", "place_on_object", object_id="plate", support_object_id="tray"),
+                step("agent_1", "place_on_object", object_id="cube", support_object_id="plate"),
+            ),
+            model=LOCK_STEP,
+        )
+        self.assertTrue(any("being moved" in conflict for conflict in run.conflicts))
+
     def test_two_agents_reaching_for_one_object_at_one_instant_collide(self):
         run = build().replay(
             plan(*OPEN,
@@ -249,7 +781,7 @@ class ContentionTests(unittest.TestCase):
         )
         self.assertEqual(run.conflicts, [])
 
-    def test_co_occupancy_is_caught_even_when_the_arrivals_are_apart(self):
+    def test_cabinet_parent_workspace_allows_co_occupancy(self):
         # The blind spot every earlier pass had: nobody ACTS at the same
         # instant, but agent_0 never left, so both are standing there.
         run = build().replay(
@@ -260,14 +792,26 @@ class ContentionTests(unittest.TestCase):
                  step("agent_1", "navigate_to_fixture", fixture_id="cab")),
             model=LOCK_STEP,
         )
-        self.assertTrue(any("cab" in c for c in run.conflicts))
+        self.assertEqual(run.conflicts, [])
 
-    def test_a_handoff_through_give_space_is_not_a_collision(self):
+    def test_shared_cabinet_does_not_require_give_space_handoff(self):
         run = build().replay(
             plan(*OPEN,
                  step("agent_0", "navigate_to_fixture", fixture_id="cab"),
                  step("agent_0", "give_space", fixture_id="cab"),
                  step("agent_1", "communicate", to="agent_0", message="a b c d"),
+                 step("agent_1", "navigate_to_fixture", fixture_id="cab")),
+            model=LOCK_STEP,
+        )
+        self.assertEqual(run.conflicts, [])
+
+    def test_handoff_entry_on_following_tick_is_not_a_collision(self):
+        run = build().replay(
+            plan(*OPEN,
+                 step("agent_0", "navigate_to_fixture", fixture_id="cab"),
+                 step("agent_0", "give_space", fixture_id="cab"),
+                 step("agent_1", "communicate", to="agent_0", message="a b c d"),
+                 step("agent_1", "communicate", to="agent_0", message="e f g h"),
                  step("agent_1", "navigate_to_fixture", fixture_id="cab")),
             model=LOCK_STEP,
         )
@@ -301,7 +845,7 @@ class ContentionTests(unittest.TestCase):
         self.assertEqual(run.conflicts, [])
         del state
 
-    def test_the_starting_overlap_excuse_expires_once_they_separate(self):
+    def test_shared_cabinet_start_needs_no_overlap_excuse(self):
         # alcohol_serving_prep starts both agents at the cabinet. Excusing that
         # is right; excusing a RETURN to it after leaving is not, and a blanket
         # suppression hid exactly that case.
@@ -322,8 +866,8 @@ class ContentionTests(unittest.TestCase):
                  step("agent_1", "navigate_to_fixture", fixture_id="cab")),
             model=LOCK_STEP,
         )
-        self.assertEqual(run.initial_overlap, ["cab"])
-        self.assertTrue(any("cab" in c for c in run.conflicts))
+        self.assertEqual(run.initial_overlap, [])
+        self.assertEqual(run.conflicts, [])
 
 
 class PromptedProtocolTests(unittest.TestCase):
@@ -340,7 +884,7 @@ class PromptedProtocolTests(unittest.TestCase):
         return plan(
             *OPEN,
             step("agent_1", "communicate", to="agent_0",
-                 message="tell me when the cabinet is free"),
+                 message='When done, send releases="cab".'),
             step("agent_1", "wait_for_signal", **{"from": "agent_0", "about": "cab"}),
             step("agent_0", "navigate_to_fixture", fixture_id="cab"),
             step("agent_0", "communicate", to="agent_1", message="still working here"),
@@ -375,7 +919,8 @@ class PromptedProtocolTests(unittest.TestCase):
         self.assertIn("releases", text)
         self.assertIn("give_space", text, "release is coupled to departure")
         self.assertIn("on a LATER tick", text)
-        self.assertIn("IMMEDIATELY", text, "no gap between departure and report")
+        self.assertIn("may be reported later", text)
+        self.assertIn("must not reoccupy or reuse", text)
         self.assertIn("very next tick", text, "no gap between ask and wait")
         self.assertIn("tick AFTER the release", text, "no same-tick resumption")
 
@@ -384,13 +929,46 @@ class PromptedProtocolTests(unittest.TestCase):
         steps.insert(3, step("agent_1", "get_image"))  # inert, must be allowed
         self.assertEqual(build().replay(plan(*steps), model=LOCK_STEP).protocol, [])
 
-        steps[3] = step("agent_1", "communicate", to="agent_0", message="one more thing")
+        steps[3] = step("agent_1", "communicate", to="agent_0",
+                        message='When done, send releases="cab".')
         run = build().replay(plan(*steps), model=LOCK_STEP)
         self.assertEqual(run.protocol, [], "an extra ask is still an ask")
 
         steps[3] = step("agent_1", "navigate_to_fixture", fixture_id="sink")
         run = build().replay(plan(*steps), model=LOCK_STEP)
         self.assertTrue(any("not the request" in p for p in run.protocol))
+
+    def test_the_ask_names_the_exact_structural_release(self):
+        steps = list(self._handover()["steps"])
+        steps[2] = step(
+            "agent_1", "communicate", to="agent_0",
+            message="Please tell me when the cabinet is free.",
+        )
+        run = build().replay(plan(*steps), model=LOCK_STEP)
+        self.assertTrue(any("exact release value" in p for p in run.protocol))
+
+        steps[2] = step(
+            "agent_1", "communicate", to="agent_0",
+            message='When done, send releases="counter".',
+        )
+        run = build().replay(plan(*steps), model=LOCK_STEP)
+        self.assertTrue(any("exact release value" in p for p in run.protocol))
+
+    def test_the_ask_may_describe_the_release_keyword_naturally(self):
+        for message in (
+            'When done, send releases="cab".',
+            "Please release cab when finished.",
+            "Please use the keyword cab as the release keyword.",
+        ):
+            with self.subTest(message=message):
+                steps = list(self._handover()["steps"])
+                steps[2] = step(
+                    "agent_1", "communicate", to="agent_0", message=message,
+                )
+                run = build().replay(plan(*steps), model=LOCK_STEP)
+                self.assertFalse(
+                    any("exact release value" in p for p in run.protocol)
+                )
 
     def test_a_holder_that_leaves_early_is_fine_if_it_reports_late(self):
         # The tightest correct handover has the holder vacating on the very
@@ -402,7 +980,7 @@ class PromptedProtocolTests(unittest.TestCase):
                  step("agent_0", "navigate_to_fixture", fixture_id="cab"),
                  step("agent_0", "give_space", fixture_id="cab"),
                  step("agent_1", "communicate", to="agent_0",
-                      message="tell me when the cabinet is free"),
+                      message='When done, send releases="cab".'),
                  step("agent_1", "wait_for_signal", **{"from": "agent_0",
                                                        "about": "cab"}),
                  step("agent_0", "communicate", to="agent_1", message="yours",
@@ -484,7 +1062,10 @@ class SymbolGroundingTests(unittest.TestCase):
                  step("agent_1", "navigate_to_fixture", fixture_id="sink")),
             model=LOCK_STEP,
         )
-        self.assertFalse(run.deadlocked, "the fiction matches itself")
+        self.assertTrue(
+            run.deadlocked,
+            "a same-tick release processed before the wait cannot wake it",
+        )
         self.assertTrue(run.protocol, "but it is still rejected")
 
     def test_real_ids_pass(self):
@@ -504,7 +1085,7 @@ class SymbolGroundingTests(unittest.TestCase):
 class ReleaseProtocolTests(unittest.TestCase):
     """Three rules that need no clock, so no duration model can excuse them."""
 
-    def test_releasing_a_fixture_you_are_standing_at_is_rejected(self):
+    def test_legacy_shared_cabinet_release_is_not_an_occupancy_violation(self):
         run = build().replay(
             plan(*OPEN,
                  step("agent_0", "navigate_to_fixture", fixture_id="cab"),
@@ -512,7 +1093,7 @@ class ReleaseProtocolTests(unittest.TestCase):
                       message="you can take it", releases=["cab"])),
             model=LOCK_STEP,
         )
-        self.assertTrue(any("still standing at it" in p for p in run.protocol))
+        self.assertFalse(any("still standing at it" in p for p in run.protocol))
 
     def test_releasing_an_object_you_are_still_holding_is_rejected(self):
         run = build().replay(
@@ -525,9 +1106,9 @@ class ReleaseProtocolTests(unittest.TestCase):
         )
         self.assertTrue(any("still holding it" in p for p in run.protocol))
 
-    def test_a_gap_between_leaving_and_reporting_is_rejected(self):
-        # Every tick in the gap is a tick the waiter sits blocked on something
-        # that is already free.
+    def test_a_gap_between_leaving_and_reporting_is_allowed(self):
+        # A delayed report is inefficient but live-valid: the waiter simply
+        # remains blocked until the matching release arrives.
         run = build().replay(
             plan(*OPEN,
                  step("agent_0", "navigate_to_fixture", fixture_id="cab"),
@@ -537,7 +1118,7 @@ class ReleaseProtocolTests(unittest.TestCase):
                       releases=["cab"])),
             model=LOCK_STEP,
         )
-        self.assertTrue(any("not the handover" in p for p in run.protocol))
+        self.assertEqual(run.protocol, [])
 
     def test_observations_between_the_departure_and_the_report_are_fine(self):
         # get_image is inert and post-processing interleaves it everywhere.
