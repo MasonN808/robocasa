@@ -180,14 +180,29 @@ By directory. Counts are tracked `.py` files unless noted.
   - `test_fixed_live_sim` keeps its summarizer and Wilson assertions but drops the HTML-report half;
   - `test_dataset_playback` deleted, because its `robocasa.scripts.playback_dataset` import was already missing upstream at the fork point.
 
-**Pass B (next).** Prune dead options inside kept files:
-- the centralized (non-partial) `run_trajectory` path;
-- step-index modes;
-- non-consume-once observations;
-- the Table III sampling modes;
-- `partitions.py`.
+**Pass B (done, 2026-10-04).** Every removal is behaviour-checked against golden snapshots taken before the change. The snapshot scripts live outside the repo, in `robotalk-cleanup-scratch/golden*.py`.
 
-Pass B also covers the root `tick_format.py`/`insert_waits.py` moves (or folds them into Step 4).
+| Commit | Removed | Check |
+|---|---|---|
+| `b9483e7` | The 82 stale tests, which failed identically on the snapshot | Suite green (761) |
+| `d66e4f0` | The High Temp, Random/UUID and Verbalized sampling strategies, and the `--verbalized-k` plumbing | Suite green |
+| `1268ab2` | Work partitions: selector, flags, FSM partition checks, prompt rules, retry-feedback branches, and `work_partitions` in 49 specs | 212 production generation and SFT prompts byte-identical; 530 dataset trajectories plus 1,590 mutants give identical validator verdicts |
+| `4e10706` | Centralized history, agent prediction, task_complete, the causal single cache, step-index modes, the `cache` observation mode, the flag to turn off `get_image` training, the plain SFT format, and the centralized live runner | 10,284 SFT examples byte-identical; prompts and verdicts unchanged; the prompt-consistency gate passes on the paper cohort |
+| `3c478d5` | Orphaned helpers: agent-argument schemas, the task_complete tool, `pop_agent_argument` | Suite green (696) |
+
+Two side effects of `4e10706`:
+- Preprocessed artifacts and example caches are stamped `train_example_format=private_history_consume_once`, so artifacts built by the old code are rejected.
+- A latent `NameError` in the collator's empty-label check is fixed.
+
+**Not pruned, proposed as Pass C.** These generation options are unused by the production cascade, which pins `tick_format=True`, `prompt_style="simplified_v3"`, `retry_feedback_style="observational"` and `sampling="structured_random"`:
+- flat (non-tick) generation;
+- the `legacy`/`simplified`/`simplified_v2` prompt styles;
+- the `targeted` retry feedback;
+- the Vertex batch-processing path;
+- the `base` strategy;
+- the older `raw/cli.py` front end.
+
+They sit inside the code that produced the dataset, so they get their own pass under the same golden checks.
 
 **Test status after Pass A.**
 - Run on a compute node, over all tracked `tests/test_*.py` and `training/bc_task_vlm/tests/test_*.py`.
