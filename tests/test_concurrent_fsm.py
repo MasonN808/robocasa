@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -20,9 +19,6 @@ from data_generation.task_level.tasks.shared.concurrent_fsm import (  # noqa: E4
 from data_generation.task_level.tasks.shared.state import (  # noqa: E402
     AgentRuntimeState,
     TaskRuntimeState,
-)
-from data_generation.task_level.tasks.shared.fsm import (  # noqa: E402
-    FiniteStateTaskValidator,
 )
 from data_generation.task_level.tasks.shared.errors import (  # noqa: E402
     TrajectoryValidationError,
@@ -83,14 +79,12 @@ class FakeValidator:
         *,
         goal_after: int | None = None,
         coordinator_id: str | None = None,
-        work_partition: dict | None = None,
     ) -> None:
         self.initial_state = {"fixtures": FIXTURES, "objects": OBJECTS,
                               "agents": {a: {"location": None} for a in AGENTS}}
         self._goal_after = goal_after
         self._applied = 0
         self.coordinator_id = coordinator_id
-        self.work_partition = work_partition
 
     # seams the concurrent validator calls
     def _normalize_agents(self, value):
@@ -203,18 +197,6 @@ class ScheduleTests(unittest.TestCase):
         self.assertTrue(symbolic_id_mentioned("Handle lemon_wedge.", "lemon_wedge"))
         self.assertFalse(symbolic_id_mentioned("I will get the glass.", "glass_cup"))
 
-    def test_implicit_pickup_source_marks_partner_as_needing_fixture(self):
-        validator = SimpleNamespace(
-            initial_state={"objects": OBJECTS},
-        )
-        self.assertTrue(
-            FiniteStateTaskValidator._assignment_needs_location(
-                validator,
-                ["pick_up_object bowl"],
-                "counter",
-            )
-        )
-
     def test_goal_termination_does_not_unblock_a_waiter(self):
         scheduler = ConcurrentScheduler(AGENTS)
         scheduler.block(
@@ -319,22 +301,6 @@ class ScheduleTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "await_plan"):
             build(coordinator_id="agent_0").canonicalize(candidate)
 
-    def test_ungrounded_proposal_reports_its_actual_step_and_message(self):
-        partition = {
-            "assignment": {
-                "agent_0": ["pick_up_object bowl"],
-                "agent_1": ["navigate_to_fixture sink"],
-            }
-        }
-        candidate = self.coordinator_opening()
-        candidate["ticks"][0]["agent_0"]["args"]["message"] = "I have a plan."
-        with self.assertRaises(Exception) as raised:
-            build(
-                coordinator_id="agent_0", work_partition=partition
-            ).canonicalize(candidate)
-        self.assertEqual(raised.exception.step, 0)
-        self.assertEqual(raised.exception.details["tick"], 0)
-        self.assertEqual(raised.exception.details["proposal"], "I have a plan.")
 
     def test_global_completion_claim_is_rejected(self):
         candidate = self.coordinator_opening(
@@ -463,40 +429,7 @@ class ScheduleTests(unittest.TestCase):
         self.assertNotIn("format", canonical)
         self.assertNotIn("agent_0", canonical["tick_rows"][1])
 
-    def test_generation_partition_rejects_wrong_action_owner(self):
-        partition = {
-            "assignment": {
-                "agent_0": ["pick_up_object bowl"],
-                "agent_1": ["navigate_to_fixture sink"],
-            }
-        }
-        candidate = self.coordinator_opening(
-            {
-                "agent_0": action("navigate_to_fixture", fixture_id="sink"),
-                "agent_1": action("pick_up_object", object_id="bowl"),
-            }
-        )
-        with self.assertRaisesRegex(Exception, "not assigned") as raised:
-            build(
-                coordinator_id="agent_0", work_partition=partition
-            ).canonicalize(candidate)
-        self.assertEqual(raised.exception.details["assigned_agent"], "agent_1")
-        self.assertEqual(raised.exception.details["tool"], "navigate_to_fixture")
-        self.assertEqual(raised.exception.details["actual_ids"], ["sink"])
 
-    def test_generation_partition_distinguishes_missing_ids_from_wrong_owner(self):
-        partition = {
-            "assignment": {
-                "agent_0": ["place_in_receptacle bowl -> cab"],
-                "agent_1": ["navigate_to_fixture sink"],
-            }
-        }
-        with self.assertRaises(Exception) as raised:
-            build(work_partition=partition)._validate_partition_actions([
-                step("agent_0", "place_in_receptacle", object_id="bowl")
-            ])
-        self.assertEqual(raised.exception.details["action_issue"], "missing_ids")
-        self.assertEqual(raised.exception.details["missing_action_ids"], ["cab"])
 
     def test_finished_agent_reports_once_then_waits(self):
         candidate = self.coordinator_opening(
@@ -518,17 +451,7 @@ class ScheduleTests(unittest.TestCase):
                 "agent_1": action("navigate_to_fixture", fixture_id="counter"),
             },
         )
-        partition = {
-            "assignment": {
-                "agent_0": ["pick_up_object bowl"],
-                "agent_1": [
-                    "navigate_to_fixture sink",
-                    "navigate_to_fixture cab",
-                    "navigate_to_fixture counter",
-                ],
-            }
-        }
-        build(coordinator_id="agent_0", work_partition=partition).canonicalize(candidate)
+        build(coordinator_id="agent_0").canonicalize(candidate)
 
     def test_live_certification_requires_ticks(self):
         with self.assertRaisesRegex(Exception, "requires canonical ticks"):

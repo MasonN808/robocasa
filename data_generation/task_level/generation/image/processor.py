@@ -542,7 +542,6 @@ def revalidate_tick_trajectory(trajectory: dict[str, Any]) -> None:
 
     task_instance = TaskInstance(
         initial_state=deepcopy(trajectory["initial_state"]),
-        work_partition=deepcopy(trajectory.get("generation_work_partition")),
         coordinator_id=trajectory.get("coordinator_id"),
     )
     inner = SpecDrivenTaskValidator(

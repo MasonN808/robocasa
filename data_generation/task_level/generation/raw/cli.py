@@ -683,17 +683,6 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         ),
     )
     parser.add_argument(
-        "--partition-policy",
-        choices=("weighted", "balanced_local", "none"),
-        default="weighted",
-        help=(
-            "Ownership selection policy. 'weighted' preserves existing task weights; "
-            "'balanced_local' requires the best available workload balance and "
-            "chooses among the lowest-cost splits for the sampled initial state; "
-            "'none' leaves ownership to the model."
-        ),
-    )
-    parser.add_argument(
         "--max-workers",
         type=int,
         default=1,
@@ -853,8 +842,6 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         tick_format=getattr(args, "tick_format", False),
         prompt_style=args.prompt_style,
         retry_feedback_style=args.retry_feedback_style,
-        partition_policy=args.partition_policy,
-        work_partition=getattr(args, "work_partition", None),
         parallelize_tasks=args.parallelize_tasks,
         summary_path=default_summary_path,
         cost_output_path=args.cost_output,

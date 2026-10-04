@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-import re
 from typing import Any, Sequence
 
 from .constants import (
@@ -17,8 +16,6 @@ from .constants import (
     OPEN_PART_TOOL_NAMES,
     RELEASE_TOOL_NAMES,
 )
-from .partitions import is_degenerate, partition_rules
-from .scheduling import proposal_grounding_ids
 from .types import TaskInstance, TaskPromptBuilder
 
 
@@ -512,17 +509,10 @@ def make_task_prompt_builder(
             if task_instance is not None and task_instance.extra_execution_rules
             else tuple(extra_execution_rules or ())
         )
-        work_partition = (
-            task_instance.work_partition if task_instance is not None else None
-        )
         coordinator_id = (
             task_instance.coordinator_id
             if task_instance is not None and task_instance.coordinator_id
             else agent_ids[0]
-        )
-        prompt_extra_execution_rules = prompt_extra_execution_rules + partition_rules(
-            work_partition,
-            agent_ids,
         )
         allowed_tools_text = json.dumps(
             prompt_allowed_tool_specs,
@@ -544,10 +534,8 @@ def make_task_prompt_builder(
             sort_keys=True,
         )
         cooperation_rule_text = (
-            ""
-            if is_degenerate(work_partition)
-            else "- Both agents must cooperatively complete the task, a single "
-                 "agent should not do all subtasks.\n"
+            "- Both agents must cooperatively complete the task, a single "
+            "agent should not do all subtasks.\n"
         )
         initial_position_text = _format_initial_agent_positions(
             prompt_initial_state,
@@ -555,7 +543,7 @@ def make_task_prompt_builder(
         )
         if prompt_style in {"simplified", "simplified_v2", "simplified_v3"}:
             # The compact contract above replaces the legacy tick prose. Keep
-            # only genuine task facts and the sampled partition below it.
+            # only genuine task facts below it.
             from tick_format import TICK_FORMAT_RULES
 
             simplified_extra_rules = tuple(
@@ -581,74 +569,6 @@ def make_task_prompt_builder(
                 or rule.startswith("Open ")
                 or rule.startswith("Only use ")
             ]
-            assignment = (work_partition or {}).get("assignment") or {}
-            known_ids = set(prompt_initial_state.get("objects") or {}) | set(
-                prompt_initial_state.get("fixtures") or {}
-            )
-            required_by_agent = proposal_grounding_ids(assignment, known_ids)
-            grounding_lines = [
-                f"{agent_id}: {', '.join(ids)}"
-                for agent_id, ids in required_by_agent.items()
-                if ids
-            ]
-            if grounding_lines:
-                task_specific_rules.append(
-                    "The opening proposal must explicitly assign these IDs: "
-                    + "; ".join(grounding_lines)
-                    + ". Shared destinations need not be repeated."
-                )
-            fixtures = prompt_initial_state.get("fixtures") or {}
-            objects = prompt_initial_state.get("objects") or {}
-
-            def required_fixture(symbol: str) -> str | None:
-                seen: set[str] = set()
-                current = symbol
-                while current not in seen:
-                    seen.add(current)
-                    if current in fixtures:
-                        return current
-                    state = objects.get(current)
-                    if not isinstance(state, dict):
-                        return None
-                    current = state.get("location")
-                    if not isinstance(current, str):
-                        return None
-                return None
-
-            required_by_assignment: dict[str, set[str]] = {}
-            for agent_id, actions in assignment.items():
-                required_fixtures: set[str] = set()
-                for action in actions or ():
-                    if action.startswith("pick_up_object "):
-                        object_id = action.split()[1]
-                        fixture_id = required_fixture(object_id)
-                        if fixture_id:
-                            required_fixtures.add(fixture_id)
-                            task_specific_rules.append(
-                                f"{agent_id} pick_up_object {object_id} requires "
-                                f"being at {fixture_id}."
-                            )
-                    for fixture_id in fixtures:
-                        if re.search(
-                            rf"(?<![A-Za-z0-9_]){re.escape(fixture_id)}(?![A-Za-z0-9_])",
-                            action,
-                        ):
-                            required_fixtures.add(fixture_id)
-                required_by_assignment[agent_id] = required_fixtures
-            if len(required_by_assignment) > 1:
-                for fixture_id in sorted(
-                    set.intersection(*required_by_assignment.values())
-                ):
-                    fixture_type = str(
-                        (fixtures.get(fixture_id) or {}).get("fixture_type", "")
-                    ).lower()
-                    if fixture_type in EXCLUSIVE_FIXTURE_TYPES:
-                        task_specific_rules.append(
-                            f"{fixture_id} is shared but exclusive: only one agent "
-                            "may occupy it at a time. Use a complete handover each "
-                            "time ownership changes; multiple handovers are allowed. "
-                            "Obey task prerequisites when choosing the order."
-                        )
             task_specific_text = "\n".join(
                 f"- {rule}" for rule in task_specific_rules
             ) or "- None beyond the task state and tool contracts below."
@@ -733,11 +653,7 @@ def make_task_prompt_builder(
                 else ""
             )
             assignment_rule = (
-                "Follow the sampled work assignment expressed below. The opening "
-                "proposal must name the exact object, fixture, or control IDs that "
-                "distinguish each agent's responsibility."
-                if work_partition
-                else "Choose an efficient division of work from the initial state. "
+                "Choose an efficient division of work from the initial state. "
                 "Prefer giving both agents a coherent physical responsibility when the "
                 "task has multiple objects or separable actions. Keep each object's "
                 "pickup and placement with one owner. A single agent may do all physical "

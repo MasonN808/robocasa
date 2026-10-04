@@ -61,9 +61,7 @@ from .errors import (
 from .scheduling import (
     ConcurrentScheduler,
     opening_protocol_error,
-    proposal_grounding_ids,
     release_keys,
-    symbolic_id_mentioned,
     wait_key,
 )
 from .validation_contract import VALIDATOR_CONTRACT_VERSION
@@ -1193,42 +1191,6 @@ class ConcurrentTaskValidator:
                     details={"tick": tick, "agent": agent, "expected_phase": phase},
                 )
 
-        partition = getattr(self.validator, "work_partition", None) or {}
-        assignment = partition.get("assignment") or {}
-        known = set(self.validator.initial_state.get("objects") or {}) | set(
-            self.validator.initial_state.get("fixtures") or {}
-        )
-        # The opening proposal proves who owns which work; it need not repeat
-        # every shared destination already stated in the task goal. Require the
-        # first concrete resource in each assigned action (the manipulated
-        # object, fixture, or control anchor), not later support/target IDs.
-        required_by_agent = proposal_grounding_ids(assignment, known)
-        required_ids = {
-            symbol for symbols in required_by_agent.values() for symbol in symbols
-        }
-        proposal = str(
-            (rows[opening_ticks[0]][coordinator].get("args") or {}).get("message")
-            or ""
-        )
-        missing_ids = sorted(
-            symbol for symbol in required_ids
-            if not symbolic_id_mentioned(proposal, symbol)
-        )
-        if missing_ids:
-            proposal_step = self.agent_ids.index(coordinator)
-            raise TrajectoryValidationError(
-                "The coordinator proposal does not ground the generated work "
-                "partition in exact symbolic IDs: " + ", ".join(missing_ids),
-                details={
-                    "tick": opening_ticks[0],
-                    "coordinator": coordinator,
-                    "proposal": proposal,
-                    "missing_ids": missing_ids,
-                    "required_by_agent": required_by_agent,
-                },
-                step=proposal_step,
-            )
-
         premature = re.compile(
             r"\b(?:(?:the\s+)?task\s+(?:is\s+)?(?:now\s+)?"
             r"(?:complete|completed|done|finished)|we(?:'re|\s+are)\s+"
@@ -1370,27 +1332,6 @@ class ConcurrentTaskValidator:
                         "tick": status_tick,
                     },
                 )
-            partition = getattr(self.validator, "work_partition", None) or {}
-            partner_assignment = (partition.get("assignment") or {}).get(partner, [])
-            known = set(self.validator.initial_state.get("objects") or {}) | set(
-                self.validator.initial_state.get("fixtures") or {}
-            )
-            outstanding_ids = {
-                symbol
-                for description in partner_assignment
-                for symbol in known
-                if re.search(
-                    rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])",
-                    description,
-                )
-            }
-            about = str((wait_call.get("args") or {}).get("about") or "")
-            if outstanding_ids and about not in outstanding_ids:
-                raise TrajectoryValidationError(
-                    f"{agent} waits about {about!r}, but the partner's outstanding "
-                    "partition names one of: " + ", ".join(sorted(outstanding_ids)),
-                    details={"agent": agent, "tick": wait_tick, "about": about},
-                )
 
     # -- drop-in validation ------------------------------------------------
 
@@ -1450,137 +1391,7 @@ class ConcurrentTaskValidator:
                 step["step"] = len(steps)
                 steps.append(step)
         canonical["steps"] = steps
-        self._validate_partition_actions(steps)
         return canonical
-
-    def _validate_partition_actions(self, steps: Sequence[dict[str, Any]]) -> None:
-        """Use the generation-only partition to certify expert-plan coherence."""
-
-        partition = getattr(self.validator, "work_partition", None) or {}
-        assignment = partition.get("assignment") or {}
-        if not assignment:
-            return
-        initial = self.validator.initial_state
-        known = set(initial.get("objects") or {}) | set(initial.get("fixtures") or {})
-        for fixture in (initial.get("fixtures") or {}).values():
-            known.update((fixture.get("parts") or {}).keys())
-            known.update((fixture.get("controls") or {}).keys())
-
-        expected: dict[str, list[tuple[str, frozenset[str], str]]] = {}
-        for agent, descriptions in assignment.items():
-            parsed = []
-            for description in descriptions:
-                tool, _, _ = description.partition(" ")
-                ids = frozenset(
-                    symbol
-                    for symbol in known
-                    if re.search(
-                        rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])",
-                        description,
-                    )
-                )
-                parsed.append((tool, ids, description))
-            expected[agent] = parsed
-
-        remaining = {agent: list(items) for agent, items in expected.items()}
-        partition_tools = {item[0] for items in expected.values() for item in items}
-        for step in steps:
-            if step.get("tool") not in partition_tools:
-                continue
-            actual_ids = {
-                str(value)
-                for value in (step.get("args") or {}).values()
-                if isinstance(value, str)
-            }
-            agent = step.get("agent")
-            options = remaining.get(agent, [])
-            match = next(
-                (
-                    item for item in options
-                    if item[0] == step.get("tool") and item[1] <= actual_ids
-                ),
-                None,
-            )
-            if match is None:
-                incomplete = next(
-                    (
-                        item for item in options
-                        if item[0] == step.get("tool")
-                        and actual_ids < item[1]
-                    ),
-                    None,
-                )
-                consumed = [
-                    item for item in expected.get(agent, [])
-                    if item not in options
-                ]
-                duplicate = next(
-                    (
-                        item for item in consumed
-                        if item[0] == step.get("tool") and item[1] <= actual_ids
-                    ),
-                    None,
-                )
-                assigned_agent = next(
-                    (
-                        owner
-                        for owner, items in remaining.items()
-                        if owner != agent
-                        and any(
-                            item[0] == step.get("tool")
-                            and item[1] <= actual_ids
-                            for item in items
-                        )
-                    ),
-                    None,
-                )
-                if incomplete is not None:
-                    missing_action_ids = sorted(incomplete[1] - actual_ids)
-                    issue = "missing_ids"
-                    message = (
-                        f"{agent}'s assigned {step.get('tool')} call with "
-                        f"{sorted(actual_ids)} is incomplete; add its missing symbolic "
-                        f"IDs: {missing_action_ids}."
-                    )
-                elif duplicate is not None:
-                    missing_action_ids = []
-                    issue = "duplicate"
-                    message = (
-                        f"{agent} repeats assigned action {duplicate[2]}; remove the "
-                        "duplicate call."
-                    )
-                else:
-                    missing_action_ids = []
-                    issue = "wrong_owner"
-                    message = (
-                        f"{agent} performs {step.get('tool')} with {sorted(actual_ids)}, "
-                        "which is not assigned to it by the generation work partition."
-                    )
-                raise TrajectoryValidationError(
-                    message,
-                    details={
-                        "agent": agent,
-                        "step": step.get("step"),
-                        "tool": step.get("tool"),
-                        "actual_ids": sorted(actual_ids),
-                        "action_issue": issue,
-                        "missing_action_ids": missing_action_ids,
-                        "assigned_actions": [item[2] for item in options],
-                        "assigned_agent": assigned_agent,
-                    },
-                )
-            options.remove(match)
-        missing = {
-            agent: [item[2] for item in items]
-            for agent, items in remaining.items()
-            if items
-        }
-        if missing:
-            raise TrajectoryValidationError(
-                "Trajectory does not perform every action in its generation "
-                f"work partition: {missing}",
-                details={"missing_partition_actions": missing},
-            )
 
     def validate_flat_legacy(
         self,

@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 import pytest
 
 from data_generation.task_level.generation.raw.config import RuntimeConfig
@@ -40,7 +38,7 @@ def test_simplified_prompt_keeps_legacy_prompt_selectable():
     assert simplified != legacy
 
 
-def test_simplified_prompt_has_eight_rules_and_grounded_partition():
+def test_simplified_prompt_has_eight_rules():
     definition = get_task_definition("AddSugarCubes")
     instance = definition.build_task_instance(0, _config())
     prompt = definition.build_prompt(
@@ -48,11 +46,7 @@ def test_simplified_prompt_has_eight_rules_and_grounded_partition():
     )
 
     assert sum(f"\n{number}. " in prompt for number in range(1, 9)) == 8
-    assert "agent_0 performs: pick_up_object sugar_cube_1" in prompt
-    assert "agent_1 performs: pick_up_object sugar_cube_2" in prompt
-    assert "agent_0: sugar_cube_1; agent_1: sugar_cube_2" in prompt
-    assert "Shared destinations need not be repeated" in prompt
-    assert "Both assignments use cake_plate" not in prompt
+    assert "Choose an efficient division of work from the initial state." in prompt
 
 
 def test_tick_prompt_displays_wait_and_optional_communication_contract():
@@ -136,7 +130,7 @@ def test_simplified_v3_uses_explicit_blocked_schema_and_prompt():
 
 def test_simplified_v3_no_partition_prefers_coherent_two_agent_work():
     definition = get_task_definition("AddSugarCubes")
-    config = replace(_config("simplified_v3"), partition_policy="none")
+    config = _config("simplified_v3")
     instance = definition.build_task_instance(0, config)
     prompt = definition.build_prompt(
         "test", task_instance=instance, prompt_style="simplified_v3"

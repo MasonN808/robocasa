@@ -59,10 +59,6 @@ class RuntimeConfig:
     temperature: float
     max_workers: int
     max_retries: int
-    # Pins every run to one work partition, identified by its `labels`.
-    # Only for the calibration sweep that measures how reliably the model
-    # can produce each split; normal generation samples them by weight.
-    work_partition: str | None = None
     # Generate rows of simultaneous actions instead of a flat step list, and
     # let the model place its own waits. See tick_format.py.
     tick_format: bool = False
@@ -70,8 +66,6 @@ class RuntimeConfig:
     prompt_style: str = "legacy"
     # Selects how validation failures are presented on the next attempt.
     retry_feedback_style: str = "targeted"
-    # Controls whether and how a per-run physical-action ownership split is chosen.
-    partition_policy: str = "weighted"
     random_start_location: bool = True
     # Deterministically sample open/closed states for eligible cabinets,
     # refrigerators, and drawers. Eligibility is inferred from symbolic state
@@ -205,10 +199,6 @@ def _validate_runtime_config(runtime_config: RuntimeConfig) -> None:
     if runtime_config.retry_feedback_style not in {"targeted", "observational"}:
         raise TrajectoryGenerationError(
             "--retry-feedback-style must be targeted or observational."
-        )
-    if runtime_config.partition_policy not in {"weighted", "balanced_local", "none"}:
-        raise TrajectoryGenerationError(
-            "--partition-policy must be weighted, balanced_local, or none."
         )
     if runtime_config.run_indices:
         if any(

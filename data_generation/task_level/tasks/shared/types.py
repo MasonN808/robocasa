@@ -46,7 +46,6 @@ class TaskInstance:
     allowed_tool_specs: dict[str, dict[str, Any]] | None = None
     task_goal: str | None = None
     extra_execution_rules: tuple[str, ...] = ()
-    work_partition: dict[str, Any] | None = None
     coordinator_id: str | None = None
     # Model-hidden physical initialization identity used to select a certified
     # rendering/evaluation scene. Coordinator and communication choices are

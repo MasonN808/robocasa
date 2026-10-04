@@ -4803,7 +4803,6 @@ class GenerationTests(unittest.TestCase):
                 "initialization": {
                     "random_start_location": True,
                     "random_access_state": False,
-                    "partition_policy": "weighted",
                 },
                 "reasoning": {"thinking_level": None},
                 "sampling": {"temperature": 0.5, "strategy": "base"},
@@ -5590,44 +5589,7 @@ class GenerationTests(unittest.TestCase):
         )
         self.assertIn(constraint, feedback)
 
-    def test_partition_correction_overrides_later_navigation_repair(self):
-        ownership = (
-            "Remove agent_1's place_on_surface(bowl, dining_counter); it belongs "
-            "to agent_0. Do not repair this ownership error by navigating the "
-            "wrong agent there."
-        )
-        feedback = _build_retry_feedback_text_from_validation(
-            {
-                "is_valid": False,
-                "error_type": "NavigationSemanticValidationError",
-                "error": "wrong location",
-                "error_details": {
-                    "agent": "agent_1",
-                    "tool": "place_on_surface",
-                    "actual_ids": ["bowl", "dining_counter"],
-                    "current_location": "counter",
-                    "expected_location": "dining_counter",
-                },
-            },
-            candidate=make_valid_candidate(),
-            prior_constraints=[ownership],
-        )
-        self.assertIn("must remove that action", feedback)
-        self.assertNotIn("insert navigate_to_fixture", feedback)
 
-    def test_remote_give_space_moves_before_departure_when_partner_needs_fixture(self):
-        constraint = _compact_retry_constraint(
-            "NavigationSemanticValidationError",
-            "wrong location",
-            {
-                "agent": "agent_1",
-                "tool": "give_space",
-                "expected_location": "cab",
-                "partner_needs_location": True,
-            },
-        )
-        self.assertIn("agent_1's give_space()", constraint)
-        self.assertIn("expected cab", constraint)
 
     def test_navigation_constraint_retains_agent_tool_and_ids(self):
         constraint = _compact_retry_constraint(
@@ -7457,7 +7419,6 @@ class GenerationTests(unittest.TestCase):
                 "initialization": {
                     "random_start_location": True,
                     "random_access_state": True,
-                    "partition_policy": "weighted",
                 },
                 "reasoning": {"thinking_level": None},
                 "sampling": {"temperature": 0.6, "strategy": "base"},
@@ -7535,7 +7496,6 @@ class GenerationTests(unittest.TestCase):
                 "initialization": {
                     "random_start_location": True,
                     "random_access_state": True,
-                    "partition_policy": "weighted",
                 },
                 "reasoning": {"thinking_level": None},
                 "sampling": {"temperature": 0.6, "strategy": "base"},

@@ -1447,17 +1447,6 @@ class FiniteStateTaskValidator:
                 else ""
             )
             current_location_label = current_location or "unknown location"
-            assignment = (
-                (getattr(self, "work_partition", None) or {}).get("assignment") or {}
-            )
-            partner_needs_location = any(
-                any(
-                    self._assignment_needs_location(descriptions, location)
-                    for location in accepted_locations
-                )
-                for other_agent, descriptions in assignment.items()
-                if other_agent != step["agent"]
-            )
             destination_label = (
                 expected_location
                 if len(accepted_locations) == 1
@@ -1484,35 +1473,8 @@ class FiniteStateTaskValidator:
                         .get(step["agent"], {})
                         .get("location")
                     ),
-                    "partner_needs_location": partner_needs_location,
                 },
             )
-
-    def _assignment_needs_location(
-        self,
-        descriptions: Sequence[str],
-        fixture_id: str,
-    ) -> bool:
-        """Whether assigned work reaches a fixture, including implicit pickup sources."""
-
-        fixture_pattern = re.compile(
-            rf"(?<![A-Za-z0-9_]){re.escape(fixture_id)}(?![A-Za-z0-9_])"
-        )
-        objects = self.initial_state.get("objects") or {}
-        for description in descriptions:
-            if fixture_pattern.search(description):
-                return True
-            if not description.startswith("pick_up_object "):
-                continue
-            for object_id, object_state in objects.items():
-                if not re.search(
-                    rf"(?<![A-Za-z0-9_]){re.escape(object_id)}(?![A-Za-z0-9_])",
-                    description,
-                ):
-                    continue
-                if isinstance(object_state, dict) and object_state.get("location") == fixture_id:
-                    return True
-        return False
 
     def _require_other_agent_at_fixture(
         self,

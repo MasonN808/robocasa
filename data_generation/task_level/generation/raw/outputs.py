@@ -220,7 +220,6 @@ def _build_model_config_payload(runtime_config: RuntimeConfig) -> dict[str, Any]
         "initialization": {
             "random_start_location": runtime_config.random_start_location,
             "random_access_state": runtime_config.random_access_state,
-            "partition_policy": runtime_config.partition_policy,
         },
         "reasoning": {
             "thinking_level": runtime_config.thinking_level,

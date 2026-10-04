@@ -258,21 +258,6 @@ def _compact_retry_constraint(
     if unnecessary:
         pair = unnecessary[0]
         return f"A prior attempt used an unnecessary handover for roomy resource {pair.get('resource')}."
-    if details.get("action_issue") == "missing_ids":
-        agent = details.get("agent") or "the agent"
-        tool = details.get("tool") or "action"
-        missing = ", ".join(map(str, details.get("missing_action_ids") or ()))
-        return f"A prior assigned {agent} {tool} call omitted required IDs: {missing}."
-    if details.get("action_issue") == "duplicate":
-        agent = details.get("agent") or "the agent"
-        tool = details.get("tool") or "action"
-        return f"A prior attempt duplicated {agent}'s assigned {tool} call."
-    if "not assigned to it by the generation work partition" in str(message or ""):
-        agent = details.get("agent") or "that agent"
-        owner = details.get("assigned_agent") or "the assigned agent"
-        tool = details.get("tool") or "action"
-        ids = ", ".join(map(str, details.get("actual_ids") or ()))
-        return f"A prior attempt assigned {agent}'s {tool}({ids}) action to {owner}, violating the sampled work partition."
     return "Prior validator observation: " + str(message or error_type).split("\n")[0][:240]
 
 
@@ -301,48 +286,16 @@ def _specific_retry_guidance(
         current = details.get("current_location") or "an unknown location"
         expected = details.get("expected_location")
         tool = details.get("tool")
-        ids = ", ".join(map(str, details.get("actual_ids") or ()))
-        ownership_correction = (
-            f"Remove {agent}'s {tool}({ids});"
-            if ids else None
-        )
         if tool == "give_space":
-            if details.get("partner_needs_location"):
-                lines.append(
-                    f"- {agent} is now at {current}, but the partner needs {expected}. "
-                    f"Move give_space({expected}) to the last tick where {agent} is still "
-                    f"at {expected}, immediately before it leaves; remove this later remote call."
-                )
-            else:
-                lines.append(
-                    f"- {agent} is at {current}, so remove its unnecessary remote "
-                    f"give_space({expected}); the partner has no assigned work there."
-                )
-        elif expected and not (
-            ownership_correction
-            and any(
-                constraint.startswith(ownership_correction)
-                for constraint in prior_constraints
+            lines.append(
+                f"- {agent} is at {current}, so remove its unnecessary remote "
+                f"give_space({expected}); the partner has no assigned work there."
             )
-        ):
+        elif expected:
             lines.append(
                 f"- {agent} is at {current}. Immediately before the rejected {tool}, "
                 f"insert navigate_to_fixture(fixture_id={expected!r})."
             )
-        elif expected:
-            lines.append(
-                f"- Do not insert navigation for {agent}'s rejected {tool}. "
-                "An earlier work-partition correction says this agent must remove that action."
-            )
-    if "not assigned to it by the generation work partition" in str(message or ""):
-        agent = details.get("agent") or "the acting agent"
-        owner = details.get("assigned_agent") or "the assigned partner"
-        tool = details.get("tool") or "action"
-        ids = ", ".join(map(str, details.get("actual_ids") or ()))
-        lines.append(
-            f"- Remove {agent}'s {tool}({ids}). Keep that action with {owner}; "
-            "do not navigate the wrong agent there to make the call executable."
-        )
     own_last = details.get("own_last_physical_tick")
     if own_last is not None and "portion_complete message" in str(message or ""):
         agent = details.get("agent") or "the finished agent"
@@ -1676,10 +1629,6 @@ def _build_trajectory_records_from_sampled_candidates(
             )
         # Generation-only audit metadata. Preprocessing intentionally does not
         # place this latent diversity scaffold in the model context.
-        if task_instance.work_partition is not None:
-            trajectory_record["generation_work_partition"] = deepcopy(
-                task_instance.work_partition
-            )
         sampling_metadata = _sampling_metadata_for_candidate(
             runtime_config=runtime_config,
             sampled_candidate=sampled_candidate,

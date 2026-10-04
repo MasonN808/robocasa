@@ -53,7 +53,6 @@ def _config(
         tick_format=True,
         prompt_style="simplified_v3",
         retry_feedback_style="observational",
-        partition_policy="none",
     )
 
 

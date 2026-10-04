@@ -155,7 +155,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         tick_format=True,
         prompt_style="simplified_v3",
         retry_feedback_style="observational",
-        partition_policy="none",
     )
     definition = get_task_definition(args.task)
     instance = definition.build_task_instance(args.run_index, config)

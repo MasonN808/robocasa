@@ -102,7 +102,6 @@ class TaskSpec:
     grounding: dict[str, Any]
     example_trajectory: dict[str, Any]
     notes: tuple[str, ...] = ()
-    work_partitions: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "TaskSpec":
@@ -170,7 +169,6 @@ class TaskSpec:
             grounding=dict(payload["grounding"]),
             example_trajectory=dict(payload["example_trajectory"]),
             notes=tuple(str(note_text) for note_text in payload.get("notes", ())),
-            work_partitions=dict(payload.get("work_partitions", {}) or {}),
         )
 
 

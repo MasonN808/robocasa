@@ -17,7 +17,6 @@ from data_generation.task_level.tasks.shared.instances import (
     build_randomized_fixture_task_instance,
     make_symbolic_trajectory_record_builder,
 )
-from data_generation.task_level.tasks.shared.partitions import select_partition
 from data_generation.task_level.tasks.shared.prompting import make_task_prompt_builder
 from data_generation.task_level.tasks.shared.schema import build_task_response_schema
 from tick_format import TICK_FORMAT_RULES, build_tick_response_schema
@@ -91,11 +90,6 @@ class SpecDrivenTaskValidator(FiniteStateTaskValidator):
         self.coordinator_id = (
             task_instance.coordinator_id
             if task_instance is not None
-            else None
-        )
-        self.work_partition = (
-            deepcopy(task_instance.work_partition)
-            if task_instance is not None and task_instance.work_partition
             else None
         )
         effective_initial_state = (
@@ -654,36 +648,11 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
             run_index=physical_configuration_index,
             runtime_config=runtime_config,
         )
-        # The partition rides on the instance so a retry, which reuses the
-        # instance, retries the same division of work rather than drifting to
-        # whichever split the model finds easiest.
-        partitions = (task_spec.work_partitions or {}).get("partitions") or []
-        forced = getattr(runtime_config, "work_partition", None)
-        if forced:
-            chosen = next(
-                (p for p in partitions if p.get("labels") == forced), None
-            )
-            if chosen is None:
-                raise ValueError(
-                    f"{task_spec.composite_task} has no work partition "
-                    f"{forced!r}; available: "
-                    f"{[p.get('labels') for p in partitions]}"
-                )
-            chosen = dict(chosen)
-        else:
-            chosen = select_partition(
-                partitions,
-                run_index,
-                policy=getattr(runtime_config, "partition_policy", "weighted"),
-                initial_state=instance.initial_state,
-                work_sequence=(task_spec.work_partitions or {}).get("work_sequence") or (),
-            )
         rules = instance.extra_execution_rules or task_spec.extra_execution_rules
         if getattr(runtime_config, "tick_format", False):
             rules = tuple(rules) + TICK_FORMAT_RULES
         return replace(
             instance,
-            work_partition=chosen,
             coordinator_id=task_spec.agent_ids[run_index % len(task_spec.agent_ids)],
             extra_execution_rules=tuple(rules),
             # Tick generation lets the model author waits, so its prompt must
