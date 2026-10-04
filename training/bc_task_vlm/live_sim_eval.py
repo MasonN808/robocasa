@@ -46,12 +46,9 @@ from typing import Any
 from urllib import error as urllib_error, request as urllib_request
 
 from training.bc_task_vlm.prompting import (
-    DEFAULT_PARTIAL_STEP_INDEX_MODE,
     PROMPT_CONTRACT_VERSION,
     build_messages,
     build_partial_user_prompt,
-    build_user_prompt,
-    normalize_partial_history_steps,
 )
 from training.bc_task_vlm.communication_profiles import (
     COMMUNICATION_MODES,
@@ -60,16 +57,12 @@ from training.bc_task_vlm.communication_profiles import (
 )
 from training.bc_task_vlm.schema_utils import (
     augment_tool_specs_with_get_image,
-    TASK_COMPLETE_TOOL_NAME,
-    augment_tool_specs_for_agent_prediction,
-    compact_json_dumps,
     apply_eval_fixture_aliases,
 )
 from training.bc_task_vlm.task_registry import AGENT_IDS, get_task_metadata
 from training.bc_task_vlm.tool_calling import (
     build_tool_schemas,
     parse_first_qwen_tool_call,
-    pop_agent_argument,
     tool_call_to_single_step_payload,
 )
 from data_generation.task_level.subatomic_tool_specs import build_model_tool_specs
@@ -100,117 +93,7 @@ WRIST_VIEWS = ("wrist", "agentview_center")
 ROUTER_VIEWS = ("top_view", "wrist", "agentview_center")
 OPENING_COMMUNICATION_STEP_INDICES = frozenset({2, 3})
 NAVIGATE_TOOLS = {"navigate_to_fixture"}
-GET_IMAGE_OBSERVATION_MODE_NEXT_TURN = "next_turn"
-GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE = "causal_cache"
-GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED = (
-    "causal_cache_centralized"
-)
-GET_IMAGE_OBSERVATION_MODES = (
-    GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
-    GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE,
-    GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED,
-)
 _NUMBERED_OBJECT_RE = re.compile(r"^obj_(\d+)$")
-
-
-def canonical_views_for_tool(tool_name: str) -> tuple[str, ...]:
-    if tool_name in NAVIGATE_TOOLS:
-        return SCOUT_VIEWS
-    if tool_name in {"communicate", TASK_COMPLETE_TOOL_NAME}:
-        return OVERHEAD_VIEWS
-    return WRIST_VIEWS
-
-
-def _global_step_index_for_turn(turn_index: int) -> int:
-    """Map a live action turn to the global indices used during SFT.
-
-    Demonstrations begin with one observation for each agent (global steps 0
-    and 1), followed by the two opening communication actions (steps 2 and 3).
-    Thereafter the live loop acquires a fresh observation before every action,
-    so each additional decision advances the global index by two.
-    """
-
-    if turn_index < 0:
-        raise ValueError("turn_index must be non-negative")
-    if turn_index < 2:
-        return turn_index + 2
-    return 2 * turn_index + 1
-
-
-def _step_index_for_turn(
-    turn_index: int, *, active_observation: bool
-) -> int:
-    """Return the SFT-compatible index for the selected observation mode."""
-
-    if active_observation:
-        if turn_index < 0:
-            raise ValueError("turn_index must be non-negative")
-        return turn_index
-    return _global_step_index_for_turn(turn_index)
-
-
-def _cached_observation_for_agent(
-    cached_observations_by_agent: dict[str, tuple[list[str], list[str]]],
-    agent_id: str | None,
-) -> tuple[list[str] | None, tuple[str, ...]]:
-    """Return only the selected agent's prefix-derived visual cache."""
-
-    if agent_id is None:
-        return None, ()
-    cached = cached_observations_by_agent.get(agent_id)
-    if cached is None:
-        return None, ()
-    image_paths, view_names = cached
-    return list(image_paths), tuple(view_names)
-
-
-def _record_agent_observation(
-    cached_observations_by_agent: dict[str, tuple[list[str], list[str]]],
-    *,
-    agent_id: str,
-    image_paths: list[str],
-    view_names: list[str],
-) -> None:
-    """Update one logical agent cache without granting access to the other."""
-
-    cached_observations_by_agent[agent_id] = (
-        list(image_paths),
-        list(view_names),
-    )
-
-
-def _uses_causal_cached_observations(observation_mode: str) -> bool:
-    """Return whether a mode uses prefix-derived per-agent image caches."""
-
-    return observation_mode in {
-        GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE,
-        GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED,
-    }
-
-
-def _causal_cache_rejection_reason(
-    *,
-    tool_name: str,
-    proposed_agent: str,
-    active_observation_agent: str | None,
-    allow_cross_owner_communication: bool = False,
-) -> str | None:
-    """Enforce the selected causal-cache action-ownership contract."""
-
-    if tool_name in {"get_image", TASK_COMPLETE_TOOL_NAME}:
-        return None
-    if tool_name == "communicate" and allow_cross_owner_communication:
-        return None
-    if active_observation_agent is None:
-        if tool_name == "communicate":
-            return None
-        return "physical action requires a preceding agent-owned get_image"
-    if proposed_agent != active_observation_agent:
-        return (
-            f"active observation belongs to {active_observation_agent}, "
-            f"not {proposed_agent}"
-        )
-    return None
 
 
 def _check_pruned_organize_condiments_success(
@@ -397,21 +280,6 @@ def observation_ready_at(
 _LENIENT_WAIT_DISCHARGE = False
 
 
-def _releases_awaited(step: dict[str, Any], waiting_for: dict[str, Any]) -> bool:
-    """True when this message hands over the thing the waiter is waiting for."""
-
-    from data_generation.task_level.tasks.shared.scheduling import (
-        message_releases_wait,
-    )
-
-    about = str((waiting_for or {}).get("about") or "").strip()
-    if not about:
-        return True
-    return message_releases_wait(
-        step, waiting_for, lenient=_LENIENT_WAIT_DISCHARGE
-    )
-
-
 class AgentRuntime:
     """Private state for one logical agent under partial observability."""
 
@@ -459,24 +327,6 @@ def _proposal_key(step: dict[str, Any]) -> str:
     return json.dumps(
         {"tool": step.get("tool"), "args": step.get("args") or {}}, sort_keys=True
     )
-
-
-def _tool_invalidates_active_observation(tool_name: str) -> bool:
-    """Physical tools mutate the scene or robot pose; communication does not."""
-
-    return tool_name not in {
-        "communicate",
-        "get_image",
-        TASK_COMPLETE_TOOL_NAME,
-    }
-
-
-def _routing_views_for_step(step_index: int) -> tuple[str, ...]:
-    """Use trained opening views, then a target-independent routing bundle."""
-
-    if step_index in OPENING_COMMUNICATION_STEP_INDICES:
-        return OVERHEAD_VIEWS
-    return ROUTER_VIEWS
 
 
 def _budget_reference_action_count(trajectory: dict[str, Any]) -> int:
@@ -1302,7 +1152,7 @@ class GeminiPolicy:
                 # emit it on every call, which then failed validation -- the
                 # agent relaunched the same rejected proposal until its
                 # rejection budget drained, scoring 0 for harness reasons.
-                include_agent_param=bool(feature.get("predict_agent", True)),
+                include_agent_param=False,
             )
         ]
         config_kwargs: dict[str, Any] = {
@@ -1385,419 +1235,6 @@ def _uses_model_generation(policy: Any) -> bool:
 # ---------------------------------------------------------------------------
 # The live loop for one trajectory
 # ---------------------------------------------------------------------------
-
-
-def run_trajectory(
-    *,
-    session: SimSession,
-    policy,
-    args: argparse.Namespace,
-    task_name: str,
-    composite_task: str,
-    trajectory: dict[str, Any],
-    frames_dir: Path | None,
-) -> dict[str, Any]:
-    task_metadata = get_task_metadata(task_name)
-    train_get_image = bool(getattr(args, "train_get_image", False))
-    get_image_observation_mode = getattr(
-        args,
-        "get_image_observation_mode",
-        GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
-    )
-    causal_cached_observations = (
-        train_get_image
-        and _uses_causal_cached_observations(get_image_observation_mode)
-    )
-    centralized_causal_communication = (
-        get_image_observation_mode
-        == GET_IMAGE_OBSERVATION_MODE_CAUSAL_CACHE_CENTRALIZED
-    )
-    communication_mode = getattr(args, "communication_mode", "full")
-    tool_specs = apply_communication_profile(
-        augment_tool_specs_for_agent_prediction(
-            task_metadata.allowed_tool_specs,
-            include_get_image=train_get_image,
-            include_task_complete=bool(
-                getattr(args, "predict_task_complete", False)
-            ),
-        ),
-        communication_mode,
-    )
-    model_tool_specs = apply_communication_profile(
-        build_model_tool_specs(
-            include_get_image=train_get_image,
-            include_task_complete=bool(
-                getattr(args, "predict_task_complete", False)
-            ),
-        ),
-        communication_mode,
-    )
-    tool_schemas = build_tool_schemas(
-        agent_ids=AGENT_IDS,
-        allowed_tool_specs=model_tool_specs,
-        include_agent_param=True,
-    )
-    adapter, adapted = session.start_trajectory(trajectory)
-    # Simulator-adapted IDs are concrete scene names. The FSM keeps the
-    # trajectory's symbolic state and normalizes legacy symbols to the current
-    # verified task spec inside FsmMirror.
-    mirror = FsmMirror(
-        composite_task=composite_task,
-        trajectory=trajectory,
-        communication_mode=communication_mode,
-    )
-    _register_canonical_fixture_aliases(adapter, trajectory)
-    if frames_dir is not None:
-        session.executor.save_scene_frames(str(frames_dir), prefix="step_-001")
-
-    expert_action_steps = [
-        s for s in trajectory["steps"] if s.get("tool") != "get_image"
-    ]
-    budget_multiplier = 2 if train_get_image else 1
-    budget_reference_steps = _budget_reference_action_count(trajectory)
-    step_budget = max(
-        4, int(budget_reference_steps * args.step_budget_factor * budget_multiplier)
-    )
-    is_model_policy = _uses_model_generation(policy)
-
-    history: list[dict[str, Any]] = []
-    records: list[dict[str, Any]] = []
-    consecutive_rejections = 0
-    declared_complete = False
-    termination = "budget_exhausted"
-    last_executed_tool: str | None = None
-    turn_index = 0
-    requested_views: tuple[str, ...] | None = None
-    requested_agent: str | None = None
-    cached_observations_by_agent: dict[
-        str, tuple[list[str], list[str]]
-    ] = {}
-    active_observation_agent: str | None = None
-
-    while turn_index < step_budget:
-        step_index = _step_index_for_turn(
-            turn_index, active_observation=train_get_image
-        )
-        proposal_observation_agent = (
-            active_observation_agent
-            if causal_cached_observations
-            else requested_agent
-        )
-        views_used: tuple[str, ...] | None = None
-        proposal_started = time.perf_counter()
-        if is_model_policy:
-            proposal, views_used = _model_propose_step(
-                session=session,
-                policy=policy,
-                args=args,
-                task_metadata=task_metadata,
-                tool_specs=tool_specs,
-                tool_schemas=tool_schemas,
-                trajectory=trajectory,
-                history=history,
-                step_index=step_index,
-                last_executed_tool=last_executed_tool,
-                frames_dir=frames_dir,
-                requested_views=requested_views,
-                requested_agent=requested_agent,
-                cached_observations_by_agent=cached_observations_by_agent,
-                active_observation_agent=active_observation_agent,
-            )
-            requested_views = None
-            requested_agent = None
-        else:
-            proposal = policy.next_step()
-        if proposal is None:
-            termination = "policy_exhausted"
-            break
-
-        private_reasoning = str(proposal.pop("_private_reasoning", "") or "")
-        parser_recovery = str(proposal.pop("_parser_recovery", "") or "")
-
-        record: dict[str, Any] = {
-            "step_index": step_index,
-            "proposal": deepcopy(proposal),
-            "views": list(views_used) if views_used else None,
-            "proposal_elapsed_s": round(time.perf_counter() - proposal_started, 3),
-            "observation_agent": (
-                proposal_observation_agent if train_get_image else None
-            ),
-            "private_reasoning": private_reasoning or None,
-            "parser_recovery": parser_recovery or None,
-        }
-        if "error" in proposal:
-            # Unparseable model output: no-op with feedback.
-            record.update(legal=False, executed=False, reason=proposal["error"])
-            history.append(
-                {
-                    "step": step_index,
-                    "agent": proposal.get("agent") or "agent_0",
-                    "tool": proposal.get("tool") or "invalid",
-                    "args": proposal.get("args") or {},
-                    "error": proposal["error"][:120],
-                }
-            )
-            consecutive_rejections += 1
-            records.append(record)
-            if consecutive_rejections >= args.max_consecutive_rejections:
-                termination = "max_consecutive_rejections"
-                break
-            turn_index += 1
-            continue
-
-        if proposal["tool"] == TASK_COMPLETE_TOOL_NAME:
-            declared_complete = True
-            record.update(legal=True, executed=False, reason=None)
-            records.append(record)
-            termination = "task_complete_declared"
-            break
-
-        if proposal["tool"] == "get_image":
-            views = tuple(proposal.get("args", {}).get("views", ()))
-            known_views = set(OVERHEAD_VIEWS + SCOUT_VIEWS + WRIST_VIEWS)
-            if not views or any(view not in known_views for view in views):
-                record.update(
-                    legal=False,
-                    executed=False,
-                    reason="invalid observation views",
-                )
-                consecutive_rejections += 1
-            else:
-                record.update(legal=True, executed=True, reason=None)
-                history.append(
-                    {
-                        "step": step_index,
-                        "agent": proposal["agent"],
-                        "tool": "get_image",
-                        "args": {"views": list(views)},
-                    }
-                )
-                if causal_cached_observations:
-                    render_dir = frames_dir or Path(args.output_dir) / "_tmp_views"
-                    image_paths, view_names = session.render_views(
-                        views,
-                        agent_id=proposal["agent"],
-                        out_dir=render_dir,
-                        tag=f"turn_{step_index:03d}_request_{len(views)}v",
-                    )
-                    _record_agent_observation(
-                        cached_observations_by_agent,
-                        agent_id=proposal["agent"],
-                        image_paths=image_paths,
-                        view_names=view_names,
-                    )
-                    active_observation_agent = proposal["agent"]
-                else:
-                    requested_views = views
-                    requested_agent = proposal["agent"]
-                consecutive_rejections = 0
-            records.append(record)
-            turn_index += 1
-            continue
-
-        if causal_cached_observations:
-            cache_reason = _causal_cache_rejection_reason(
-                tool_name=proposal["tool"],
-                proposed_agent=proposal["agent"],
-                active_observation_agent=active_observation_agent,
-                allow_cross_owner_communication=(
-                    centralized_causal_communication
-                ),
-            )
-            if cache_reason is not None:
-                record.update(legal=False, executed=False, reason=cache_reason)
-                history.append(
-                    {
-                        "step": step_index,
-                        "agent": proposal["agent"],
-                        "tool": proposal["tool"],
-                        "args": deepcopy(proposal["args"]),
-                        "error": cache_reason[:120],
-                    }
-                )
-                consecutive_rejections += 1
-                records.append(record)
-                if consecutive_rejections >= args.max_consecutive_rejections:
-                    termination = "max_consecutive_rejections"
-                    break
-                turn_index += 1
-                continue
-
-        symbolic_step = {
-            "step": step_index,
-            "agent": proposal["agent"],
-            "tool": proposal["tool"],
-            "args": deepcopy(proposal["args"]),
-        }
-        symbolic_state_before = deepcopy(mirror.runtime_state)
-        symbolic_goal_before = mirror.goal_satisfied
-        legal, reason = mirror.step(symbolic_step)
-        record.update(legal=legal, reason=reason)
-
-        # Only the oracle (expert replay) bypasses the legality gate; model
-        # and degenerate policies are subject to it.
-        should_execute = legal or isinstance(policy, OraclePolicy)
-        if not should_execute:
-            record["executed"] = False
-            history.append({**symbolic_step, "error": (reason or "illegal")[:120]})
-            consecutive_rejections += 1
-            records.append(record)
-            if consecutive_rejections >= args.max_consecutive_rejections:
-                termination = "max_consecutive_rejections"
-                break
-            turn_index += 1
-            continue
-
-        try:
-            tool_call = adapter._adapt_step(
-                symbolic_step,
-                resolved_initial_state=adapted["initial_state"],
-                output_dir=None,
-            )
-            result = session.executor.execute(
-                tool_call["tool"],
-                robot_idx=tool_call.get("robot_idx", 0),
-                **tool_call.get("args", {}),
-            )
-            record.update(
-                executed=True,
-                sim_success=bool(result.success),
-            )
-            if not result.success:
-                mirror.runtime_state = symbolic_state_before
-                mirror.goal_satisfied = symbolic_goal_before
-                details = getattr(result, "details", None) or {}
-                sim_reason = str(
-                    details.get("error")
-                    or details.get("reason")
-                    or "simulator reported an unsuccessful tool call"
-                )
-                record["sim_error"] = sim_reason
-                history.append({**symbolic_step, "error": sim_reason[:120]})
-                consecutive_rejections += 1
-                records.append(record)
-                if consecutive_rejections >= args.max_consecutive_rejections:
-                    termination = "max_consecutive_rejections"
-                    break
-                turn_index += 1
-                continue
-        except Exception as exc:
-            mirror.runtime_state = symbolic_state_before
-            mirror.goal_satisfied = symbolic_goal_before
-            record.update(
-                executed=False,
-                sim_success=False,
-                sim_error=f"{type(exc).__name__}: {exc}",
-            )
-            history.append(
-                {**symbolic_step, "error": f"{type(exc).__name__}: {exc}"[:120]}
-            )
-            consecutive_rejections += 1
-            records.append(record)
-            if consecutive_rejections >= args.max_consecutive_rejections:
-                termination = "max_consecutive_rejections"
-                break
-            turn_index += 1
-            continue
-
-        consecutive_rejections = 0
-        last_executed_tool = symbolic_step["tool"]
-        history.append(symbolic_step)
-        if causal_cached_observations and _tool_invalidates_active_observation(
-            symbolic_step["tool"]
-        ):
-            active_observation_agent = None
-        if frames_dir is not None:
-            try:
-                session.executor.save_scene_frames(
-                    str(frames_dir), prefix=f"step_{step_index:03d}"
-                )
-            except Exception:
-                pass
-
-        record["fsm_goal"] = mirror.goal_satisfied
-        native_now, native_err = session.native_success()
-        record["native_success"] = native_now
-        if native_err:
-            record["native_error"] = native_err
-        records.append(record)
-
-        # Honor --success-criterion here exactly as run_trajectory_partial
-        # does. This path used to hardcode "native and fsm", which scored
-        # centralized rollouts on a strictly harder bar than partial ones and
-        # made the centralized-vs-partial comparison invalid: a rollout that
-        # satisfies the task spec but fails the teleporting executor's
-        # geometric native check terminated as goal_satisfied under partial
-        # and ran to budget_exhausted under centralized.
-        criterion = getattr(args, "success_criterion", "fsm")
-        reached = (
-            mirror.goal_satisfied
-            if criterion == "fsm"
-            else (mirror.goal_satisfied and native_now)
-        )
-        if reached:
-            termination = "goal_satisfied"
-            turn_index += 1
-            break
-        turn_index += 1
-
-    native, native_error = session.native_success()
-    fsm_goal = mirror.goal_satisfied
-    first_rejection = next(
-        (
-            record for record in records
-            if record.get("legal") is False or record.get("sim_success") is False
-        ),
-        None,
-    )
-    had_rejection = first_rejection is not None
-    first_rejection_category = None
-    if first_rejection is not None:
-        first_rejection_category = (
-            "simulator_execution_after_fsm_acceptance"
-            if first_rejection.get("legal") is not False
-            and first_rejection.get("sim_success") is False
-            else "model_call_or_symbolic_validation"
-        )
-    return {
-        "task_name": task_name,
-        "composite_task": composite_task,
-        "trajectory_id": trajectory.get("trajectory_id"),
-        "get_image_observation_mode": (
-            get_image_observation_mode if train_get_image else None
-        ),
-        "scene": {"layout": args.layout, "style": args.style, "seed": args.seed},
-        "expert_steps": len(expert_action_steps),
-        "steps_used": len(records),
-        "executed_steps": sum(1 for r in records if r.get("executed")),
-        "rejected_steps": sum(
-            1
-            for r in records
-            if r.get("legal") is False or r.get("sim_success") is False
-        ),
-        "termination": termination,
-        "declared_complete": declared_complete,
-        "native_success": native,
-        "native_error": native_error,
-        "fsm_goal_satisfied": fsm_goal,
-        "had_rejection": had_rejection,
-        "first_rejection": deepcopy(first_rejection),
-        "first_rejection_category": first_rejection_category,
-        "fsm_success_if_terminate_on_first_rejection": bool(
-            fsm_goal and not had_rejection
-        ),
-        "native_success_if_terminate_on_first_rejection": bool(
-            native and not had_rejection
-        ),
-        "partial_goal_fraction": mirror.partial_goal_fraction(),
-        "step_efficiency_ratio": (
-            len(records) / len(expert_action_steps) if expert_action_steps else None
-        ),
-        "agent_turns": [
-            r["proposal"].get("agent") for r in records if r.get("executed")
-        ],
-        "steps": records,
-    }
 
 
 def _opening_protocol_error(
@@ -1993,9 +1430,8 @@ def run_trajectory_partial(
             step_index=turn_index,
             views=tuple(view_names),
             render_dir=render_dir,
-            agent_hint=agent.agent_id,
+            agent_id=agent.agent_id,
             pre_rendered_image_paths=image_paths if image_paths else None,
-            partial_caller=agent.agent_id,
         )
         return proposal, tuple(view_names) if view_names else None
 
@@ -2725,110 +2161,6 @@ def _handle_rejection(
     )
 
 
-def _model_propose_step(
-    *,
-    session: SimSession,
-    policy: "VllmPolicy | GeminiPolicy",
-    args: argparse.Namespace,
-    task_metadata,
-    tool_specs: dict[str, Any],
-    tool_schemas: list[dict[str, Any]],
-    trajectory: dict[str, Any],
-    history: list[dict[str, Any]],
-    step_index: int,
-    last_executed_tool: str | None,
-    frames_dir: Path | None,
-    requested_views: tuple[str, ...] | None = None,
-    requested_agent: str | None = None,
-    cached_observations_by_agent: dict[
-        str, tuple[list[str], list[str]]
-    ] | None = None,
-    active_observation_agent: str | None = None,
-) -> tuple[dict[str, Any], tuple[str, ...]]:
-    """Propose under the selected active-observation or legacy view contract."""
-
-    render_dir = (frames_dir or Path(args.output_dir) / "_tmp_views")
-    if getattr(args, "train_get_image", False):
-        observation_mode = getattr(
-            args,
-            "get_image_observation_mode",
-            GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
-        )
-        if _uses_causal_cached_observations(observation_mode):
-            cached_image_paths, views = _cached_observation_for_agent(
-                cached_observations_by_agent or {},
-                active_observation_agent,
-            )
-            proposal = _generate_once(
-                session=session,
-                policy=policy,
-                args=args,
-                task_metadata=task_metadata,
-                tool_specs=tool_specs,
-                tool_schemas=tool_schemas,
-                trajectory=trajectory,
-                history=history,
-                step_index=step_index,
-                views=views,
-                render_dir=render_dir,
-                agent_hint=active_observation_agent,
-                pre_rendered_image_paths=cached_image_paths,
-            )
-            return proposal, views
-        views = requested_views or ()
-        proposal = _generate_once(
-            session=session,
-            policy=policy,
-            args=args,
-            task_metadata=task_metadata,
-            tool_specs=tool_specs,
-            tool_schemas=tool_schemas,
-            trajectory=trajectory,
-            history=history,
-            step_index=step_index,
-            views=views,
-            render_dir=render_dir,
-            agent_hint=requested_agent,
-        )
-        return proposal, views
-    views = _routing_views_for_step(step_index)
-    proposal = _generate_once(
-        session=session,
-        policy=policy,
-        args=args,
-        task_metadata=task_metadata,
-        tool_specs=tool_specs,
-        tool_schemas=tool_schemas,
-        trajectory=trajectory,
-        history=history,
-        step_index=step_index,
-        views=views,
-        render_dir=render_dir,
-    )
-    if not args.two_pass_views or "error" in proposal:
-        return proposal, views
-    canonical = canonical_views_for_tool(proposal["tool"])
-    if canonical == views:
-        return proposal, views
-    second = _generate_once(
-        session=session,
-        policy=policy,
-        args=args,
-        task_metadata=task_metadata,
-        tool_specs=tool_specs,
-        tool_schemas=tool_schemas,
-        trajectory=trajectory,
-        history=history,
-        step_index=step_index,
-        views=canonical,
-        render_dir=render_dir,
-        agent_hint=proposal.get("agent"),
-    )
-    if "error" in second:
-        return proposal, views
-    return second, canonical
-
-
 def _generate_once(
     *,
     session: SimSession,
@@ -2842,20 +2174,15 @@ def _generate_once(
     step_index: int,
     views: tuple[str, ...],
     render_dir: Path,
-    agent_hint: str | None = None,
+    agent_id: str,
     pre_rendered_image_paths: list[str] | None = None,
-    partial_caller: str | None = None,
 ) -> dict[str, Any]:
+    """One model proposal for ``agent_id`` from that agent's private context."""
+
     communication_mode = getattr(args, "communication_mode", "full")
     communication_profile = get_communication_profile(communication_mode)
     model_tool_specs = apply_communication_profile(
-        build_model_tool_specs(
-            include_get_image=bool(getattr(args, "train_get_image", False)),
-            include_task_complete=bool(
-                not (partial_caller is not None)
-                and getattr(args, "predict_task_complete", False)
-            ),
-        ),
+        build_model_tool_specs(include_get_image=True),
         communication_mode,
     )
     if pre_rendered_image_paths is not None:
@@ -2864,85 +2191,40 @@ def _generate_once(
     elif views:
         image_paths, view_names = session.render_views(
             views,
-            agent_id=agent_hint or "agent_0",
+            agent_id=agent_id,
             out_dir=render_dir,
             tag=f"turn_{step_index:03d}_{len(views)}v",
         )
     else:
         image_paths, view_names = [], []
-    partial = partial_caller is not None
-    if partial:
-        # The caller is the actor: no agent prediction, no joint step index,
-        # and observation ownership is implicit in the private state.
-        # Was "none" here, "local" in training, "global" in the other two
-        # evaluators. A missing attribute must not silently mean a different
-        # prompt than the model was trained on.
-        index_mode = getattr(
-            args, "partial_step_index_mode", DEFAULT_PARTIAL_STEP_INDEX_MODE
-        )
-        user_prompt = build_partial_user_prompt(
-            composite_task=task_metadata.composite_task,
-            task_instruction=task_metadata.task_goal,
-            agent_id=partial_caller,
-            global_step_index=step_index,
-            observation_views=view_names,
-            history_steps=history,
-            allowed_tool_specs=model_tool_specs,
-            partial_step_index_mode=index_mode,
-            coordinator_id=(
-                trajectory.get("coordinator_id")
-                if communication_profile.require_opening_protocol
-                else None
-            ),
-            initial_state=trajectory.get("initial_state"),
-            communication_mode=communication_mode,
-        )
-    else:
-        user_prompt = build_user_prompt(
-            composite_task=task_metadata.composite_task,
-            task_instruction=task_metadata.task_goal,
-            agent_id="",
-            next_step_index=step_index,
-            observation_views=view_names,
-            history_steps=history,
-            allowed_tool_specs=model_tool_specs,
-            sft_format="tool_call",
-            observation_owner=agent_hint,
-            include_observation_owner=(
-                _uses_causal_cached_observations(
-                    getattr(
-                        args,
-                        "get_image_observation_mode",
-                        GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
-                    )
-                )
-            ),
-            coordinator_id=(
-                trajectory.get("coordinator_id")
-                if communication_profile.require_opening_protocol
-                else None
-            ),
-            predict_agent=True,
-            initial_state=trajectory.get("initial_state"),
-            communication_mode=communication_mode,
-        )
+    # The caller is the actor: no agent prediction and no step index.
+    user_prompt = build_partial_user_prompt(
+        composite_task=task_metadata.composite_task,
+        task_instruction=task_metadata.task_goal,
+        agent_id=agent_id,
+        observation_views=view_names,
+        history_steps=history,
+        allowed_tool_specs=model_tool_specs,
+        coordinator_id=(
+            trajectory.get("coordinator_id")
+            if communication_profile.require_opening_protocol
+            else None
+        ),
+        initial_state=trajectory.get("initial_state"),
+        communication_mode=communication_mode,
+    )
     feature = {
         "sample_id": f"live/{trajectory.get('trajectory_id')}/turn_{step_index}",
         "task_name": task_metadata.dataset_name,
         "trajectory_id": str(trajectory.get("trajectory_id") or ""),
         "step_index": step_index,
-        "agent_id": partial_caller or agent_hint or "",
-        # Policies that rebuild tool declarations from allowed_tool_specs need
-        # to know whether the "agent" argument is part of this contract.
-        "predict_agent": not partial,
+        "agent_id": agent_id,
         "target_payload": None,
         "target_tool_call": None,
         "target_text": "",
         "messages": build_messages(
             user_prompt=user_prompt,
             num_images=len(image_paths),
-            predict_agent=not partial,
-            train_get_image=bool(getattr(args, "train_get_image", False)),
             # The generation collator strips the labeled assistant turn before
             # tokenization, so retain its expected training-example shape.
             target_text="",
@@ -2958,18 +2240,12 @@ def _generate_once(
         parsed = parse_first_qwen_tool_call(decoded)
         # eval-only cab<->cabinet leniency; never makes a legal call illegal
         parsed = apply_eval_fixture_aliases(parsed, tool_specs)
-        if partial:
-            # Caller identity is fixed by the scheduler; the model never names
-            # an acting agent under the distributed contract.
-            agent, stripped = partial_caller, parsed
-        else:
-            agent, stripped = pop_agent_argument(parsed)
-        if agent not in AGENT_IDS:
-            return {"error": f'missing/invalid "agent" argument: {agent!r}'}
+        # Caller identity is fixed by the scheduler; the model never names an
+        # acting agent.
         payload = tool_call_to_single_step_payload(
-            stripped,
+            parsed,
             step_index=step_index,
-            agent_id=agent,
+            agent_id=agent_id,
             agent_ids=AGENT_IDS,
             allowed_tool_specs=model_tool_specs,
         )
@@ -3185,17 +2461,6 @@ def parse_args() -> argparse.Namespace:
             "followed by </tool_call> but missing <tool_call>."
         ),
     )
-    parser.add_argument(
-        "--predict-task-complete",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Match the adapter's training flag. --no-predict-task-complete "
-            "removes task_complete from the tool set, so a centralized rollout "
-            "can only end on goal satisfaction, budget exhaustion or "
-            "rejections -- the same terminations available to partial-obs."
-        ),
-    )
     parser.add_argument("--image-resolution", type=int, default=512)
     parser.add_argument("--max-length", type=int, default=16384)
     parser.add_argument("--max-new-tokens", type=int, default=256)
@@ -3208,7 +2473,6 @@ def parse_args() -> argparse.Namespace:
             "recorded for diagnostics but never added to either agent's history."
         ),
     )
-    parser.add_argument("--sft-format", choices=("tool_call",), default="tool_call")
     parser.add_argument(
         "--communication-mode",
         choices=COMMUNICATION_MODES,
@@ -3221,29 +2485,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--no-forced-json", action="store_true")
-    parser.add_argument(
-        "--train-get-image",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Let the model request observations with get_image.",
-    )
-    parser.add_argument(
-        "--get-image-observation-mode",
-        choices=GET_IMAGE_OBSERVATION_MODES,
-        default=GET_IMAGE_OBSERVATION_MODE_NEXT_TURN,
-        help=(
-            "How model-emitted get_image observations condition later calls. "
-            "next_turn sends them to the immediately following proposal. "
-            "Both causal-cache modes render each successful request "
-            "immediately, keep agent caches separate, and expose only the "
-            "previously active agent's cache. causal_cache enforces that "
-            "communication uses that owner; causal_cache_centralized allows "
-            "the centralized policy to select either communication speaker. "
-            "Physical actions require the active owner and clear the active "
-            "visual context. No step parity or current-target information is "
-            "used."
-        ),
-    )
     parser.add_argument("--model", default="gemini-3.5-flash-preview")
     parser.add_argument("--project", default=None)
     parser.add_argument("--location", default=None)
@@ -3271,30 +2512,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-output-tokens", type=int, default=256)
     parser.add_argument("--thinking-budget", type=int, default=0)
     partial = parser.add_argument_group("partial observability")
-    partial.add_argument(
-        "--partial-history",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Run the distributed contract: per-agent private history (own "
-        "actions + delivered messages), consume-once observations, and a "
-        "concurrent per-agent scheduler. The caller IS the actor, so the model "
-        "no longer predicts the acting agent.",
-    )
-    partial.add_argument(
-        "--partial-step-index-mode",
-        choices=("global", "local", "none"),
-        default=DEFAULT_PARTIAL_STEP_INDEX_MODE,
-        help="How step indices are rendered; 'local' (default) uses only the "
-        "caller's private turn numbering, while 'none' omits them; "
-        "a joint global index leaks the other agent's hidden activity.",
-    )
-    partial.add_argument(
-        "--partial-observation-mode",
-        choices=("cache", "consume-once"),
-        default="consume-once",
-        help="'consume-once' feeds a get_image result to that agent's next call "
-        "then discards it, matching the trained contract.",
-    )
     partial.add_argument(
         "--conflict-priority",
         choices=("agent-order", "seeded"),
@@ -3464,14 +2681,6 @@ def main() -> None:
     args = parse_args()
     if args.map_dpi < 1:
         raise SystemExit("--map-dpi must be at least 1")
-    if (
-        args.get_image_observation_mode != GET_IMAGE_OBSERVATION_MODE_NEXT_TURN
-        and not args.train_get_image
-    ):
-        raise SystemExit(
-            "non-default --get-image-observation-mode requires "
-            "--train-get-image"
-        )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     scene_compatibility_cache = None
@@ -3495,15 +2704,16 @@ def main() -> None:
     if manifest.get("manifest_type") in {
         "fixed_live_sim", "fixed_live_sim_configuration_targets"
     }:
+        # The evaluator runs one fixed contract (private history, no step
+        # indices); refuse a cohort frozen for any other.
         contract = manifest.get("contract", {})
-        expected_index_mode = contract.get("partial_step_index_mode")
-        if expected_index_mode and args.partial_step_index_mode != expected_index_mode:
+        if contract.get("partial_step_index_mode", "none") != "none" or (
+            contract.get("partial_history") is False
+        ):
             raise SystemExit(
-                "fixed cohort requires --partial-step-index-mode "
-                f"{expected_index_mode}, got {args.partial_step_index_mode}"
+                "fixed cohort was built for a different prompt contract: "
+                f"{contract!r}"
             )
-        if contract.get("partial_history") and not args.partial_history:
-            raise SystemExit("fixed cohort requires --partial-history")
     if args.tasks:
         keep = {t.strip() for t in args.tasks.split(",")}
         available = ", ".join(sorted(episodes_by_task))
@@ -3711,12 +2921,7 @@ def main() -> None:
                         trajectory_policy = OraclePolicy(trajectory["steps"])
                     else:
                         trajectory_policy = policy
-                    runner = (
-                        run_trajectory_partial
-                        if getattr(args, "partial_history", False)
-                        else run_trajectory
-                    )
-                    result = runner(
+                    result = run_trajectory_partial(
                         session=session,
                         policy=trajectory_policy,
                         args=args,

@@ -3,13 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
 
 from data_generation.task_level.tasks.shared.validation_contract import (
     VALIDATOR_CONTRACT_VERSION,
 )
-from training.bc_task_vlm import dataset, live_sim_eval, main
-from training.bc_task_vlm.prompting import PROMPT_CONTRACT_VERSION
+from data_generation.task_level.subatomic_tool_specs import build_model_tool_specs
+from training.bc_task_vlm import dataset, live_sim_eval
 
 
 def _step(index: int, agent: str, tool: str, args: dict) -> dict:
@@ -87,14 +86,12 @@ def _build_examples(monkeypatch, tmp_path, raw_steps, **build_kwargs):
             side_effect=lambda path: loaded[path.name],
         ),
     ):
-        sft_format = build_kwargs.pop("sft_format", dataset.SFT_FORMAT_PLAIN)
         examples = dataset._build_centralized_examples_for_trajectory(
             task_name="synthetic_task",
             trajectory_dir=tmp_path,
-            sft_format=sft_format,
             response_schema={},
             tool_schemas=[],
-            partial_history=True,
+            model_tool_specs=build_model_tool_specs(include_get_image=True),
             **build_kwargs,
         )
     return {example.step_index: example for example in examples}
@@ -111,55 +108,6 @@ _RAW_STEPS = [
 ]
 
 
-def test_partial_history_is_agent_private(monkeypatch, tmp_path):
-    # Pinned to "global" numbering because this test is about WHICH steps an
-    # agent sees, not how they are numbered. The builder's default moved from
-    # "global" to "local" (commit 8881b4b) and the renumbering silently broke
-    # the assertion below, which looks like a privacy regression and is not.
-    by_step = _build_examples(
-        monkeypatch, tmp_path, _RAW_STEPS, partial_step_index_mode="global"
-    )
-
-    # agent_1's example never contains agent_0's private navigate_to_fixture.
-    agent1_history_tools = [s["tool"] for s in by_step[4].history_steps]
-    assert "navigate_to_fixture" not in agent1_history_tools
-    assert by_step[4].history_steps == [
-        {"step": 2, "agent": "agent_0", "tool": "communicate", "args": {"to": "agent_1", "message": "doing X"}}
-    ]
-
-
-def test_partial_history_is_agent_private_under_the_default_numbering(
-    monkeypatch, tmp_path
-):
-    """The privacy property must not depend on partial_step_index_mode."""
-
-    by_step = _build_examples(monkeypatch, tmp_path, _RAW_STEPS)
-
-    assert "navigate_to_fixture" not in [s["tool"] for s in by_step[4].history_steps]
-    history = by_step[4].history_steps
-    assert [(s["agent"], s["tool"]) for s in history] == [("agent_0", "communicate")]
-    # The production default is no indexing, so the joint index is absent.
-    assert [s["step"] for s in history] == [None]
-
-    # agent_0's later example sees its own prior actions plus the delivered
-    # message from agent_1, but never agent_1's private pick_up_object.
-    agent0_history_tools = [s["tool"] for s in by_step[6].history_steps]
-    assert agent0_history_tools == ["navigate_to_fixture", "communicate", "communicate"]
-    assert "pick_up_object" not in agent0_history_tools
-
-
-def test_partial_history_message_delivery_timing(monkeypatch, tmp_path):
-    # "global" keeps the joint index, which is what identifies the step being
-    # asserted about here. See the note in test_partial_history_is_agent_private.
-    by_step = _build_examples(
-        monkeypatch, tmp_path, _RAW_STEPS, partial_step_index_mode="global"
-    )
-
-    # The step-2 message must not appear in agent_1's history before it was
-    # sent, only from the first agent_1 example emitted after step 2.
-    assert by_step[4].history_steps[-1]["step"] == 2
-
-
 def test_partial_history_prefix_invariance(monkeypatch, tmp_path):
     mutated_steps = list(_RAW_STEPS[:5]) + [
         _step(5, "agent_1", "communicate", {"to": "agent_0", "message": "COMPLETELY DIFFERENT"}),
@@ -174,52 +122,6 @@ def test_partial_history_prefix_invariance(monkeypatch, tmp_path):
         assert original[step_index].image_paths == mutated[step_index].image_paths
 
 
-@pytest.mark.parametrize(
-    ("predict_agent", "train_get_image"),
-    # (False, True) is NOT here: that combination is partial-observability v3
-    # (get_image supervised, caller identity still fixed), which is legal.
-    [(True, False), (True, True)],
-)
-def test_partial_history_requires_no_agent_prediction(
-    tmp_path, predict_agent, train_get_image
-):
-    with pytest.raises(ValueError, match="requires predict_agent=False"):
-        dataset.build_centralized_examples(
-            dataset_root=tmp_path,
-            task_names=[],
-            predict_agent=predict_agent,
-            train_get_image=train_get_image,
-            partial_history=True,
-        )
-
-
-def test_partial_history_changes_example_cache_fingerprint(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        dataset,
-        "get_task_metadata",
-        lambda _name: SimpleNamespace(
-            dataset_name="synthetic_task",
-            composite_task="SyntheticTask",
-            allowed_tool_specs={},
-        ),
-    )
-    monkeypatch.setattr(dataset, "_trajectory_dirs_for_task", lambda **_kwargs: [])
-
-    legacy = dataset.build_example_cache_fingerprint(
-        dataset_root=tmp_path,
-        task_name="synthetic_task",
-    )
-    partial = dataset.build_example_cache_fingerprint(
-        dataset_root=tmp_path,
-        task_name="synthetic_task",
-        partial_history=True,
-    )
-
-    assert "partial_history" not in legacy
-    assert partial["partial_history"] is True
-    assert partial != legacy
-
-
 _V3_RAW_STEPS = [
     _step(0, "agent_0", "get_image", {"views": ["top_view", "room_view", "map"]}),
     _step(1, "agent_1", "get_image", {"views": ["top_view", "room_view", "map"]}),
@@ -231,9 +133,7 @@ _V3_RAW_STEPS = [
 
 
 def _build_v3(monkeypatch, tmp_path):
-    return _build_examples(
-        monkeypatch, tmp_path, _V3_RAW_STEPS, train_get_image=True
-    )
+    return _build_examples(monkeypatch, tmp_path, _V3_RAW_STEPS)
 
 
 def test_partial_v3_keeps_true_requester_on_global_views(monkeypatch, tmp_path):
@@ -263,21 +163,62 @@ def test_partial_v3_history_stays_agent_private(monkeypatch, tmp_path):
     assert agents_in_history <= {"agent_1"}
 
 
-@pytest.mark.parametrize("index_mode", ["none", "local"])
+def test_partial_history_is_agent_private(monkeypatch, tmp_path):
+    by_step = _build_examples(monkeypatch, tmp_path, _RAW_STEPS)
+
+    # agent_1 sees agent_0's message and its own request, never agent_0's
+    # private navigate_to_fixture or get_image.
+    history = by_step[4].history_steps
+    assert [(s["agent"], s["tool"]) for s in history] == [
+        ("agent_0", "communicate"),
+        ("agent_1", "get_image"),
+    ]
+    # No step index is ever shown: a joint index leaks hidden partner activity.
+    assert [s["step"] for s in history] == [None, None]
+
+    # agent_0 sees its own prior calls plus the message delivered from
+    # agent_1, but never agent_1's private pick_up_object.
+    assert [(s["agent"], s["tool"]) for s in by_step[6].history_steps] == [
+        ("agent_0", "get_image"),
+        ("agent_0", "navigate_to_fixture"),
+        ("agent_0", "communicate"),
+        ("agent_1", "communicate"),
+    ]
+
+
+def test_partial_history_message_delivery_timing(monkeypatch, tmp_path):
+    by_step = _build_examples(monkeypatch, tmp_path, _RAW_STEPS)
+
+    # The sender's own target never contains the message it is about to send;
+    # the recipient sees it from its first example after the send.
+    assert all(s["tool"] != "communicate" for s in by_step[2].history_steps)
+    assert [s["args"]["message"] for s in by_step[3].history_steps] == ["doing X"]
+
+
+def test_consume_once_feeds_an_observation_to_the_next_call_only(
+    monkeypatch, tmp_path
+):
+    raw_steps = [
+        _step(0, "agent_0", "get_image", {"views": ["agentview_center"]}),
+        _step(1, "agent_0", "communicate", {"to": "agent_1", "message": "hi"}),
+        _step(2, "agent_0", "get_image", {"views": ["wrist"]}),
+        _step(3, "agent_0", "navigate_to_fixture", {"fixture_id": "counter"}),
+    ]
+    by_step = _build_examples(monkeypatch, tmp_path, raw_steps)
+
+    assert by_step[1].image_paths == ["/generated/agent_0_0.png"]
+    # The communicate at step 1 consumed that image, so the next request is
+    # image-free; the physical action then sees only the fresh wrist view.
+    assert by_step[2].image_paths == []
+    assert by_step[3].image_paths == ["/generated/agent_0_2.png"]
+
+
 def test_training_and_live_eval_prompt_context_match_for_expert_prefix(
-    monkeypatch, tmp_path, index_mode
+    monkeypatch, tmp_path
 ):
     """The same expert prefix must produce the same model-visible request."""
 
-    by_step = _build_examples(
-        monkeypatch,
-        tmp_path,
-        _V3_RAW_STEPS,
-        train_get_image=True,
-        sft_format=dataset.SFT_FORMAT_TOOL_CALL,
-        partial_step_index_mode=index_mode,
-    )
-    training_example = by_step[5]
+    training_example = _build_examples(monkeypatch, tmp_path, _V3_RAW_STEPS)[5]
 
     class CapturingPolicy:
         def __init__(self):
@@ -292,16 +233,10 @@ def test_training_and_live_eval_prompt_context_match_for_expert_prefix(
         _step(1, "agent_1", "get_image", {"views": ["top_view", "room_view", "map"]}),
         _step(4, "agent_1", "get_image", {"views": ["wrist"]}),
     ]
-    args = SimpleNamespace(
-        partial_step_index_mode=index_mode,
-        train_get_image=True,
-        task_spec_detail=False,
-        few_shot=False,
-    )
     live_sim_eval._generate_once(
         session=None,
         policy=policy,
-        args=args,
+        args=SimpleNamespace(),
         task_metadata=SimpleNamespace(
             dataset_name="synthetic_task",
             composite_task="SyntheticTask",
@@ -321,8 +256,8 @@ def test_training_and_live_eval_prompt_context_match_for_expert_prefix(
         step_index=5,
         views=("wrist",),
         render_dir=tmp_path,
+        agent_id="agent_1",
         pre_rendered_image_paths=["/generated/agent_1_4.png"],
-        partial_caller="agent_1",
     )
 
     assert policy.feature is not None
@@ -335,65 +270,5 @@ def test_training_and_live_eval_prompt_context_match_for_expert_prefix(
     assert "must not enter or use X in the same concurrent tick" in user_text
     assert "following tick without calling wait_for_signal" in user_text
     assert "remains blocked throughout a later matching release tick" in user_text
-    assert "step=4 " not in user_text
-    if index_mode == "none":
-        assert "step=" not in user_text
-        assert "Next local agent turn index:" not in user_text
-    else:
-        assert "step=0 " in user_text
-        assert "step=1 " in user_text
-        assert "Next local agent turn index: 2" in user_text
-
-
-def test_partial_history_still_rejects_agent_prediction(tmp_path):
-    with pytest.raises(ValueError, match="requires predict_agent=False"):
-        dataset.build_centralized_examples(
-            dataset_root=tmp_path,
-            task_names=[],
-            predict_agent=True,
-            partial_history=True,
-        )
-
-
-@pytest.mark.parametrize(
-    ("mode", "expect_physical", "expect_communicate", "expect_get_image"),
-    [
-        # cache: persistent per-agent observation, everyone sees pixels
-        ("cache", True, True, True),
-        # consume_once: a get_image result feeds only that agent's NEXT call
-        ("consume_once", True, True, False),
-    ],
-)
-def test_partial_observation_modes_control_image_attachment(
-    monkeypatch, tmp_path, mode, expect_physical, expect_communicate, expect_get_image
-):
-    raw_steps = [
-        _step(0, "agent_0", "get_image", {"views": ["agentview_center"]}),
-        _step(1, "agent_0", "communicate", {"to": "agent_1", "message": "hi"}),
-        _step(2, "agent_0", "get_image", {"views": ["wrist"]}),
-        _step(3, "agent_0", "navigate_to_fixture", {"fixture_id": "counter"}),
-    ]
-    by_step = _build_examples(
-        monkeypatch,
-        tmp_path,
-        raw_steps,
-        train_get_image=True,
-        partial_observation_mode=mode,
-    )
-
-    # step 3 is the physical action; step 1 communicate; step 2 a get_image
-    # that itself follows a get_image (so "consume_once" would still feed it).
-    assert bool(by_step[3].image_paths) is expect_physical
-    assert bool(by_step[1].image_paths) is expect_communicate
-    # step 2 follows a *communicate*, which already consumed the pending image
-    # under consume_once, so this get_image target sees nothing.
-    assert bool(by_step[2].image_paths) is expect_get_image
-
-
-def test_partial_observation_mode_rejects_unknown_value(monkeypatch, tmp_path):
-    with pytest.raises(ValueError, match="partial_observation_mode must be one of"):
-        _build_examples(
-            monkeypatch, tmp_path, _RAW_STEPS, partial_observation_mode="bogus"
-        )
-
-
+    assert "step=" not in user_text
+    assert "Next local agent turn index:" not in user_text

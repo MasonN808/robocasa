@@ -98,8 +98,6 @@ def main() -> None:
             history_steps=[],
             observation_views=[],
             allowed_tool_specs=model_tools,
-            partial_step_index_mode="none",
-            global_step_index=0,
             coordinator_id=instance.coordinator_id,
             initial_state=instance.initial_state,
         )

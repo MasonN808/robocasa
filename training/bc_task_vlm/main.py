@@ -30,13 +30,8 @@ except ImportError:  # pragma: no cover - compatibility with older transformers
     from transformers import AutoModelForVision2Seq as AutoVisionLanguageModel
 
 from training.bc_task_vlm.dataset import (
-    DEFAULT_PARTIAL_STEP_INDEX_MODE,
-    PARTIAL_STEP_INDEX_MODES,
     CentralizedDataset,
     LazyVisionSFTCollator,
-    SFT_FORMAT_PLAIN,
-    SFT_FORMAT_TOOL_CALL,
-    SUPPORTED_SFT_FORMATS,
     build_example_cache_fingerprint,
     build_example_cache_path,
     build_centralized_examples,
@@ -70,15 +65,7 @@ class RunConfiguration:
     validation_trajectories_per_task: int
     validation_trajectory_fraction: float
     validation_split_seed: int
-    sft_format: str
-    predict_acting_agent: bool
-    train_get_image: bool
     train_reasoning: bool
-    predict_task_complete: bool
-    causal_single_cache: bool
-    partial_history: bool
-    partial_step_index_mode: str
-    partial_observation_mode: str
     init_adapter_path: str | None
     use_example_cache: bool
     trust_example_cache: bool
@@ -210,96 +197,13 @@ def parse_args() -> argparse.Namespace:
         help="Seed for selecting held-out validation trajectories. Defaults to --seed.",
     )
     parser.add_argument(
-        "--sft-format",
-        choices=SUPPORTED_SFT_FORMATS,
-        default=SFT_FORMAT_PLAIN,
-        help=(
-            "'plain' trains assistant text tokens directly. 'tool_call' trains "
-            "Qwen/Hugging Face function-call messages and enables structured "
-            "generation evaluation."
-        ),
-    )
-    parser.add_argument(
-        "--predict-acting-agent",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Agent-prediction (v2) SFT: drop the acting agent from the prompt, "
-            'supervise it as a required "agent" argument, add the synthetic '
-            "task_complete terminal step, and include task_complete in the "
-            "tool schemas."
-        ),
-    )
-    parser.add_argument(
-        "--train-get-image",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Active-observation (v3) SFT: supervise get_image tool calls and "
-            "retain them in history. Requires --predict-acting-agent."
-        ),
-    )
-    parser.add_argument(
         "--train-reasoning",
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "SFT v1.5 reasoning probe: supervise a `<think>{reasoning}</think>` "
-            "prefix before each assistant tool call, sourced from the "
-            "trajectory's per-step reasoning string. Orthogonal to "
-            "--predict-acting-agent/--train-get-image; composes with either."
-        ),
-    )
-    parser.add_argument(
-        "--predict-task-complete",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "OFF by default. task_complete is deliberately excluded so that a "
-            "centralized run stays structurally comparable to partial "
-            "observability, which never offers it (the caller is the actor). "
-            "When it was enabled, centralized cells over-used it: they "
-            "declared completion at 0.27-0.45 while succeeding at 0.05-0.40, "
-            "and every premature declaration ends the episode and forfeits the "
-            "remaining step budget. Pass --predict-task-complete only to "
-            "reproduce those earlier runs."
-        ),
-    )
-    parser.add_argument(
-        "--causal-single-cache",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use causal single-agent visual cache semantics for active-observation SFT.",
-    )
-    parser.add_argument(
-        "--partial-history",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Partial-observability v1 SFT: restrict each example's history to "
-            "the acting agent's own actions plus delivered communicate "
-            "messages, instead of the full joint history. Mutually exclusive "
-            "with --predict-acting-agent/--train-get-image."
-        ),
-    )
-    parser.add_argument(
-        "--partial-step-index-mode",
-        choices=PARTIAL_STEP_INDEX_MODES,
-        default=DEFAULT_PARTIAL_STEP_INDEX_MODE,
-        help=(
-            "With --partial-history: how step indices are rendered. 'local' "
-            "(default) renumbers per agent, giving a step count that does not "
-            "leak the other agent's activity; 'global' keeps the joint "
-            "demonstration index (which does leak it, via the gaps between "
-            "this agent's turns); 'none' omits indices from the prompt."
-        ),
-    )
-    parser.add_argument(
-        "--partial-observation-mode",
-        choices=("cache", "consume-once"),
-        default="consume-once",
-        help=(
-            'With --partial-history: how pixels are supplied. "cache" keeps a persistent per-agent observation; "consume-once" feeds a get_image result to that agent\'s next target tool call, then discards it.'
+            "Supervise a `<think>{reasoning}</think>` prefix before each "
+            "assistant tool call, sourced from the trajectory's per-step "
+            "rationale."
         ),
     )
     parser.add_argument(
@@ -744,15 +648,7 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
             if args.validation_split_seed is not None
             else args.seed
         ),
-        sft_format=args.sft_format,
-        predict_acting_agent=args.predict_acting_agent,
-        train_get_image=args.train_get_image,
         train_reasoning=args.train_reasoning,
-        predict_task_complete=args.predict_task_complete,
-        causal_single_cache=args.causal_single_cache,
-        partial_history=args.partial_history,
-        partial_step_index_mode=args.partial_step_index_mode,
-        partial_observation_mode=args.partial_observation_mode.replace('-', '_'),
         init_adapter_path=args.init_adapter_path,
         use_example_cache=args.use_example_cache,
         trust_example_cache=args.trust_example_cache,
@@ -1080,19 +976,7 @@ def _build_examples_for_tasks(
     dataset_root: Path,
     task_names: list[str],
     split_name: str,
-    sft_format: str,
-    predict_agent: bool = False,
-    train_get_image: bool = False,
     train_reasoning: bool = False,
-    # False everywhere else -- argparse, and all three dataset.py signatures.
-    # Both call sites pass config.predict_task_complete explicitly, so this
-    # stale True was never reached, but it is exactly the entry-point-dependent
-    # default that commit 8881b4b set out to remove.
-    predict_task_complete: bool = False,
-    causal_single_cache: bool = False,
-    partial_history: bool = False,
-    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
-    partial_observation_mode: str = "consume_once",
     use_example_cache: bool,
     trust_example_cache: bool,
     training_samples_cache_dir: Path,
@@ -1134,15 +1018,7 @@ def _build_examples_for_tasks(
                 dataset_root=dataset_root,
                 task_name=task_name,
                 trajectory_ids=task_trajectory_ids,
-                sft_format=sft_format,
-                predict_agent=predict_agent,
-                train_get_image=train_get_image,
                 train_reasoning=train_reasoning,
-                predict_task_complete=predict_task_complete,
-                causal_single_cache=causal_single_cache,
-                partial_history=partial_history,
-                partial_step_index_mode=partial_step_index_mode,
-                partial_observation_mode=partial_observation_mode,
             )
             if trust_example_cache:
                 task_examples = load_examples_from_cache(
@@ -1163,15 +1039,7 @@ def _build_examples_for_tasks(
                     dataset_root=dataset_root,
                     task_name=task_name,
                     trajectory_ids=task_trajectory_ids,
-                    sft_format=sft_format,
-                    predict_agent=predict_agent,
-                    train_get_image=train_get_image,
                     train_reasoning=train_reasoning,
-                    predict_task_complete=predict_task_complete,
-                    causal_single_cache=causal_single_cache,
-                    partial_history=partial_history,
-                    partial_step_index_mode=partial_step_index_mode,
-                    partial_observation_mode=partial_observation_mode,
                 )
                 trajectory_count = len(fingerprint.get("trajectories", ()))
                 task_examples = load_examples_from_cache(
@@ -1208,15 +1076,7 @@ def _build_examples_for_tasks(
                     task_names=[task_name],
                     show_progress=state.is_main_process,
                     progress_description=progress_description,
-                    sft_format=sft_format,
-                    predict_agent=predict_agent,
-                    train_get_image=train_get_image,
                     train_reasoning=train_reasoning,
-                    predict_task_complete=predict_task_complete,
-                    causal_single_cache=causal_single_cache,
-                    partial_history=partial_history,
-                    partial_step_index_mode=partial_step_index_mode,
-                    partial_observation_mode=partial_observation_mode,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1246,15 +1106,7 @@ def _build_examples_for_tasks(
                     task_names=[task_name],
                     show_progress=False,
                     progress_description=progress_description,
-                    sft_format=sft_format,
-                    predict_agent=predict_agent,
-                    train_get_image=train_get_image,
                     train_reasoning=train_reasoning,
-                    predict_task_complete=predict_task_complete,
-                    causal_single_cache=causal_single_cache,
-                    partial_history=partial_history,
-                    partial_step_index_mode=partial_step_index_mode,
-                    partial_observation_mode=partial_observation_mode,
                     trajectory_ids_by_task=(
                         None
                         if task_trajectory_ids is None
@@ -1492,14 +1344,8 @@ def _validate_preprocessed_contract(
     from training.bc_task_vlm.prompting import PROMPT_CONTRACT_VERSION
 
     expected = {
-        "sft_format": config.sft_format,
-        "predict_acting_agent": config.predict_acting_agent,
-        "train_get_image": config.train_get_image,
+        "train_example_format": "private_history_consume_once",
         "train_reasoning": config.train_reasoning,
-        "causal_single_cache": config.causal_single_cache,
-        "partial_history": config.partial_history,
-        "partial_step_index_mode": config.partial_step_index_mode,
-        "partial_observation_mode": config.partial_observation_mode,
         "trajectory_validator_contract_version": VALIDATOR_CONTRACT_VERSION,
         "prompt_contract_version": PROMPT_CONTRACT_VERSION,
     }
@@ -1510,8 +1356,6 @@ def _validate_preprocessed_contract(
             # Artifacts created before reasoning became part of the persisted
             # preprocessing contract are unambiguously non-reasoning.
             artifact_value = False
-        if key == "partial_observation_mode" and isinstance(artifact_value, str):
-            artifact_value = artifact_value.replace("-", "_")
         if artifact_value != runtime_value:
             mismatches.append(
                 f"{key}: artifact={artifact_value!r}, runtime={runtime_value!r}"
@@ -1702,28 +1546,9 @@ class LengthGroupedTrainer(Trainer):
 def main() -> None:
     load_dotenv_file()
     args = parse_args()
-    if args.train_get_image and not (
-        args.predict_acting_agent or args.partial_history
-    ):
-        raise SystemExit(
-            "--train-get-image requires --predict-acting-agent (centralized v3) "
-            "or --partial-history (partial-observability v3)."
-        )
     config = _build_run_configuration(args)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    if args.causal_single_cache and not (
-        args.predict_acting_agent and args.train_get_image
-    ):
-        raise SystemExit(
-            "--causal-single-cache requires --predict-acting-agent "
-            "and --train-get-image."
-        )
-    if args.partial_history and args.predict_acting_agent:
-        raise SystemExit(
-            "--partial-history requires --no-predict-acting-agent: under "
-            "partial observability the caller IS the actor."
-        )
 
     _configure_wandb(args, config.report_to, output_dir)
     set_seed(config.seed)
@@ -1751,7 +1576,6 @@ def main() -> None:
         f"Using precision {_selected_mixed_precision(config)}",
         state=distributed_state,
     )
-    _log_startup(f"Using SFT format {config.sft_format}", state=distributed_state)
     _log_startup(
         "Using max_tokens "
         f"{config.max_tokens if config.max_tokens is not None else 'unbounded'}",
@@ -1825,15 +1649,7 @@ def main() -> None:
         dataset_root=dataset_root,
         task_names=config.train_tasks,
         split_name="train",
-        sft_format=config.sft_format,
-        predict_agent=config.predict_acting_agent,
-        train_get_image=config.train_get_image,
         train_reasoning=config.train_reasoning,
-        predict_task_complete=config.predict_task_complete,
-        causal_single_cache=config.causal_single_cache,
-        partial_history=config.partial_history,
-        partial_step_index_mode=config.partial_step_index_mode,
-        partial_observation_mode=config.partial_observation_mode,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
@@ -1848,15 +1664,7 @@ def main() -> None:
         dataset_root=dataset_root,
         task_names=config.val_tasks,
         split_name="validation",
-        sft_format=config.sft_format,
-        predict_agent=config.predict_acting_agent,
-        train_get_image=config.train_get_image,
         train_reasoning=config.train_reasoning,
-        predict_task_complete=config.predict_task_complete,
-        causal_single_cache=config.causal_single_cache,
-        partial_history=config.partial_history,
-        partial_step_index_mode=config.partial_step_index_mode,
-        partial_observation_mode=config.partial_observation_mode,
         use_example_cache=config.use_example_cache,
         trust_example_cache=config.trust_example_cache,
         training_samples_cache_dir=Path(config.training_samples_cache_dir),
@@ -1984,7 +1792,6 @@ def main() -> None:
         max_images_per_sample=config.max_images_per_sample,
         supervise_last_assistant_turn_only=config.supervise_last_assistant_turn_only,
         trust_remote_code=config.trust_remote_code,
-        sft_format=config.sft_format,
         image_resolution=config.image_resolution,
     )
 

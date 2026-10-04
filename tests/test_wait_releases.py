@@ -8,56 +8,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from training.bc_task_vlm import live_sim_eval  # noqa: E402
-
-
-class ReleaseDischargeTests(unittest.TestCase):
-    """The live-sim rule that decides whether a message wakes a waiter."""
-
-    WAITING = {"from": "agent_1", "about": "bowl"}
-
-    def setUp(self):
-        live_sim_eval._LENIENT_WAIT_DISCHARGE = False
-
-    tearDown = setUp
-
-    @staticmethod
-    def _message(**args):
-        return {"agent": "agent_1", "tool": "communicate",
-                "args": {"to": "agent_0", "message": "...", **args}}
-
-    def test_release_naming_the_awaited_id_discharges(self):
-        step = self._message(releases="bowl")
-        self.assertTrue(live_sim_eval._releases_awaited(step, self.WAITING))
-
-    def test_release_list_containing_the_awaited_id_discharges(self):
-        step = self._message(releases=["tray", "bowl"])
-        self.assertTrue(live_sim_eval._releases_awaited(step, self.WAITING))
-
-    def test_release_of_something_else_does_not_discharge(self):
-        step = self._message(releases="tray")
-        self.assertFalse(live_sim_eval._releases_awaited(step, self.WAITING))
-
-    def test_unrelated_chatter_does_not_discharge(self):
-        # The arrange_bread_bowl failure: an agent waiting on the bowl was woken
-        # by a message about something else and then collided over it.
-        step = self._message(message="I am heading to the counter now.")
-        self.assertFalse(live_sim_eval._releases_awaited(step, self.WAITING))
-
-    def test_message_mentioning_the_id_in_text_alone_does_not_discharge(self):
-        step = self._message(message="I still need the bowl for a moment.")
-        self.assertFalse(live_sim_eval._releases_awaited(step, self.WAITING))
-
-    def test_lenient_mode_restores_the_old_wake_on_anything_rule(self):
-        live_sim_eval._LENIENT_WAIT_DISCHARGE = True
-        step = self._message(message="unrelated")
-        self.assertTrue(live_sim_eval._releases_awaited(step, self.WAITING))
-
-    def test_wait_naming_nothing_falls_back_to_waking(self):
-        # Nothing specific was named, so nothing specific can hand it over;
-        # waiting forever would be worse than the old behaviour.
-        step = self._message(message="unrelated")
-        self.assertTrue(live_sim_eval._releases_awaited(step, {"about": ""}))
 
 
 class CommunicateArgumentTests(unittest.TestCase):

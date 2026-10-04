@@ -58,15 +58,11 @@ from data_generation.task_level.subatomic_tool_specs import (
 )
 
 from training.bc_task_vlm.prompting import (
-    DEFAULT_PARTIAL_STEP_INDEX_MODE,
     build_messages,
     build_partial_user_prompt,
-    build_user_prompt,
-    normalize_partial_history_steps,
+    strip_history_step_indices,
 )
 from training.bc_task_vlm.schema_utils import (
-    TASK_COMPLETE_TOOL_NAME,
-    augment_tool_specs_for_agent_prediction,
     augment_tool_specs_with_get_image,
     build_single_step_response_schema,
     compact_json_dumps,
@@ -87,30 +83,12 @@ _TRAJECTORY_METADATA_FILENAMES = (
     "plan.json",
     "metadata.json",
 )
-SFT_FORMAT_PLAIN = "plain"
-SFT_FORMAT_TOOL_CALL = "tool_call"
-SUPPORTED_SFT_FORMATS = (SFT_FORMAT_PLAIN, SFT_FORMAT_TOOL_CALL)
-# How partial-observability prompts render step indices. "global" keeps the
-# joint demonstration index (leaks the other agent's hidden activity through
-# the gaps between this agent's turns); "local" renumbers per agent; "none"
-# omits indices from the prompt entirely. See the design doc's decision #8.
-_PARTIAL_STEP_INDEX_MODES = ("global", "local", "none")
-PARTIAL_STEP_INDEX_MODES = _PARTIAL_STEP_INDEX_MODES
-# ONE default, shared by training and every evaluator. They used to disagree
-# three ways -- training "local", build_eval_manifest and eval_standalone
-# "global", live_sim_eval's getattr fallback "none" -- so any run that did not
-# pass the flag explicitly evaluated a model on prompts it was never trained
-# on, and an A/B on this axis would measure the mismatch, not the ablation.
-# How partial-observability prompts supply pixels.
-#   "cache"        - persistent per-agent latest observation (design-doc default)
-#   "consume_once" - a get_image result feeds that agent's NEXT target tool
-#                    call and is then discarded
-# Measured on the training corpus: 100% of physical actions are immediately
-# preceded by that agent's own get_image, so the cache does no work for
-# actions; and 70% of what a cache shows a get_image target is already stale.
-# Under "consume_once" every attached image is fresh by construction.
-_PARTIAL_OBSERVATION_MODES = ("cache", "consume_once")
-_EXAMPLE_CACHE_FORMAT_VERSION = 3
+# Examples use one fixed contract: each agent sees only its own private
+# history (its actions plus messages addressed to it), step indices are never
+# shown, the model is trained to request observations with get_image, and a
+# get_image result feeds only that agent's next target before being discarded
+# ("consume once"), so every attached image is fresh by construction.
+_EXAMPLE_CACHE_FORMAT_VERSION = 4
 _EXAMPLE_CACHE_BINARY_FORMAT_VERSION = 1
 _EXAMPLE_CACHE_ZSTD_SUFFIX = ".pkl.zst"
 _EXAMPLE_CACHE_GZIP_SUFFIX = ".pkl.gz"
@@ -786,11 +764,6 @@ def _require_latest_observation(
         ) from exc
 
 
-def _validate_sft_format(sft_format: str) -> str:
-    if sft_format not in SUPPORTED_SFT_FORMATS:
-        raise ValueError(f"Unsupported SFT format: {sft_format!r}")
-    return sft_format
-
 
 def _raw_step_payload(
     raw_step: dict[str, Any],
@@ -804,63 +777,19 @@ def _raw_step_payload(
     return {"steps": [step]}
 
 
-def _plain_target_text(raw_step: dict[str, Any], *, predict_agent: bool = False) -> str:
-    args = dict(raw_step["args"])
-    if predict_agent:
-        args = {"agent": raw_step["agent"], **args}
-    return compact_json_dumps(
-        {
-            "tool": raw_step["tool"],
-            "args": args,
-        }
-    )
-
-
-def _agent_augmented_tool_call(
-    target_tool_call: dict[str, Any],
-    *,
-    agent_id: str,
-) -> dict[str, Any]:
-    """The v2 supervision/emission form: agent leads the arguments.
-
-    The canonical target_tool_call stays agent-free (scoring and the comm judge
-    compare pure tool arguments); the agent-augmented copy is only what the
-    model is trained to emit.
-    """
-
-    return {
-        "name": target_tool_call["name"],
-        "arguments": {"agent": agent_id, **target_tool_call["arguments"]},
-    }
 
 
 def _build_target_metadata(
     *,
     raw_step: dict[str, Any],
     allowed_tool_specs: dict[str, dict[str, Any]],
-    sft_format: str = SFT_FORMAT_TOOL_CALL,
-    predict_agent: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
-    sft_format = _validate_sft_format(sft_format)
-    if sft_format == SFT_FORMAT_PLAIN:
-        target_payload = _raw_step_payload(raw_step)
-        target_tool_call = {
-            "name": raw_step["tool"],
-            "arguments": dict(raw_step["args"]),
-        }
-        return (
-            target_payload,
-            target_tool_call,
-            _plain_target_text(raw_step, predict_agent=predict_agent),
-        )
-
     # The target is expert ground truth, so a tool it uses is valid by
     # definition. A few tasks' verified specs omit a tool the generated data
     # actually uses (e.g. prepare_cheese_station opens a cabinet with
     # open_hinged_part, absent from its allowed_tool_specs). Rather than reject
-    # the demonstration, fall back to the raw-step target (as the plain path
-    # does) so example-building never crashes on such spec/data mismatches.
-    # Model predictions remain schema-validated separately during scoring.
+    # the demonstration, fall back to the raw-step target so example-building
+    # never crashes on such spec/data mismatches.
     try:
         target_payload = validate_single_step_payload(
             _raw_step_payload(raw_step),
@@ -877,13 +806,7 @@ def _build_target_metadata(
             "name": raw_step["tool"],
             "arguments": dict(raw_step["args"]),
         }
-    emitted_tool_call = target_tool_call
-    if predict_agent:
-        emitted_tool_call = _agent_augmented_tool_call(
-            target_tool_call,
-            agent_id=target_payload["steps"][0]["agent"],
-        )
-    target_text = compact_json_dumps(emitted_tool_call)
+    target_text = compact_json_dumps(target_tool_call)
     return target_payload, target_tool_call, target_text
 
 
@@ -891,46 +814,15 @@ def _build_centralized_examples_for_trajectory(
     *,
     task_name: str,
     trajectory_dir: Path,
-    sft_format: str,
     response_schema: dict[str, Any],
     tool_schemas: list[dict[str, Any]],
-    model_tool_specs: dict[str, dict[str, Any]] | None = None,
-    predict_agent: bool = False,
-    train_get_image: bool = False,
+    model_tool_specs: dict[str, dict[str, Any]],
     train_reasoning: bool = False,
-    predict_task_complete: bool = False,
-    causal_single_cache: bool = False,
-    partial_history: bool = False,
-    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
-    partial_observation_mode: str = "consume_once",
 ) -> list[CentralizedExample]:
-    if partial_history and predict_agent:
-        raise ValueError(
-            "partial_history requires predict_agent=False (the caller is the actor)"
-        )
-    if model_tool_specs is None:
-        model_tool_specs = build_model_tool_specs(
-            include_get_image=bool(train_get_image),
-            include_task_complete=bool(predict_agent and predict_task_complete),
-        )
-    if partial_step_index_mode not in _PARTIAL_STEP_INDEX_MODES:
-        raise ValueError(
-            f"partial_step_index_mode must be one of {sorted(_PARTIAL_STEP_INDEX_MODES)}"
-        )
-    if partial_observation_mode not in _PARTIAL_OBSERVATION_MODES:
-        raise ValueError(
-            f"partial_observation_mode must be one of {sorted(_PARTIAL_OBSERVATION_MODES)}"
-        )
     task_metadata = get_task_metadata(task_name)
-    allowed_tool_specs = task_metadata.allowed_tool_specs
-    if predict_agent:
-        allowed_tool_specs = augment_tool_specs_for_agent_prediction(
-            allowed_tool_specs,
-            include_get_image=train_get_image,
-            include_task_complete=predict_task_complete,
-        )
-    elif partial_history and train_get_image:
-        allowed_tool_specs = augment_tool_specs_with_get_image(allowed_tool_specs)
+    allowed_tool_specs = augment_tool_specs_with_get_image(
+        task_metadata.allowed_tool_specs
+    )
     original_trajectory_path = trajectory_dir / "original_trajectory.json"
     original_trajectory = _load_json(original_trajectory_path)
     from data_generation.task_level.tasks.shared.validation_contract import (
@@ -961,15 +853,12 @@ def _build_centralized_examples_for_trajectory(
     )
 
     examples: list[CentralizedExample] = []
-    history_steps: list[dict[str, Any]] = []
     private_history: dict[str, list[dict[str, Any]]] = {
         agent_id: [] for agent_id in AGENT_IDS
     }
     latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
-    # Unconsumed observation per agent, for the non-"cache" partial modes.
+    # Unconsumed observation per agent (consume-once semantics).
     pending_observation_by_agent: dict[str, tuple[list[str], list[str]] | None] = {}
-    active_observation_agent: str | None = None
-    consuming_partial_images = partial_history and partial_observation_mode != "cache"
     tick_by_step: dict[int, int] = {}
     flat_index = 0
     for tick_index, row in enumerate(original_trajectory.get("tick_rows") or []):
@@ -1002,138 +891,37 @@ def _build_centralized_examples_for_trajectory(
         strict=True,
     ):
         raw_tick = tick_by_step.get(raw_step.get("step"))
-        if partial_history and raw_tick is not None and raw_tick != current_tick:
+        if raw_tick is not None and raw_tick != current_tick:
             flush_tick_history()
             current_tick = raw_tick
-        if raw_step["tool"] == "get_image" and not train_get_image:
-            _record_latest_observation(
-                latest_observations_by_agent=latest_observations_by_agent,
-                plan_step=plan_step, task_name=task_name,
-                trajectory_id=trajectory_id, trajectory_dir=trajectory_dir)
-            if consuming_partial_images:
-                pending_observation_by_agent[raw_step["agent"]] = (
-                    latest_observations_by_agent.get(raw_step["agent"])
-                )
-            continue
 
         effective_raw_step = deepcopy(raw_step)
         effective_raw_step["args"] = canonicalize_model_tool_args(
             str(effective_raw_step.get("tool", "")),
             effective_raw_step.get("args") or {},
         )
-        if (
-            not causal_single_cache
-            and not partial_history
-            and raw_step["tool"] == "get_image"
-            and set(raw_step["args"]["views"]).issubset(
-                {"top_view", "room_view", "map"}
-            )
-        ):
-            effective_raw_step = deepcopy(raw_step)
-            effective_raw_step["agent"] = AGENT_IDS[0]
 
         if not executed_step.get("success", False):
             continue
 
-        if consuming_partial_images:
-            pending = pending_observation_by_agent.get(raw_step["agent"])
-            image_paths, observation_views = (
-                pending if pending is not None else ([], [])
-            )
-        elif causal_single_cache:
-            if active_observation_agent is not None:
-                image_paths, observation_views = _require_latest_observation(
-                    latest_observations_by_agent=latest_observations_by_agent,
-                    before_index=raw_step["step"],
-                    agent_id=active_observation_agent,
-                )
-            else:
-                image_paths, observation_views = [], []
-        elif raw_step["tool"] == "get_image":
-            if partial_history:
-                # The requester may legitimately already hold images (the July
-                # audit found 2,990 of 3,314 requests had a prior private
-                # cache); forcing image-free here is the target-conditioned
-                # leak the design doc rejects.
-                image_paths, observation_views = latest_observations_by_agent.get(
-                    raw_step["agent"], ([], [])
-                )
-            else:
-                image_paths, observation_views = [], []
-        else:
-            image_paths, observation_views = _require_latest_observation(
-                latest_observations_by_agent=latest_observations_by_agent,
-                before_index=raw_step["step"],
-                agent_id=raw_step["agent"],
-            )
+        pending = pending_observation_by_agent.get(raw_step["agent"])
+        image_paths, observation_views = pending if pending is not None else ([], [])
 
         target_payload, target_tool_call, target_text = _build_target_metadata(
             raw_step=effective_raw_step,
             allowed_tool_specs=allowed_tool_specs,
-            sft_format=sft_format,
-            predict_agent=predict_agent,
         )
-        effective_history_steps = (
-            private_history[effective_raw_step["agent"]]
-            if partial_history
-            else history_steps
+        agent_history = private_history[effective_raw_step["agent"]]
+        user_prompt = build_partial_user_prompt(
+            composite_task=task_metadata.composite_task,
+            task_instruction=getattr(task_metadata, "task_goal", metadata["task"]),
+            agent_id=effective_raw_step["agent"],
+            observation_views=observation_views,
+            history_steps=agent_history,
+            allowed_tool_specs=model_tool_specs,
+            coordinator_id=original_trajectory.get("coordinator_id"),
+            initial_state=original_trajectory.get("initial_state"),
         )
-        prompt_step_index: int | None = raw_step["step"]
-        step_index_label = "Next global step index"
-        if partial_history and partial_step_index_mode != "global":
-            # Renumber by position in this agent's own private history so the
-            # index carries no information about the other agent's activity.
-            effective_history_steps = normalize_partial_history_steps(
-                effective_history_steps,
-                index_mode=partial_step_index_mode,
-            )
-            if partial_step_index_mode == "local":
-                prompt_step_index = len(effective_history_steps)
-                step_index_label = "Next local agent turn index"
-            else:
-                prompt_step_index = None
-        if partial_history and sft_format == SFT_FORMAT_TOOL_CALL:
-            user_prompt = build_partial_user_prompt(
-                composite_task=task_metadata.composite_task,
-                task_instruction=getattr(task_metadata, "task_goal", metadata["task"]),
-                agent_id=effective_raw_step["agent"],
-                global_step_index=raw_step["step"],
-                observation_views=observation_views,
-                history_steps=private_history[effective_raw_step["agent"]],
-                allowed_tool_specs=model_tool_specs,
-                partial_step_index_mode=partial_step_index_mode,
-                coordinator_id=original_trajectory.get("coordinator_id"),
-                initial_state=original_trajectory.get("initial_state"),
-            )
-        else:
-            user_prompt = build_user_prompt(
-                composite_task=task_metadata.composite_task,
-                task_instruction=getattr(task_metadata, "task_goal", metadata["task"]),
-                agent_id=effective_raw_step["agent"],
-                next_step_index=prompt_step_index,
-                step_index_label=step_index_label,
-                observation_views=observation_views,
-                history_steps=effective_history_steps,
-                allowed_tool_specs=model_tool_specs,
-                sft_format=sft_format,
-                observation_owner=active_observation_agent,
-                include_observation_owner=causal_single_cache,
-                predict_agent=predict_agent,
-                coordinator_id=original_trajectory.get("coordinator_id"),
-                initial_state=original_trajectory.get("initial_state"),
-            )
-        message_kwargs: dict[str, Any]
-        if sft_format == SFT_FORMAT_PLAIN:
-            message_kwargs = {"target_text": target_text}
-        elif predict_agent:
-            message_kwargs = {
-                "target_tool_call": _agent_augmented_tool_call(
-                    target_tool_call,
-                    agent_id=target_payload["steps"][0]["agent"],
-                )
-            }
-        else:
-            message_kwargs = {"target_tool_call": target_tool_call}
         sample_id = (
             f"{task_metadata.dataset_name}/{trajectory_id}/"
             f"step_{raw_step['step']:06d}"
@@ -1149,7 +937,7 @@ def _build_centralized_examples_for_trajectory(
                 task_instruction=metadata["task"],
                 observation_views=observation_views,
                 image_paths=list(image_paths),
-                history_steps=list(effective_history_steps),
+                history_steps=strip_history_step_indices(agent_history),
                 allowed_tool_specs=model_tool_specs,
                 tool_schemas=tool_schemas,
                 response_schema=response_schema,
@@ -1159,177 +947,35 @@ def _build_centralized_examples_for_trajectory(
                 messages=build_messages(
                     user_prompt=user_prompt,
                     num_images=len(image_paths),
-                    predict_agent=predict_agent,
-                    train_get_image=train_get_image,
                     reasoning_text=(
                         effective_raw_step.get("reasoning")
                         if train_reasoning
                         else None
                     ),
-                    **message_kwargs,
+                    target_tool_call=target_tool_call,
                 ),
             )
         )
-        normalized_step = _normalize_history_step(effective_raw_step)
-        if partial_history:
-            if raw_tick is None:
-                # Legacy trajectories have no canonical simultaneity metadata.
-                pending_tick_history.append(normalized_step)
-                flush_tick_history()
-            else:
-                pending_tick_history.append(normalized_step)
-        else:
-            history_steps.append(normalized_step)
+        pending_tick_history.append(_normalize_history_step(effective_raw_step))
+        if raw_tick is None:
+            # Legacy trajectories have no canonical simultaneity metadata.
+            flush_tick_history()
         _record_latest_observation(
             latest_observations_by_agent=latest_observations_by_agent,
             plan_step=plan_step, task_name=task_name,
             trajectory_id=trajectory_id, trajectory_dir=trajectory_dir)
-        if consuming_partial_images:
-            owner = raw_step["agent"]
-            if raw_step["tool"] == "get_image":
-                pending_observation_by_agent[owner] = latest_observations_by_agent.get(
-                    owner
-                )
-            else:
-                # Consumed by this decision; the agent must look again.
-                pending_observation_by_agent[owner] = None
-        if causal_single_cache:
-            if raw_step["tool"] == "get_image":
-                active_observation_agent = effective_raw_step["agent"]
-            elif raw_step["tool"] not in {"communicate", TASK_COMPLETE_TOOL_NAME}:
-                active_observation_agent = None
-
-    if partial_history:
-        flush_tick_history()
-
-    if predict_agent and predict_task_complete and examples:
-        examples.append(
-            _build_task_complete_example(
-                task_metadata=task_metadata,
-                metadata=metadata,
-                trajectory_id=trajectory_id,
-                raw_steps=raw_steps,
-                history_steps=history_steps,
-                latest_observations_by_agent=latest_observations_by_agent,
-                active_observation_agent=active_observation_agent,
-                causal_single_cache=causal_single_cache,
-                allowed_tool_specs=model_tool_specs,
-                sft_format=sft_format,
-                response_schema=response_schema,
-                tool_schemas=tool_schemas,
-                coordinator_id=original_trajectory.get("coordinator_id"),
-                initial_state=original_trajectory.get("initial_state"),
+        owner = raw_step["agent"]
+        if raw_step["tool"] == "get_image":
+            pending_observation_by_agent[owner] = latest_observations_by_agent.get(
+                owner
             )
-        )
+        else:
+            # Consumed by this decision; the agent must look again.
+            pending_observation_by_agent[owner] = None
 
+    flush_tick_history()
     return examples
 
-
-def _build_task_complete_example(
-    *,
-    task_metadata: Any,
-    metadata: dict[str, Any],
-    trajectory_id: str,
-    raw_steps: list[dict[str, Any]],
-    history_steps: list[dict[str, Any]],
-    latest_observations_by_agent: dict[str, tuple[list[str], list[str]]],
-    active_observation_agent: str | None = None,
-    allowed_tool_specs: dict[str, dict[str, Any]],
-    causal_single_cache: bool = False,
-    sft_format: str,
-    response_schema: dict[str, Any],
-    tool_schemas: list[dict[str, Any]],
-    coordinator_id: str | None = None,
-    initial_state: dict[str, Any] | None = None,
-) -> CentralizedExample:
-    """Synthesizes the terminal task_complete step for agent-prediction SFT.
-
-    Trajectories in the data end with no signal, so the "task is done" state is
-    manufactured: prompt = full history + the freshest observation, target =
-    task_complete. Supervised as the last-acting agent (the announcer is
-    genuinely ambiguous, so completion is scored agent-agnostically).
-    """
-
-    last_agent = history_steps[-1]["agent"]
-    terminal_step_index = int(raw_steps[-1]["step"]) + 1
-    if causal_single_cache:
-        if active_observation_agent is None:
-            image_paths, observation_views = [], []
-        else:
-            image_paths, observation_views = _require_latest_observation(
-                latest_observations_by_agent=latest_observations_by_agent,
-                before_index=terminal_step_index,
-                agent_id=active_observation_agent,
-            )
-    else:
-        image_paths, observation_views = _require_latest_observation(
-            latest_observations_by_agent=latest_observations_by_agent,
-            before_index=terminal_step_index,
-            agent_id=last_agent,
-        )
-    raw_step = {
-        "step": terminal_step_index,
-        "agent": last_agent,
-        "tool": TASK_COMPLETE_TOOL_NAME,
-        "args": {},
-    }
-    target_payload, target_tool_call, target_text = _build_target_metadata(
-        raw_step=raw_step,
-        allowed_tool_specs=allowed_tool_specs,
-        sft_format=sft_format,
-        predict_agent=True,
-    )
-    user_prompt = build_user_prompt(
-        composite_task=task_metadata.composite_task,
-        task_instruction=getattr(task_metadata, "task_goal", metadata["task"]),
-        agent_id=last_agent,
-        next_step_index=terminal_step_index,
-        observation_views=observation_views,
-        history_steps=history_steps,
-        allowed_tool_specs=allowed_tool_specs,
-        observation_owner=active_observation_agent,
-        include_observation_owner=causal_single_cache,
-        sft_format=sft_format,
-        predict_agent=True,
-        coordinator_id=coordinator_id,
-        initial_state=initial_state,
-    )
-    if sft_format == SFT_FORMAT_PLAIN:
-        message_kwargs: dict[str, Any] = {"target_text": target_text}
-    else:
-        message_kwargs = {
-            "target_tool_call": _agent_augmented_tool_call(
-                target_tool_call,
-                agent_id=last_agent,
-            )
-        }
-    return CentralizedExample(
-        sample_id=(
-            f"{task_metadata.dataset_name}/{trajectory_id}/"
-            f"step_{terminal_step_index:06d}"
-        ),
-        task_name=task_metadata.dataset_name,
-        composite_task=task_metadata.composite_task,
-        trajectory_id=trajectory_id,
-        step_index=terminal_step_index,
-        agent_id=last_agent,
-        task_instruction=metadata["task"],
-        observation_views=observation_views,
-        image_paths=list(image_paths),
-        history_steps=list(history_steps),
-        allowed_tool_specs=allowed_tool_specs,
-        tool_schemas=tool_schemas,
-        response_schema=response_schema,
-        target_payload=target_payload,
-        target_tool_call=target_tool_call,
-        target_text=target_text,
-        messages=build_messages(
-            user_prompt=user_prompt,
-            num_images=len(image_paths),
-            predict_agent=True,
-            **message_kwargs,
-        ),
-    )
 
 
 def build_centralized_examples(
@@ -1338,79 +984,37 @@ def build_centralized_examples(
     task_names: list[str],
     show_progress: bool = False,
     progress_description: str | None = None,
-    sft_format: str = SFT_FORMAT_TOOL_CALL,
     trajectory_ids_by_task: dict[str, set[str]] | None = None,
     example_build_workers: int = 1,
-    predict_agent: bool = False,
-    train_get_image: bool = False,
     train_reasoning: bool = False,
-    predict_task_complete: bool = False,
-    causal_single_cache: bool = False,
-    partial_history: bool = False,
-    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
-    partial_observation_mode: str = "consume_once",
 ) -> list[CentralizedExample]:
-    """Builds one SFT example per successful non-image action step.
+    """Builds one supervised example per executed agent call.
 
-    With predict_agent (v2): the acting agent moves from the prompt into the
-    supervised output (as the "agent" argument), the tool set gains
-    task_complete, and one synthetic terminal task_complete example is added
-    per trajectory.
-
-    With train_reasoning (v1.5 probe, orthogonal to predict_agent): each
-    assistant turn is supervised with a `<think>{reasoning}</think>` prefix
-    sourced from the trajectory's per-step `reasoning` string.
-    With partial_history (partial-observability v1): each example's history
-    is restricted to the acting agent's own prior actions plus delivered
-    `communicate` messages, instead of the full joint history. Mutually
-    exclusive with predict_agent/train_get_image (see design doc stage 2).
+    Each example's prompt is the acting agent's private context; the target
+    is that agent's next tool call. With train_reasoning, each assistant turn
+    is supervised with a `<think>{reasoning}</think>` prefix sourced from the
+    trajectory's per-step rationale.
     """
 
-    sft_format = _validate_sft_format(sft_format)
     example_build_workers = max(example_build_workers, 1)
-    if causal_single_cache and not (predict_agent and train_get_image):
-        raise ValueError(
-            "causal_single_cache requires predict_agent=True and train_get_image=True"
-        )
-    if partial_history and predict_agent:
-        raise ValueError(
-            "partial_history requires predict_agent=False (the caller is the actor)"
-        )
     examples: list[CentralizedExample] = []
 
     for task_name in task_names:
         task_metadata = get_task_metadata(task_name)
-        effective_tool_specs = task_metadata.allowed_tool_specs
-        if predict_agent:
-            effective_tool_specs = augment_tool_specs_for_agent_prediction(
-                effective_tool_specs,
-                include_get_image=train_get_image,
-                include_task_complete=predict_task_complete,
-            )
-        elif partial_history and train_get_image:
-            effective_tool_specs = augment_tool_specs_with_get_image(
-                effective_tool_specs
-            )
         trajectory_dirs = _trajectory_dirs_for_task(
             dataset_root=dataset_root,
             task_name=task_metadata.dataset_name,
         )
 
-        model_tool_specs = build_model_tool_specs(
-            include_get_image=bool(train_get_image),
-            include_task_complete=bool(predict_agent and predict_task_complete),
+        model_tool_specs = build_model_tool_specs(include_get_image=True)
+        response_schema = build_single_step_response_schema(
+            agent_ids=AGENT_IDS,
+            allowed_tool_specs=model_tool_specs,
         )
-        if sft_format == SFT_FORMAT_TOOL_CALL:
-            response_schema = build_single_step_response_schema(
-                agent_ids=AGENT_IDS,
-                allowed_tool_specs=model_tool_specs,
-            )
-        else:
-            response_schema = {}
         tool_schemas = build_tool_schemas(
             agent_ids=AGENT_IDS,
             allowed_tool_specs=model_tool_specs,
-            include_agent_param=predict_agent,
+            include_agent_param=False,
         )
         include_trajectory_ids = None
         if trajectory_ids_by_task is not None:
@@ -1427,18 +1031,10 @@ def build_centralized_examples(
             return _build_centralized_examples_for_trajectory(
                 task_name=task_metadata.dataset_name,
                 trajectory_dir=trajectory_dir,
-                sft_format=sft_format,
                 response_schema=response_schema,
                 tool_schemas=tool_schemas,
                 model_tool_specs=model_tool_specs,
-                predict_agent=predict_agent,
-                train_get_image=train_get_image,
                 train_reasoning=train_reasoning,
-                predict_task_complete=predict_task_complete,
-                causal_single_cache=causal_single_cache,
-                partial_history=partial_history,
-                partial_step_index_mode=partial_step_index_mode,
-                partial_observation_mode=partial_observation_mode,
             )
 
         if example_build_workers > 1 and len(selected_trajectory_dirs) > 1:
@@ -1480,19 +1076,10 @@ def build_example_cache_fingerprint(
     dataset_root: Path,
     task_name: str,
     trajectory_ids: list[str] | set[str] | None = None,
-    sft_format: str = SFT_FORMAT_TOOL_CALL,
-    predict_agent: bool = False,
-    train_get_image: bool = False,
     train_reasoning: bool = False,
-    predict_task_complete: bool = False,
-    causal_single_cache: bool = False,
-    partial_history: bool = False,
-    partial_step_index_mode: str = DEFAULT_PARTIAL_STEP_INDEX_MODE,
-    partial_observation_mode: str = "consume_once",
 ) -> dict[str, Any]:
     """Builds a fingerprint that invalidates cached task examples when inputs change."""
 
-    sft_format = _validate_sft_format(sft_format)
     task_metadata = get_task_metadata(task_name)
     selected_trajectory_ids = None if trajectory_ids is None else set(trajectory_ids)
     trajectory_dirs = _trajectory_dirs_for_task(
@@ -1518,8 +1105,7 @@ def build_example_cache_fingerprint(
         "cache_format_version": _EXAMPLE_CACHE_FORMAT_VERSION,
         "dataset_root": str(dataset_root.resolve()),
         "task_name": task_metadata.dataset_name,
-        "example_format": "centralized",
-        "sft_format": sft_format,
+        "example_format": "private_history_consume_once",
         "agent_ids": list(AGENT_IDS),
         "task_metadata": {
             "dataset_name": task_metadata.dataset_name,
@@ -1541,26 +1127,8 @@ def build_example_cache_fingerprint(
             for trajectory_dir in trajectory_dirs
         ],
     }
-    # Only stamped when enabled so every existing v1 cache fingerprint stays
-    # valid; a v2 build can never silently reuse a v1 cache (and vice versa).
-    if predict_agent:
-        fingerprint["predict_acting_agent"] = True
-    if train_get_image:
-        fingerprint["train_get_image"] = True
     if train_reasoning:
         fingerprint["train_reasoning"] = True
-    if not predict_task_complete:
-        fingerprint["predict_task_complete"] = False
-    if causal_single_cache:
-        fingerprint["causal_single_cache"] = True
-    if partial_history:
-        fingerprint["partial_history"] = True
-        if partial_step_index_mode != "global":
-            fingerprint["partial_step_index_mode"] = partial_step_index_mode
-        # "cache" stays unstamped so pre-existing partial caches (built when
-        # it was the default) remain valid; any other mode is stamped.
-        if partial_observation_mode != "cache":
-            fingerprint["partial_observation_mode"] = partial_observation_mode
     return fingerprint
 
 
@@ -1981,7 +1549,6 @@ def build_batched_pretokenized_tensors(
         processor_name_or_path="",
         max_length=max_length,
         trust_remote_code=False,
-        sft_format=SFT_FORMAT_TOOL_CALL,
     )
     collator._processor = processor
     resolution_state = _set_processor_image_resolution(processor, image_resolution)
@@ -2016,7 +1583,6 @@ class LazyVisionSFTCollator:
         max_images_per_sample: int | None = None,
         supervise_last_assistant_turn_only: bool = False,
         trust_remote_code: bool,
-        sft_format: str = SFT_FORMAT_TOOL_CALL,
         image_resolution: int | None = None,
     ) -> None:
         self.processor_name_or_path = processor_name_or_path
@@ -2028,7 +1594,6 @@ class LazyVisionSFTCollator:
         )
         self.supervise_last_assistant_turn_only = supervise_last_assistant_turn_only
         self.trust_remote_code = trust_remote_code
-        self.sft_format = _validate_sft_format(sft_format)
         self.image_resolution = image_resolution
         self._processor = None
 
@@ -2093,34 +1658,6 @@ class LazyVisionSFTCollator:
                 chunks.append(audio_token)
         return "".join(chunks).strip()
 
-    def _apply_plain_fallback_template(
-        self,
-        template_owner,
-        *,
-        messages: list[dict[str, Any]],
-        add_generation_prompt: bool = False,
-    ) -> str:
-        tokenizer = getattr(template_owner, "tokenizer", None) or template_owner
-        bos_token = getattr(tokenizer, "bos_token", None) or ""
-        chunks = [bos_token]
-
-        for message in messages:
-            role = message.get("role", "user")
-            if role == "assistant":
-                role = "model"
-            elif role == "developer":
-                role = "system"
-
-            chunks.append(f"<|turn>{role}\n")
-            chunks.append(
-                self._message_text_for_plain_fallback(template_owner, message)
-            )
-            chunks.append("<turn|>\n")
-
-        if add_generation_prompt:
-            chunks.append("<|turn>model\n")
-        return "".join(chunks)
-
     def _apply_chat_template(
         self,
         template_owner,
@@ -2130,22 +1667,7 @@ class LazyVisionSFTCollator:
         **kwargs,
     ):
         template_kwargs = dict(kwargs)
-        if self.sft_format == SFT_FORMAT_TOOL_CALL:
-            template_kwargs["tools"] = feature["tool_schemas"]
-
-        if self.sft_format == SFT_FORMAT_PLAIN and not getattr(
-            template_owner, "chat_template", None
-        ):
-            if template_kwargs.get("tokenize"):
-                raise TypeError("Plain fallback chat template only renders text.")
-            return self._apply_plain_fallback_template(
-                template_owner,
-                messages=messages,
-                add_generation_prompt=bool(
-                    template_kwargs.get("add_generation_prompt", False)
-                ),
-            )
-
+        template_kwargs["tools"] = feature["tool_schemas"]
         return template_owner.apply_chat_template(messages, **template_kwargs)
 
     def _tokenize_texts(
@@ -2444,7 +1966,7 @@ class LazyVisionSFTCollator:
     def _raise_if_any_empty_labels(labels, features: list[dict[str, Any]]) -> None:
         supervised_counts = (labels != -100).sum(dim=1).tolist()
         empty_sample_ids = [
-            str(feature.get("sample_id", row_index))
+            str(features[row_index].get("sample_id", row_index))
             for row_index, count in enumerate(supervised_counts)
             if int(count) == 0
         ]

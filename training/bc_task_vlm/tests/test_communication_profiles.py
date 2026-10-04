@@ -18,8 +18,6 @@ def _prompt(mode: str) -> str:
         allowed_tool_specs=apply_communication_profile(
             build_model_tool_specs(include_get_image=True), mode
         ),
-        partial_step_index_mode="none",
-        global_step_index=0,
         coordinator_id="agent_0",
         initial_state={
             "agents": {
