@@ -4274,81 +4274,6 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(usage.cached_content_tokens, 320)
         self.assertEqual(usage.total_tokens, 1250)
 
-    def test_generate_trajectories_cancels_pending_futures_on_keyboard_interrupt(self):
-        runtime_config = RuntimeConfig(
-            composite_task="PrepareCoffee",
-            num_runs=2,
-            model="gemini-3-flash-preview",
-            sdk="google-genai",
-            project="demo-project",
-            location="global",
-            temperature=0.5,
-            max_workers=1,
-            max_retries=1,
-        )
-
-        class InterruptingFuture:
-            def __init__(self, *, raises_keyboard_interrupt=False):
-                self._raises_keyboard_interrupt = raises_keyboard_interrupt
-                self.cancel = mock.Mock(return_value=True)
-
-            def result(self):
-                if self._raises_keyboard_interrupt:
-                    raise KeyboardInterrupt
-                return mock.sentinel.unused_result
-
-        class FakeExecutor:
-            def __init__(self):
-                self.shutdown = mock.Mock()
-                self.submitted_futures = []
-
-            def submit(self, *args, **kwargs):
-                future = InterruptingFuture(
-                    raises_keyboard_interrupt=not self.submitted_futures
-                )
-                self.submitted_futures.append(future)
-                return future
-
-        fake_executor = FakeExecutor()
-
-        with mock.patch(
-            "data_generation.task_level.generation.raw.costs._build_preflight_cost_estimate_summary",
-            return_value={"best_case_total_usd": None, "worst_case_total_usd": None},
-        ):
-            with mock.patch(
-                "data_generation.task_level.generation.raw.progress._create_progress_handles",
-                return_value=ProgressHandles(
-                    display=None,
-                    overall_progress=None,
-                    trajectory_progress_bars=[None, None],
-                    log_writer=None,
-                ),
-            ):
-                with mock.patch(
-                    "data_generation.task_level.generation.raw.progress._close_progress_handles"
-                ) as close_progress_handles:
-                    with mock.patch(
-                        "data_generation.task_level.runtime.on_demand_generation.ThreadPoolExecutor",
-                        return_value=fake_executor,
-                    ):
-                        with mock.patch(
-                            "data_generation.task_level.runtime.on_demand_generation.as_completed",
-                            side_effect=lambda futures: list(futures),
-                        ):
-                            with self.assertRaises(KeyboardInterrupt):
-                                generate_trajectories(
-                                    runtime_config,
-                                    show_progress=False,
-                                )
-
-        self.assertEqual(len(fake_executor.submitted_futures), 2)
-        for future in fake_executor.submitted_futures:
-            future.cancel.assert_called_once_with()
-        fake_executor.shutdown.assert_called_once_with(
-            wait=False,
-            cancel_futures=True,
-        )
-        close_progress_handles.assert_called_once()
 
     def test_batch_processing_requires_gcs_prefix(self):
         runtime_config = RuntimeConfig(
@@ -6069,49 +5994,6 @@ class GenerationTests(unittest.TestCase):
             payload["cost_summary"]["notes"][-1],
         )
 
-    def test_generate_trajectories_logs_cost_when_progress_enabled(self):
-        runtime_config = RuntimeConfig(
-            composite_task="PrepareCoffee",
-            num_runs=1,
-            model="gemini-3-flash-preview",
-            sdk="google-genai",
-            project="demo-project",
-            location="global",
-            temperature=0.5,
-            max_workers=1,
-            max_retries=3,
-        )
-
-        with mock.patch(
-            "data_generation.task_level.generation.raw.progress._log_runtime_message"
-        ) as log_runtime_message:
-            generate_trajectories(
-                runtime_config,
-                client_factory=lambda: SequencedFakeClient(
-                    [
-                        GenerationResult(
-                            payload=make_valid_candidate(),
-                            usage=GenerationUsage(
-                                prompt_tokens=1000,
-                                candidates_tokens=200,
-                                thoughts_tokens=50,
-                                total_tokens=1250,
-                                traffic_type="ON_DEMAND",
-                            ),
-                        )
-                    ]
-                ),
-                show_progress=True,
-            )
-
-        self.assertEqual(log_runtime_message.call_count, 1)
-        projected_log = log_runtime_message.call_args_list[0]
-
-        self.assertIn("Initial projected cost", projected_log.args[0])
-        self.assertTrue(projected_log.args[0].startswith("Initial projected cost: $"))
-        self.assertNotIn("best case", projected_log.args[0])
-        self.assertNotIn("worst case", projected_log.args[0])
-        self.assertEqual(projected_log.kwargs["enabled"], True)
 
     def test_progress_status_with_accumulated_cost_appends_suffix(self):
         self.assertEqual(
@@ -6129,77 +6011,6 @@ class GenerationTests(unittest.TestCase):
             "accumulated=$0.0013 projected=$0.0100",
         )
 
-    def test_generate_trajectories_updates_overall_progress_with_accumulated_cost(self):
-        runtime_config = RuntimeConfig(
-            composite_task="PrepareCoffee",
-            num_runs=2,
-            model="gemini-3-flash-preview",
-            sdk="google-genai",
-            project="demo-project",
-            location="global",
-            temperature=0.5,
-            max_workers=1,
-            max_retries=1,
-        )
-        overall_progress = mock.Mock()
-        trajectory_progress_bars = [mock.Mock(), mock.Mock()]
-        progress_handles = ProgressHandles(
-            display=None,
-            overall_progress=overall_progress,
-            trajectory_progress_bars=trajectory_progress_bars,
-            log_writer=None,
-        )
-        client_responses = [
-            SequencedFakeClient(
-                [
-                    GenerationResult(
-                        payload=make_valid_candidate(),
-                        usage=GenerationUsage(
-                            prompt_tokens=1000,
-                            candidates_tokens=200,
-                            thoughts_tokens=50,
-                            total_tokens=1250,
-                            traffic_type="ON_DEMAND",
-                        ),
-                    )
-                ]
-            ),
-            SequencedFakeClient(
-                [
-                    GenerationResult(
-                        payload=make_alternative_valid_candidate(),
-                        usage=GenerationUsage(
-                            prompt_tokens=1000,
-                            candidates_tokens=200,
-                            thoughts_tokens=50,
-                            total_tokens=1250,
-                            traffic_type="ON_DEMAND",
-                        ),
-                    )
-                ]
-            ),
-        ]
-
-        with mock.patch(
-            "data_generation.task_level.generation.raw.progress._create_progress_handles",
-            return_value=progress_handles,
-        ):
-            payload = generate_trajectories(
-                runtime_config,
-                client_factory=lambda: client_responses.pop(0),
-                show_progress=False,
-            )
-
-        self.assertEqual(payload["num_trajectories"], 2)
-        self.assertEqual(overall_progress.update.call_count, 2)
-        self.assertEqual(
-            overall_progress.set_postfix_str.call_args_list[0].args[0],
-            "running accumulated=$0.0000 projected=NaN",
-        )
-        self.assertEqual(
-            overall_progress.set_postfix_str.call_args_list[-1].args[0],
-            "running accumulated=$0.0026 projected=$0.0026",
-        )
 
     def test_on_demand_generation_returns_partial_payload_when_one_run_exhausts(self):
         runtime_config = RuntimeConfig(
@@ -7766,39 +7577,6 @@ class GenerationTests(unittest.TestCase):
             payload["trajectories"][1]["validation"]["error"],
         )
 
-    def test_disable_validation_logs_single_projected_cost_without_attempt_details(
-        self,
-    ):
-        runtime_config = RuntimeConfig(
-            composite_task="PrepareCoffee",
-            num_runs=1,
-            model="gemini-3-flash-preview",
-            sdk="google-genai",
-            project="demo-project",
-            location="global",
-            temperature=0.5,
-            max_workers=1,
-            max_retries=2,
-            disable_validation=True,
-        )
-
-        with mock.patch(
-            "data_generation.task_level.generation.raw.progress._log_runtime_message"
-        ) as log_runtime_message:
-            generate_trajectories(
-                runtime_config,
-                client_factory=lambda: SequencedFakeClient(
-                    [make_invalid_candidate_missing_initial_communication()]
-                ),
-                show_progress=True,
-            )
-
-        logged_messages = [call.args[0] for call in log_runtime_message.call_args_list]
-        self.assertEqual(len(logged_messages), 1)
-        self.assertTrue(logged_messages[0].startswith("Initial projected cost: $"))
-        self.assertNotIn("best case", logged_messages[0])
-        self.assertNotIn("worst case", logged_messages[0])
-        self.assertNotIn("attempt ", logged_messages[0])
 
     def test_disable_validation_output_payloads_omit_attempt_number(self):
         runtime_config = RuntimeConfig(

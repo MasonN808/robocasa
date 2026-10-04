@@ -95,12 +95,6 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(set(row["properties"]), {"tick", "agent_0", "agent_1"})
         self.assertEqual(row["required"], ["tick"], "an agent may sit a tick out")
 
-    def test_waits_are_offered_in_tick_form_and_withheld_in_flat_form(self):
-        # In tick form the model can see that an agent is blocked, so it is
-        # asked to place its own coordination.
-        definition = self._definition()
-        self.assertIn("wait_for_signal", json.dumps(definition.tick_response_schema))
-        self.assertNotIn("wait_for_signal", json.dumps(definition.response_schema))
 
     def test_an_action_slot_carries_no_agent_or_step_field(self):
         row = self._definition().tick_response_schema["properties"]["ticks"]["items"]

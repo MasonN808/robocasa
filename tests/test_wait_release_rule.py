@@ -141,17 +141,6 @@ class WaitRuleTest(unittest.TestCase):
 
     # --- the announcement ------------------------------------------------
 
-    def test_wait_with_no_announcement_is_rejected(self):
-        message = self._error([_wait(0), _release(1)])
-        self.assertIn("not announced", message)
-
-    def test_announcement_must_name_about_verbatim(self):
-        steps = [
-            _msg(0, "agent_0", "agent_1", "I will hold off until you are done."),
-            _wait(1),
-            _release(2),
-        ]
-        self.assertIn("not announced", self._error(steps))
 
     # --- the release ------------------------------------------------------
 

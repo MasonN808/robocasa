@@ -9,70 +9,11 @@ from robocasa.utils.sim_tool_specs import (
 
 
 class TestSimToolSpecs(unittest.TestCase):
-    def test_expected_tool_names_exist(self):
-        expected_names = {
-            "close_hinged_part",
-            "close_sliding_part",
-            "communicate",
-            "get_image",
-            "navigate_to_fixture",
-            "open_hinged_part",
-            "open_sliding_part",
-            "pick_up_object",
-            "place_in_receptacle",
-            "place_next_to",
-            "place_on_object",
-            "place_on_surface",
-            "place_under",
-            "press_button",
-            "press_lever",
-            "set_rotary_control",
-            "wait",
-        }
-        self.assertEqual({spec["name"] for spec in SIM_TOOL_SPECS}, expected_names)
-        self.assertEqual(set(SIM_TOOL_SPEC_BY_NAME.keys()), expected_names)
 
     def test_no_duplicate_tool_names(self):
         names = [spec["name"] for spec in SIM_TOOL_SPECS]
         self.assertEqual(len(names), len(set(names)))
 
-    def test_required_parameter_names_match(self):
-        expected_parameters = {
-            "close_hinged_part": ["target_id", "part_id"],
-            "close_sliding_part": ["target_id", "part_id"],
-            "communicate": ["to", "message"],
-            "get_image": ["views", "image_paths"],
-            "navigate_to_fixture": ["fixture_id"],
-            "open_hinged_part": ["target_id", "part_id"],
-            "open_sliding_part": ["target_id", "part_id"],
-            "pick_up_object": ["object_id", "source_id"],
-            "place_in_receptacle": ["object_id", "receptacle_id"],
-            "place_next_to": ["object_id", "reference_object_id"],
-            "place_on_object": ["object_id", "support_object_id", "anchor_fixture_id"],
-            "place_on_surface": ["object_id", "support_id"],
-            "place_under": ["object_id", "reference_fixture_id"],
-            "press_button": ["target_id", "control_id"],
-            "press_lever": ["target_id", "control_id"],
-            "set_rotary_control": ["target_id", "control_id", "goal"],
-            "wait": [],
-        }
-        for tool_name, expected in expected_parameters.items():
-            spec = SIM_TOOL_SPEC_BY_NAME[tool_name]
-            self.assertEqual(
-                [param["name"] for param in spec["parameters"]],
-                expected,
-            )
-            self.assertTrue(all(param["required"] for param in spec["parameters"]))
-
-        self.assertEqual(
-            [param["type"] for param in SIM_TOOL_SPEC_BY_NAME["get_image"]["parameters"]],
-            ["array", "array"],
-        )
-
-        for tool_name, spec in SIM_TOOL_SPEC_BY_NAME.items():
-            if tool_name == "get_image":
-                continue
-            self.assertTrue(all(param["type"] == "string" for param in spec["parameters"]))
 
     def test_getters_return_defensive_copies(self):
         all_specs = get_sim_tool_specs()

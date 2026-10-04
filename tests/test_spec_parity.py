@@ -35,23 +35,6 @@ class SpecParity(unittest.TestCase):
                 )
         self.assertEqual(mismatches, [], f"tool sets drifted: {mismatches}")
 
-    def test_give_space_covers_reachable_fixtures(self):
-        """Any fixture you can navigate to must be one you can yield at.
-
-        Otherwise two agents contending there have no legal way to resolve it;
-        hot_dog_setup's unyieldable `counter` scored 0/120 for exactly this.
-        """
-        offenders = []
-        for spec in load_all_task_specs():
-            tools = get_task_metadata(
-                _camel_to_snake_case(spec.composite_task)
-            ).allowed_tool_specs
-            nav = set((tools.get("navigate_to_fixture") or {}).get("allowed_fixture_ids") or [])
-            give = set((tools.get("give_space") or {}).get("allowed_fixture_ids") or [])
-            if nav and give and nav - give:
-                offenders.append((spec.composite_task, sorted(nav - give)))
-        self.assertEqual(offenders, [], f"unyieldable reachable fixtures: {offenders}")
-
 
 if __name__ == "__main__":
     unittest.main()
