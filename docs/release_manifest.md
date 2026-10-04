@@ -225,3 +225,10 @@ Two side effects of `4e10706`:
   - triage each one as stale (update or delete) or as a real bug (fix code);
   - get the suite green before release.
 - Login-node caveat: some tests need a compute node, because a native extension raises SIGILL on the login CPU.
+
+**End-to-end checks after Passes B and C.**
+- **Oracle replay.** I replayed 4 tasks × 2 expert trajectories (including the held-out ArrangeBreadBowl) in the live simulator, on both `pre-publication-snapshot` and the cleaned code. The results are identical: outcome, termination, step counts, rejections, native success, makespan, and every executed call.
+- **vLLM smoke test.** I served the released Instruct 30/task adapter (`checkpoint-648`) with the paper's vLLM 0.27.1 settings and ran 6 paper-cohort episodes (PlateStoreDinner, PrepareCoffee, SetupBowls × 2) with the paper's evaluation flags. All 6 match the archived paper records on FSM success and error-free success.
+  - 3 of the 6 have identical executed call sequences.
+  - The other 3 diverge mid-episode, after identical earlier calls and observations, and only in the wording of a free-text message; the tool and coordination phase are the same.
+  - That pattern is consistent with greedy-decoding nondeterminism under different request batching: the paper ran 4 workers on one server, the smoke test ran 1. It does not point to a prompt change, which would diverge at the first call.
