@@ -17,13 +17,13 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from data_generation.task_level.generation.image.processor import (  # noqa: E402
+from robotalk.generation.image.processor import (  # noqa: E402
     GET_IMAGE_TOOL_NAME,
     TICK_KEY,
     post_process_trajectory,
     rebuild_tick_rows_with_image_observations,
 )
-from data_generation.task_level.tasks.shared.scheduling import (  # noqa: E402
+from robotalk.tasks.shared.scheduling import (  # noqa: E402
     observation_transparent_tick_rows,
 )
 
@@ -162,7 +162,7 @@ class RecordTests(unittest.TestCase):
 
     def test_steps_are_rederived_from_the_rebuilt_rows(self) -> None:
         out = post_process_trajectory(self._record())
-        from tick_format import to_steps
+        from robotalk.generation.tick_format import to_steps
 
         # image_paths is attached to the flat steps afterwards; everything else
         # about the two views of the plan has to agree.

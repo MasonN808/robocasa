@@ -8,22 +8,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from data_generation.task_level.tasks.shared import concurrent_fsm  # noqa: E402
-from data_generation.task_level.tasks.shared.concurrent_fsm import (  # noqa: E402
+from robotalk.tasks.shared import concurrent_fsm  # noqa: E402
+from robotalk.tasks.shared.concurrent_fsm import (  # noqa: E402
     EXECUTOR,
     LOCK_STEP,
     VALIDATOR_CONTRACT_VERSION,
     ConcurrentTaskValidator,
     simultaneous_contentions,
 )
-from data_generation.task_level.tasks.shared.state import (  # noqa: E402
+from robotalk.tasks.shared.state import (  # noqa: E402
     AgentRuntimeState,
     TaskRuntimeState,
 )
-from data_generation.task_level.tasks.shared.errors import (  # noqa: E402
+from robotalk.tasks.shared.errors import (  # noqa: E402
     TrajectoryValidationError,
 )
-from data_generation.task_level.tasks.shared.scheduling import (  # noqa: E402
+from robotalk.tasks.shared.scheduling import (  # noqa: E402
     ConcurrentScheduler,
     symbolic_id_mentioned,
 )
@@ -836,7 +836,7 @@ class PromptedProtocolTests(unittest.TestCase):
         self.assertGreater(run.idle["agent_1"], 0.0)
 
     def test_the_rules_state_the_release_obligation(self):
-        import tick_format
+        import robotalk.generation.tick_format as tick_format
 
         text = "\n".join(tick_format.TICK_FORMAT_RULES)
         self.assertIn("releases", text)
@@ -998,7 +998,7 @@ class SymbolGroundingTests(unittest.TestCase):
         self.assertFalse(build()._known_id("mug_placed"))
 
     def test_the_prompt_forbids_invented_ids(self):
-        import tick_format
+        import robotalk.generation.tick_format as tick_format
 
         text = "\n".join(tick_format.TICK_FORMAT_RULES)
         self.assertIn("mug_placed", text, "name the failure mode concretely")

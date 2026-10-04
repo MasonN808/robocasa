@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from data_generation.task_level.tasks.shared.render_order import (
+from robotalk.tasks.shared.render_order import (
     concurrent_step_order,
     reorder_for_concurrent_render,
 )

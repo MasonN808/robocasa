@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import unittest
 
-from data_generation.task_level.grounding_specs import (
+from robotalk.tools.grounding_specs import (
     _resolve_nearest_placeable_surface,
 )
-from data_generation.task_level.subatomic_tool_specs import (
+from robotalk.tools.subatomic_tool_specs import (
     TASK_LEVEL_ALLOWED_TOOL_SPECS,
     build_allowed_tool_specs,
     build_model_tool_specs,
     canonicalize_model_tool_args,
 )
-from training.bc_task_vlm.tool_calling import build_tool_schemas
-from data_generation.task_level.tasks.shared.schema import build_task_response_schema
+from robotalk.training.tool_calling import build_tool_schemas
+from robotalk.tasks.shared.schema import build_task_response_schema
 from robocasa.utils.trajectory_adapter import TrajectoryAdapter
 
 

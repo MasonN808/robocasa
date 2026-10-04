@@ -1,5 +1,5 @@
-from data_generation.task_level.generation.raw.cascade_canary import _direct_prompt
-from data_generation.task_level.tasks.shared.prompting import format_concurrency_facts
+from robotalk.generation.raw.cascade_canary import _direct_prompt
+from robotalk.tasks.shared.prompting import format_concurrency_facts
 
 
 def test_direct_prompt_carries_deduplicated_validator_errors():

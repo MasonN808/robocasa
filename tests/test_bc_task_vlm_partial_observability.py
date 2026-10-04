@@ -4,11 +4,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
-from data_generation.task_level.tasks.shared.validation_contract import (
+from robotalk.tasks.shared.validation_contract import (
     VALIDATOR_CONTRACT_VERSION,
 )
-from data_generation.task_level.subatomic_tool_specs import build_model_tool_specs
-from training.bc_task_vlm import dataset, live_sim_eval
+from robotalk.tools.subatomic_tool_specs import build_model_tool_specs
+from robotalk.training import dataset
+from robotalk.evaluation import live_sim_eval
 
 
 def _step(index: int, agent: str, tool: str, args: dict) -> dict:

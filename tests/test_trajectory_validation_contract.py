@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from data_generation.task_level.tasks.shared.validation_contract import (
+from robotalk.tasks.shared.validation_contract import (
     VALIDATOR_CONTRACT_VERSION,
     current_validation_error,
     require_current_validation,

@@ -4,7 +4,7 @@ import shutil
 import tempfile
 import unittest
 
-from data_generation.task_level.generation.image import (
+from robotalk.generation.image import (
     POST_PROCESS_VALIDATION_ERROR,
     POST_PROCESS_VALIDATION_ERROR_TYPE,
     parse_args,
@@ -12,7 +12,7 @@ from data_generation.task_level.generation.image import (
     post_process_trajectory,
     resolve_output_dataset_path,
 )
-from data_generation.task_level.tasks import (
+from robotalk.tasks import (
     TaskSemanticValidationError,
     TrajectoryStructureValidationError,
     get_task_definition,

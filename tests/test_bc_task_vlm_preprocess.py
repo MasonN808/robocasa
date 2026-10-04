@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from training.bc_task_vlm import dataset, preprocess, preprocessed_data
+from robotalk.training import dataset
+from robotalk.training import preprocess
+from robotalk.training import preprocessed_data
 
 
 class _FakeTqdm:

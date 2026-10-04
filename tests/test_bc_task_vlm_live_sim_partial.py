@@ -9,17 +9,17 @@ from __future__ import annotations
 
 import pytest
 
-from data_generation.task_level.tasks.shared.concurrent_fsm import (
+from robotalk.tasks.shared.concurrent_fsm import (
     atomic_handover_conflicts,
     contention_resources,
     simultaneous_contentions,
 )
-from data_generation.task_level.tasks.shared.state import (
+from robotalk.tasks.shared.state import (
     AgentRuntimeState,
     TaskRuntimeState,
 )
 
-from training.bc_task_vlm.live_sim_eval import (
+from robotalk.evaluation.live_sim_eval import (
     REJECTION_MODE_REPORT_FAILED,
     AgentRuntime,
     _count_rejected_partial_records,

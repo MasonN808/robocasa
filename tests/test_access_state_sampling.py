@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from data_generation.task_level.tasks.shared.instances import (
+from robotalk.tasks.shared.instances import (
     build_randomized_fixture_task_instance,
     count_balanced_initial_configurations,
     eligible_access_state_parts,
 )
-from data_generation.task_level.tasks.specs import load_all_task_specs
+from robotalk.tasks.specs import load_all_task_specs
 
 
 def _spec(composite_task: str):

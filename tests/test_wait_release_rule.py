@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import unittest
 
-from data_generation.task_level.tasks.shared.errors import (
+from robotalk.tasks.shared.errors import (
     WaitSignalSemanticValidationError,
 )
-from data_generation.task_level.tasks.shared.fsm import FiniteStateTaskValidator
+from robotalk.tasks.shared.fsm import FiniteStateTaskValidator
 
 
 class _NeverSatisfied(FiniteStateTaskValidator):

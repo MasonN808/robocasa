@@ -25,7 +25,7 @@ import imageio
 import numpy as np
 import robosuite.utils.transform_utils as T
 
-from data_generation.task_level.tasks.shared.constants import (
+from robotalk.tasks.shared.constants import (
     EXCLUSIVE_FIXTURE_TYPES,
 )
 

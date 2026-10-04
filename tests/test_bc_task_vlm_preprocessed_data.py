@@ -8,14 +8,14 @@ import tempfile
 import unittest
 from unittest import mock
 
-from training.bc_task_vlm import preprocessed_data
-from training.bc_task_vlm.dataset import (
+from robotalk.training import preprocessed_data
+from robotalk.training.dataset import (
     LazyVisionSFTCollator,
     build_centralized_examples,
     build_split_manifest,
     serialize_pretokenized_tensors,
 )
-from training.bc_task_vlm.preprocessed_data import (
+from robotalk.training.preprocessed_data import (
     PreprocessedFeatureDataset,
     build_or_load_cached_pretokenization_metadata,
     build_preprocessed_dataset_dict,

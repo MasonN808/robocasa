@@ -28,10 +28,10 @@ from __future__ import annotations
 import json
 import unittest
 
-from data_generation.task_level.tasks.shared.errors import (
+from robotalk.tasks.shared.errors import (
     WaitSignalSemanticValidationError,
 )
-from data_generation.task_level.tasks.shared.fsm import FiniteStateTaskValidator
+from robotalk.tasks.shared.fsm import FiniteStateTaskValidator
 
 
 class _Probe(FiniteStateTaskValidator):
@@ -238,7 +238,7 @@ class InsertionExampleTests(unittest.TestCase):
 
         import random
 
-        from insert_waits import insert
+        from robotalk.generation.insert_waits import insert
 
         steps = _numbered([
             say("agent_0", "agent_1", "I will put the bread in the bowl."),
@@ -268,7 +268,7 @@ class InsertionExampleTests(unittest.TestCase):
 
         import random
 
-        from insert_waits import insert
+        from robotalk.generation.insert_waits import insert
 
         steps = _numbered([
             say("agent_0", "agent_1", "Starting on the bowl."),

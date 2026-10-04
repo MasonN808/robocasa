@@ -1,5 +1,5 @@
-from data_generation.task_level.tasks.shared.constants import EXCLUSIVE_FIXTURE_TYPES
-from data_generation.task_level.tasks.shared.workspace_semantics import (
+from robotalk.tasks.shared.constants import EXCLUSIVE_FIXTURE_TYPES
+from robotalk.tasks.shared.workspace_semantics import (
     accepted_agent_workspaces,
     canonical_agent_workspace,
     canonicalize_agent_locations,

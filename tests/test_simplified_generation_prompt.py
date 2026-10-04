@@ -1,8 +1,8 @@
 import pytest
 
-from data_generation.task_level.generation.raw.config import RuntimeConfig
-from data_generation.task_level.tasks import get_task_definition
-from data_generation.task_level.tasks.shared.instances import (
+from robotalk.generation.raw.config import RuntimeConfig
+from robotalk.tasks import get_task_definition
+from robotalk.tasks.shared.instances import (
     validate_initial_agent_locations,
 )
 

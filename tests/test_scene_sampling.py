@@ -1,4 +1,4 @@
-from data_generation.task_level.scene_sampling import (
+from robotalk.scene_sampling import (
     SCENE_POLICY_VERSION,
     candidate_scenes_v1,
     sample_compatible_scene,

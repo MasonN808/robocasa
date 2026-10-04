@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from data_generation.task_level.grounding_specs import (
+from robotalk.tools.grounding_specs import (
     build_grounding_map_for_task,
     build_resolved_grounding_payload,
     resolve_grounding_map,
 )
-from data_generation.task_level.tasks import get_task_definition
-from data_generation.task_level.tasks.specs import load_all_task_specs, load_task_spec
-from data_generation.task_level.tasks.shared.types import TaskInstance
+from robotalk.tasks import get_task_definition
+from robotalk.tasks.specs import load_all_task_specs, load_task_spec
+from robotalk.tasks.shared.types import TaskInstance
 
 HOT_DOG_SETUP_INITIAL_STATE = load_task_spec("HotDogSetup").initial_state
 PREPARE_COFFEE_INITIAL_STATE = load_task_spec("PrepareCoffee").initial_state

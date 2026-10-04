@@ -8,7 +8,7 @@ each raw step with another step's execution result and its images.
 
 import pytest
 
-from training.bc_task_vlm import dataset
+from robotalk.training import dataset
 
 
 def _raw(step: int, agent: str, tool: str) -> dict:

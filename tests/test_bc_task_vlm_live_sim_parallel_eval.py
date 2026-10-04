@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from training.bc_task_vlm.live_sim_parallel_eval import (
+from robotalk.evaluation.live_sim_parallel_eval import (
     METRICS_FILENAME,
     RESULTS_FILENAME,
     OutputLock,
@@ -363,7 +363,7 @@ def test_live_monitor_checks_only_newly_appended_records(tmp_path):
 
 
 def _obs(clock, n, cap, multiplier=1.0):
-    from training.bc_task_vlm.live_sim_eval import observation_ready_at
+    from robotalk.evaluation.live_sim_eval import observation_ready_at
 
     return observation_ready_at(
         clock,
@@ -403,7 +403,7 @@ def test_free_observations_keep_two_agents_on_the_same_schedule():
     blocks.
     """
 
-    from training.bc_task_vlm.live_sim_eval import _tool_duration
+    from robotalk.evaluation.live_sim_eval import _tool_duration
 
     def finish(actions, cap):
         clock, n = 0.0, 0

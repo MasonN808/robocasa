@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from data_generation.task_level.object_type_families import (
+from robotalk.tools.object_type_families import (
     OBJECT_TYPE_ALIASES,
     OBJECT_TYPE_FAMILIES,
     object_type_matches,

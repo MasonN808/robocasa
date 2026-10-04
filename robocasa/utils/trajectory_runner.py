@@ -44,7 +44,7 @@ from robocasa.wrappers.enclosing_wall_render_wrapper import EnclosingWallRenderW
 from robocasa.models.fixtures.fixture import Fixture
 from robocasa.models.fixtures.fixture_utils import fixture_is_type
 from robocasa.utils.occupancy_grid import OccupancyGrid
-from data_generation.task_level.tasks.shared.constants import EXCLUSIVE_FIXTURE_TYPES
+from robotalk.tasks.shared.constants import EXCLUSIVE_FIXTURE_TYPES
 from robocasa.utils.trajectory_runner_rendering import (
     DEFAULT_MULTI_ROBOT_COLORS,
     TrajectoryRunnerRenderingMixin,

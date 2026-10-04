@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from data_generation.task_level.tasks.shared.constants import EXCLUSIVE_FIXTURE_TYPES
+from robotalk.tasks.shared.constants import EXCLUSIVE_FIXTURE_TYPES
 
 _FRONT_BIASED_INTERIOR_FIXTURE_TYPES = frozenset(
     {

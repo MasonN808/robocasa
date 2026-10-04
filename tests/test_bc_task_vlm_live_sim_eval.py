@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from training.bc_task_vlm import live_sim_eval
-from training.bc_task_vlm.live_sim_eval import (
+from robotalk.evaluation import live_sim_eval
+from robotalk.evaluation.live_sim_eval import (
     FsmMirror,
     OVERHEAD_VIEWS,
     ROUTER_VIEWS,
@@ -18,10 +18,10 @@ from training.bc_task_vlm.live_sim_eval import (
     _run_lengths,
     _write_metrics,
 )
-from data_generation.task_level.subatomic_tool_specs import build_model_tool_specs
-from training.bc_task_vlm.communication_profiles import apply_communication_profile
-from training.bc_task_vlm.prompting import build_partial_user_prompt, format_history_steps
-from training.bc_task_vlm.tool_calling import build_tool_schemas
+from robotalk.tools.subatomic_tool_specs import build_model_tool_specs
+from robotalk.training.communication_profiles import apply_communication_profile
+from robotalk.training.prompting import build_partial_user_prompt, format_history_steps
+from robotalk.training.tool_calling import build_tool_schemas
 
 
 def test_global_get_image_contract_names_exact_views_in_prompt_and_schema():

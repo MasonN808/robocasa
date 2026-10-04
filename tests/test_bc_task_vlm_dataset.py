@@ -9,8 +9,8 @@ import unittest
 import unittest.mock
 from types import SimpleNamespace
 
-from training.bc_task_vlm import dataset as dataset_module
-from training.bc_task_vlm.dataset import (
+from robotalk.training import dataset as dataset_module
+from robotalk.training.dataset import (
     build_same_task_trajectory_split,
     build_example_cache_fingerprint,
     build_example_cache_path,
@@ -25,7 +25,7 @@ from training.bc_task_vlm.dataset import (
 
 class SameTaskTrajectorySplitTests(unittest.TestCase):
     @unittest.mock.patch(
-        "training.bc_task_vlm.dataset.list_task_trajectory_ids",
+        "robotalk.training.dataset.list_task_trajectory_ids",
         return_value=[f"traj_{index:06d}" for index in range(100)],
     )
     def test_seeded_split_is_reproducible_and_not_a_suffix(self, _mock_list):

@@ -8,11 +8,11 @@ materialised, so this test is what keeps them from drifting apart again.
 """
 import unittest
 
-from data_generation.task_level.tasks.specs import load_all_task_specs
-from data_generation.task_level.tasks.specs.runtime import (
+from robotalk.tasks.specs import load_all_task_specs
+from robotalk.tasks.specs.runtime import (
     build_task_definition_from_spec,
 )
-from training.bc_task_vlm.task_registry import (
+from robotalk.training.task_registry import (
     _camel_to_snake_case,
     get_task_metadata,
 )

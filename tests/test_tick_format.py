@@ -12,9 +12,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import insert_waits  # noqa: E402
-import tick_format  # noqa: E402
-from data_generation.task_level.generation.raw import runtime_support  # noqa: E402
+import robotalk.generation.insert_waits as insert_waits
+import robotalk.generation.tick_format as tick_format
+from robotalk.generation.raw import runtime_support  # noqa: E402
 
 AGENTS = ("agent_0", "agent_1")
 
@@ -82,7 +82,7 @@ class RoundTripTests(unittest.TestCase):
 
 class SchemaTests(unittest.TestCase):
     def _definition(self):
-        from data_generation.task_level.tasks.specs.runtime import SPEC_TASK_REGISTRY
+        from robotalk.tasks.specs.runtime import SPEC_TASK_REGISTRY
 
         return SPEC_TASK_REGISTRY["PrepareCoffee"]
 

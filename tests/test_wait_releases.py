@@ -14,8 +14,8 @@ class CommunicateArgumentTests(unittest.TestCase):
     """The FSM's handling of the releases argument."""
 
     def _validator(self):
-        from data_generation.task_level.tasks.specs import load_task_spec
-        from data_generation.task_level.tasks.specs.runtime import (
+        from robotalk.tasks.specs import load_task_spec
+        from robotalk.tasks.specs.runtime import (
             build_task_definition_from_spec,
         )
 
@@ -32,7 +32,7 @@ class CommunicateArgumentTests(unittest.TestCase):
         self.assertEqual(step["args"]["releases"], ["mug"])
 
     def test_unknown_id_is_rejected(self):
-        from data_generation.task_level.tasks.shared.errors import (
+        from robotalk.tasks.shared.errors import (
             CommunicationStepSemanticValidationError,
         )
 
@@ -45,7 +45,7 @@ class CommunicateArgumentTests(unittest.TestCase):
         self.assertNotIn("releases", step["args"])
 
     def test_unsupported_argument_is_still_rejected(self):
-        from data_generation.task_level.tasks.shared.errors import (
+        from robotalk.tasks.shared.errors import (
             CommunicationStepSemanticValidationError,
         )
 
@@ -60,7 +60,7 @@ class InsertWaitsTests(unittest.TestCase):
         import random
         from copy import deepcopy
 
-        import insert_waits
+        import robotalk.generation.insert_waits as insert_waits
 
         root = "/work/umass/shlomo_umass/dbenhamougol_umass/data/robocasa_agentsft_subset"
         paths = sorted(glob.glob(root + "/*/traj_000000/original_trajectory.json"))

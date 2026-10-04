@@ -13,7 +13,7 @@ from pathlib import Path
 import tempfile
 import types
 
-from data_generation.task_level.runtime.client import (
+from robotalk.generation.runtime.client import (
     GenerationResult,
     GenerationUsage,
     GoogleGenAIClient,
@@ -24,18 +24,18 @@ from data_generation.task_level.runtime.client import (
     load_dotenv_file,
     validate_google_auth,
 )
-from data_generation.task_level.sampling.base import BaseSamplingStrategy
-from data_generation.task_level.sampling.structured_random import (
+from robotalk.generation.sampling.base import BaseSamplingStrategy
+from robotalk.generation.sampling.structured_random import (
     StructuredRandomSamplingStrategy,
     _structured_random_seed_and_configuration,
 )
-from data_generation.task_level.subatomic_tool_specs import build_allowed_tool_specs
-from data_generation.task_level.tasks.base import (
+from robotalk.tools.subatomic_tool_specs import build_allowed_tool_specs
+from robotalk.tasks.base import (
     FiniteStateTaskValidator,
     TaskInstance,
     build_task_response_schema,
 )
-from data_generation.task_level.tasks import (
+from robotalk.tasks import (
     HeldObjectSemanticValidationError,
     InsufficientValidUniqueTrajectoriesDuplicateError,
     InsufficientValidUniqueTrajectoriesInvalidError,
@@ -53,23 +53,23 @@ from data_generation.task_level.tasks import (
     get_task_definition,
     supported_task_names,
 )
-from data_generation.task_level.tasks.specs import (
+from robotalk.tasks.specs import (
     TaskSpec,
     load_task_spec,
     supported_verified_task_names,
 )
-from data_generation.task_level.tasks.specs.runtime import SpecDrivenTaskValidator
-from data_generation.task_level.subatomic_tool_calls import discover_subatomic_tools
-from data_generation.task_level.generation.raw.config import (
+from robotalk.tasks.specs.runtime import SpecDrivenTaskValidator
+from robotalk.tools.subatomic_tool_calls import discover_subatomic_tools
+from robotalk.generation.raw.config import (
     INTERRUPTED_EXIT_CODE,
     INTERRUPTED_MESSAGE,
     RuntimeConfig,
 )
-from data_generation.task_level.generation.raw.progress import (
+from robotalk.generation.raw.progress import (
     PROGRESS_BAR_WIDTH,
     RichTaskProgressAdapter,
 )
-from data_generation.task_level.generation.raw.runtime_support import (
+from robotalk.generation.raw.runtime_support import (
     _validate_candidate_references_without_sim,
     extract_json_candidate,
 )
@@ -1495,7 +1495,7 @@ class DotenvLoadingTests(unittest.TestCase):
                 },
             ):
                 with mock.patch(
-                    "data_generation.task_level.runtime.client.validate_google_auth"
+                    "robotalk.generation.runtime.client.validate_google_auth"
                 ) as validate_auth:
                     client = GoogleGenAIClient(
                         project="demo-project", location="global"
@@ -1540,7 +1540,7 @@ class DotenvLoadingTests(unittest.TestCase):
                 },
             ):
                 with mock.patch(
-                    "data_generation.task_level.runtime.client.validate_google_auth"
+                    "robotalk.generation.runtime.client.validate_google_auth"
                 ):
                     client = GoogleGenAIClient(
                         project="demo-project", location="global"
@@ -1587,7 +1587,7 @@ class DotenvLoadingTests(unittest.TestCase):
                 },
             ):
                 with mock.patch(
-                    "data_generation.task_level.runtime.client.validate_google_auth"
+                    "robotalk.generation.runtime.client.validate_google_auth"
                 ):
                     client = GoogleGenAIClient(
                         project="demo-project", location="global"
@@ -1644,7 +1644,7 @@ class DotenvLoadingTests(unittest.TestCase):
                 },
             ):
                 with mock.patch(
-                    "data_generation.task_level.runtime.client.validate_google_auth"
+                    "robotalk.generation.runtime.client.validate_google_auth"
                 ):
                     client = GoogleGenAIClient(
                         project="demo-project", location="global"
