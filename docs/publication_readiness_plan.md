@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-03
 **Working branch:** `concurrent-FSM-pipeline-and-comm-ablations` at `af38f5f`, plus uncommitted changes.
-**Paper:** *RoboTalk: Learning Multi-Robot Communication and Coordination from Multimodal Demonstrations*, arXiv:2609.23997.
+**Paper:** *RoboTalk: Learning Multi-Robot Communication and Coordination from Multimodal Demonstrations*, arXiv:2609.23997. The PDF is at [`docs/paper/RoboTalk_arxiv.pdf`](paper/RoboTalk_arxiv.pdf) and ships in the public repo.
 **Companion reference:** [`robotalk_project_and_implementation.md`](robotalk_project_and_implementation.md), the internal implementation reference.
 
 This document has two parts:
@@ -72,7 +72,7 @@ A release is "complete and clean" when every item below holds.
 - The repository holds no large binaries.
 
 **6. Results are reproducible from the README.**
-- A table mirrors each paper table and figure: Table IV, Figure 6 and Figure 7, the sampling-strategy diversity table, and dataset statistics.
+- A table mirrors each quantitative paper result: Table III with Fig. 4 (diversity), Fig. 3 (task phases), Fig. 5 (communication ablation; conditions in Table IV), Figs. 6–7 (SFT scaling, rationale ablation), and dataset statistics.
 - Each row has the one command that regenerates it.
 - The fast path evaluates the released adapters; the full path also retrains.
 - The figure scripts run on whatever that command writes to `outputs/`.
@@ -158,7 +158,7 @@ A release is "complete and clean" when every item below holds.
 
 4. **Licenses:** see B.1a below. These match RoboCasa365.
 5. **Results are reported, not shipped.**
-   - The README carries the paper's numbers (Table IV, Figures 6–7, the sampling-diversity table, dataset statistics).
+   - The README carries the paper's numbers (Table III, Figs. 3 and 5–7, dataset statistics).
    - No result files, eval logs or figure PNGs go into the public repo.
    - Each number and figure instead gets a short documented command; see Step 8 and the `reproduce` entry point in Step 4.
    - Before writing the README table, confirm that it uses the camera-ready numbers. Implementation reference §11.1: the communication-ablation numbers predate the `_waitfix_v3` reruns.
@@ -232,13 +232,40 @@ This table is the whitelist. Anything not reachable from it, by import or by a d
 | Multi-agent simulator, 53 tasks, FSM | `data_generation/task_level/tasks/specs/verified/*.json`, `tasks/specs/runtime.py`, `tasks/shared/{fsm,concurrent_fsm,scheduling,workspace_semantics,prompting,instances}.py`, `subatomic_tool_{specs,calls}.py`, `grounding_specs.py`, `scene_sampling.py`, and the `robocasa/utils/{sim_tool_executor*,trajectory_runner*,trajectory_adapter,sim_tool_specs}.py` changes plus the kitchen env changes. |
 | Coordination mechanisms (leader–follower, wait–release, exclusive workspaces) | Same as above, plus `communication_profiles.py`. |
 | Generation pipeline and retry cascade | `generation/raw/{production_cascade,cascade_canary}.py`, `sampling/structured_random.py`, `generation/image/processor.py`, render and postprocess entry points, and the scene compatibility cache builder. |
-| Sampling strategies (High Temp, Random, Structured Random, Verbalized) and the diversity table | The four sampling modes in `sampling/`, plus `data_analysis/analyze_sampling_methods.py` and the diversity metric code. Drop the plotting variants the paper does not use. |
+| Fig. 3: task-phase distribution by split | `scripts/plot_task_phase_distribution.py` / `training/bc_task_vlm/export_task_phase_pngs.py`, plus the per-task phase counts from the original single-agent RoboCasa365 implementations. |
+| Table III and Fig. 4: sampling strategies (Base, High Temp at 1.0 vs 0.6, Random/UUID, Structured Random, Verbalized with 3 trajectories per call); 30 trajectories × 53 tasks per strategy | The sampling modes in `sampling/` and the generation prompt variants. Diversity code is `data_analysis/analyze_sampling_methods.py`: communication diversity is 1 − mean pairwise cosine over Qwen3-Embedding-4B embeddings of concatenated messages (435 pairs), and action diversity is normalized Levenshtein over tool-name+sorted-args tokens, keeping recipients and dropping message text and agent identity. Drop the plotting variants the paper does not use. |
 | Dataset release | `training/bc_task_vlm/robotalk_hf/{export_robotalk.py,publish_models.py,static_space}`. **Drop** `anonymize_review.py`. |
 | SFT (LoRA; Instruct/Thinking × rationale; scale 30–150) | `training/bc_task_vlm/{prompting,dataset,preprocess,preprocessed_data,main,peft_compat,metrics}.py`, `build_scale_experiment_manifests.py`, `materialize_scale_artifacts.py`, `accelerate_multigpu.yaml`. |
 | Live-sim evaluation, cohorts and metrics | `live_sim_eval.py`, `live_sim_parallel_eval.py`, `fixed_cohort_selection.py`, `freeze_configuration_cohort.py`, `fixed_live_sim_cohort.py`, `summarize_fixed_live_sim.py`, and the vLLM serving launcher (generalized). |
-| Table IV, Figures 6–7 | `summarize_fixed_live_sim.py`, `export_communication_ablation_png.py`, `export_sft_scale_pngs.py`, `plot_style_utils.py`, `plot_caption_metadata.py`. Reduce `build_43_10_eval_artifact.py` to the table and plot logic only; the HTML artifact is not needed. |
-| Evaluation details | Verify that the paper's "4× reference length" budget equals the shipped default. `--step-budget-factor` is 2.0 and is doubled when `get_image` is trained (`live_sim_eval.py:1578-1581`), so this holds only for image-trained configs. Make 4× explicit in the eval config. |
+| Fig. 5 (communication ablation; conditions defined in Table IV), Fig. 6 (SFT scaling), Fig. 7 (rationale ablation) | `summarize_fixed_live_sim.py`, `export_communication_ablation_png.py`, `export_sft_scale_pngs.py`, `plot_style_utils.py`, `plot_caption_metadata.py`. Reduce `build_43_10_eval_artifact.py` to the table and plot logic only; the HTML artifact is not needed. |
+| Evaluation details | The paper (§IV, Closed-Loop Evaluation) defines the budget as "four times the length of an example solution stored in the task specification, counting tool calls from both agents and observations". The code gives `--step-budget-factor` 2.0 × 2 when `get_image` is trained (`live_sim_eval.py:1578-1581`). Make 4× explicit in the eval config so it does not depend on that coupling. |
+| Fig. 2 (PlateStoreDinner `traj_000088` example) and Fig. 1 (illustration) | Qualitative figures; no reproduction command is needed. Optionally keep `capture_plate_store_dinner_overview.py` as an example of rendering a dataset trajectory. |
 | **Excluded (decided 2026-10-04)** | **Task-spec pipeline** (`data_generation/task_level/pipeline/`, phases 1–5, `sim_normalization.py`, and `tests/test_task_level_phase*.py`, `test_task_level_pipeline_cli.py`, `test_sim_normalization.py`): it is outdated, so only the 53 verified JSON specs it produced ship. **Off-sim (teacher-forced) evaluation**: `evaluation.py`, `eval_standalone.py`, `judge_communications.py`, `prediction_io.py`, `divergence_analysis.py`, `export_results_table.py`, the `plot_*_comparison.py` scripts, `eval_*offsim*`/`judge_*` launchers, and the structured-eval paths in `metrics.py`. **Caution:** `main.py`, `dataset.py` and `live_sim_eval.py` import from `evaluation`/`metrics`/`prediction_io`. Move the shared helpers (e.g. tool-call parsing) into `robotalk/evaluation/parsing.py` *before* deleting, and drop the in-training off-sim eval hook in `main.py`. |
+
+**Paper ↔ archive cross-check (2026-10-04).**
+- Every success rate in Figs. 5–7 matches the archived Sept 15 artifact (`eval_runs/fixed_live_sim_43_10_results_artifact/artifact.json`, commit `9ac8888`) exactly.
+- These are the README numbers. Error-free successes per 430 trained-task / 100 held-out episodes:
+
+| Result | Values (trained / held-out) |
+|---|---|
+| Fig. 5, Gemini 3 Flash: None / Unguided / Minimal / Intermediate / Full | 33/5 · 41/8 · 186/34 · 198/46 · 282/72 |
+| Fig. 5, Qwen3-VL-8B-Instruct (untuned): same order | 1/0 · 2/0 · 5/0 · 7/0 · 0/0 |
+| Fig. 6, Instruct at 30/60/90/120/150 per task | 352/45 · 378/64 · 396/55 · 400/48 · 405/65 |
+| Fig. 6, Thinking+rationale at 30/60/90/120/150 per task | 345/71 · 364/72 · 393/66 · 388/77 · 398/73 |
+| Fig. 7 at 30 per task: Instruct / Instruct+rationale / Thinking / Thinking+rationale | 352/45 · 355/58 · 308/50 · 345/71 |
+
+- The implementation reference's §12 tables (Sept 6 snapshot) are **stale**. Minimal and Intermediate were replaced by the `_waitfix_v3` reruns, and Instruct 60/90 by the actual one-epoch checkpoints. Do not copy numbers from that doc.
+- **Instruct 60/90 epochs.** Their source runs are labelled `ep0p5`, but `paper_checkpoint_provenance_audit.md` establishes from `trainer_state.json` that they are the true one-epoch checkpoints (1298, 1945). The directory labels were swapped. The released HF adapters point at these same checkpoints.
+- **Held-out cohort.** Thinking+rationale 60/90/120 held-out numbers come from `_native43matched` reruns on the native 43/10 cohort. The reproduction path, which always uses the native cohort, therefore targets the same episodes as the paper.
+- **The Thinking-without-rationale arm** was evaluated with parser recovery (`_recovery_v1`). Its released config must enable that flag, and its model card must say so.
+- **Tension with scope decision 3.** The paper's §IV "Task Selection" describes "a verification pipeline combining task filtering, specification validation, and simulator replay". That pipeline is excluded as outdated. The README should say the 53 verified specifications are its output and are released as-is.
+- **Table III provenance.**
+  - The numbers were computed by Mason on NCSA Delta (`scripts/analyze_sampling_method_cosine_qwen3.sbatch`, `--chdir=/work/hdd/bgjs/mnakamura/robocasa`), not on Unity.
+  - The only archived output here is `data_analysis/plots/model_sampling_comparison/model_method_diversity_summary.csv` (commit `86808cd`, 2026-07-01). It matches the paper's Base and Structured Random communication values (0.058174, 0.088427) and covers **51 tasks** for Gemini-3-Flash, not 53. That is because the comparison predates the final 53-task suite: its input is `sampling_methods_data_52Tasks_30Trajectories`.
+  - The raw trajectories are **not on Unity**. Locate them on Delta (Mason) or on Dorian's laptop (`~/Projects/robocasa/data_generation/task_level/data/diversity_analysis/…`).
+  - Also confirm the source of the High Temp, Random and Verbalized rows and of the action-sequence column.
+  - The README must state the task count used for Table III.
+- **Table III reproduction cost.** It needs 5 strategies × 53 tasks × 30 Gemini-generated trajectories, which costs API spend and is nondeterministic. **Recommended:** publish those sampling-comparison trajectories as an extra config of the HF dataset (e.g. `sampling_comparison`). `reproduce.py table3` then only embeds and scores them on a single GPU, and regenerating with Gemini stays an optional `--regenerate` path. This is data, not a results file, so it fits decision 5.
 
 #### Step 3 — Trim (on `publication-cleanup`)
 
@@ -303,12 +330,14 @@ robotalk/                      # github.com/DorianAtSchool/robotalk
 - **`scripts/reproduce.py` is the minimal-work path.** One subcommand per paper result runs the whole chain and writes the table or figure to `outputs/`:
 
   ```bash
-  python scripts/reproduce.py table4                       # comm ablation: Gemini 3 Flash × 5 modes (needs GEMINI_API_KEY)
-  python scripts/reproduce.py fig6 --from-adapters          # SFT scale: eval released adapters, then plot
-  python scripts/reproduce.py fig6 --train                  # same, but retrain all 10 adapters first
-  python scripts/reproduce.py fig7 --from-adapters          # rationale ablation (4 arms @ 30/task)
-  python scripts/reproduce.py diversity                     # sampling-strategy diversity table
-  python scripts/reproduce.py dataset-stats                 # Section stats from the HF dataset (CPU, minutes)
+  python scripts/reproduce.py fig3                         # task-phase distribution (CPU, seconds)
+  python scripts/reproduce.py table3                       # Table III + Fig. 4 diversity from the released sampling-comparison trajectories (1 GPU)
+  python scripts/reproduce.py table3 --regenerate          # same, regenerating 5×53×30 trajectories with Gemini first (needs GEMINI_API_KEY)
+  python scripts/reproduce.py fig5                         # comm ablation: Gemini 3 Flash + untuned Qwen3-VL-8B × 5 conditions
+  python scripts/reproduce.py fig6 --from-adapters         # SFT scaling: eval the 10 released adapters, then plot
+  python scripts/reproduce.py fig6 --train                 # same, but retrain all 10 adapters first
+  python scripts/reproduce.py fig7 --from-adapters         # rationale ablation (4 arms @ 30/task)
+  python scripts/reproduce.py dataset-stats                # 7,950 trajectories / 53 tasks etc. from the HF dataset (CPU)
   ```
 
   - Each subcommand prints the expected numbers from the paper next to the reproduced ones.
@@ -368,7 +397,7 @@ These are inputs for others to build on. Results files are not shipped.
   1. title, authors, paper, dataset and model links, teaser figure (one image, under 1 MB);
   2. Installation;
   3. Quickstart (load the dataset, replay a trajectory, run one eval episode);
-  4. **Results**: the paper's numbers for Table IV, Figures 6–7 and the diversity table, as markdown tables, each followed by its `reproduce.py` command with expected compute (GPU-hours, API cost) and the fast versus full path;
+  4. **Results**: the paper's numbers for Table III, Figs. 5–7 and the Fig. 3 phase counts (values in the Step 2 cross-check), as markdown tables, each followed by its `reproduce.py` command with expected compute (GPU-hours, API cost) and the fast versus full path;
   5. Repository structure;
   6. Generating new data (needs a Gemini API key);
   7. Limitations;
@@ -391,9 +420,9 @@ These are inputs for others to build on. Results files are not shipped.
 #### Step 10 — Reproduction verification (acceptance gate)
 
 - From a fresh clone and a fresh environment on a machine *other than* this cluster's usual setup:
-  - `reproduce.py dataset-stats` and `diversity` match the paper exactly;
+  - `reproduce.py dataset-stats`, `fig3` and `table3` (from the released trajectories) match the paper exactly;
   - `fig7 --from-adapters` (smallest GPU cost) matches the paper within Wilson CI on each cell.
-- Spot-check one `table4` mode and one `fig6` scale point. The full sweeps are optional.
+- Spot-check one `fig5` condition and one `fig6` scale point. The full sweeps are optional.
 - Have a co-author who was not involved in the cleanup follow the README unaided, and record their friction points.
 
 #### Step 11 — Release
