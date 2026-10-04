@@ -19,8 +19,6 @@ def message_text(message: dict[str, Any]) -> str:
 
 def build_vertex_function_declarations(
     allowed_tool_specs: dict[str, dict[str, Any]],
-    *,
-    include_agent_param: bool = False,
 ) -> list[dict[str, Any]]:
     """Builds one Vertex FunctionDeclaration per allowed tool.
 
@@ -40,13 +38,6 @@ def build_vertex_function_declarations(
     for tool_name, tool_spec in allowed_tool_specs.items():
         required_args, _ = declared_tool_arg_names(tool_spec)
         properties: dict[str, Any] = {}
-        if include_agent_param:
-            properties["agent"] = {
-                "type": "STRING",
-                "enum": list(AGENT_IDS),
-                "description": "The agent that performs this call.",
-            }
-            required_args = ["agent", *required_args]
         for field_name in _iter_declared_tool_arg_names(tool_spec):
             properties[field_name] = _build_symbolic_field_schema(
                 field_name,

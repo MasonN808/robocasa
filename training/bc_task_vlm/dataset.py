@@ -1014,7 +1014,6 @@ def build_centralized_examples(
         tool_schemas = build_tool_schemas(
             agent_ids=AGENT_IDS,
             allowed_tool_specs=model_tool_specs,
-            include_agent_param=False,
         )
         include_trajectory_ids = None
         if trajectory_ids_by_task is not None:

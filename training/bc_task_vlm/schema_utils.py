@@ -9,18 +9,6 @@ from typing import Any
 from data_generation.task_level.tasks.shared.schema import build_task_response_schema
 from data_generation.task_level.subatomic_tool_specs import KNOWN_OBSERVATION_VIEWS
 
-# Synthetic terminal tool for agent-prediction (v2) training: trajectories in
-# the data simply end with no signal, so a task_complete step is synthesized
-# after each trajectory's last action. It is never present in task specs.
-TASK_COMPLETE_TOOL_NAME = "task_complete"
-TASK_COMPLETE_TOOL_SPEC: dict[str, Any] = {
-    "tool_args": [],
-    "description": (
-        "Declare that the whole task goal is already satisfied and no further "
-        "actions are needed by either agent."
-    ),
-}
-
 GET_IMAGE_TOOL_NAME = "get_image"
 GET_IMAGE_TOOL_SPEC: dict[str, Any] = {
     "tool_args": ["views"],
@@ -38,38 +26,10 @@ GET_IMAGE_TOOL_SPEC: dict[str, Any] = {
 }
 
 
-def augment_tool_specs_for_agent_prediction(
-    allowed_tool_specs: dict[str, dict[str, Any]],
-    *,
-    include_get_image: bool = False,
-    include_task_complete: bool = False,
-) -> dict[str, dict[str, Any]]:
-    """Returns the task's tool specs, optionally plus synthetic tools.
-
-    include_task_complete=False drops task_complete, which makes a centralized
-    run structurally comparable to a partial-observability one: partial never
-    offers task_complete (the caller is the actor), so a centralized model that
-    keeps it has an extra way to end an episode -- and measurably over-uses it,
-    declaring completion roughly twice as often as it actually succeeds.
-    """
-
-    augmented = dict(allowed_tool_specs)
-    if include_task_complete:
-        augmented[TASK_COMPLETE_TOOL_NAME] = deepcopy(TASK_COMPLETE_TOOL_SPEC)
-    if include_get_image:
-        augmented[GET_IMAGE_TOOL_NAME] = deepcopy(GET_IMAGE_TOOL_SPEC)
-    return augmented
-
-
 def augment_tool_specs_with_get_image(
     allowed_tool_specs: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    """Adds get_image without the agent-prediction machinery.
-
-    Partial-observability v3 supervises get_image while the acting agent stays
-    fixed by caller identity, so it needs get_image in the tool set but not
-    task_complete or the "agent" argument.
-    """
+    """Adds the get_image tool to a task's tool specs."""
 
     augmented = dict(allowed_tool_specs)
     augmented[GET_IMAGE_TOOL_NAME] = deepcopy(GET_IMAGE_TOOL_SPEC)

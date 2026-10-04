@@ -1152,7 +1152,6 @@ class GeminiPolicy:
                 # emit it on every call, which then failed validation -- the
                 # agent relaunched the same rejected proposal until its
                 # rejection budget drained, scoring 0 for harness reasons.
-                include_agent_param=False,
             )
         ]
         config_kwargs: dict[str, Any] = {
@@ -1295,7 +1294,6 @@ def run_trajectory_partial(
     tool_schemas = build_tool_schemas(
         agent_ids=AGENT_IDS,
         allowed_tool_specs=model_tool_specs,
-        include_agent_param=False,
     )
     adapter, adapted = session.start_trajectory(trajectory)
     mirror = FsmMirror(

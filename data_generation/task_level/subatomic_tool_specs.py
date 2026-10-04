@@ -259,28 +259,16 @@ def canonicalize_model_tool_args(
 def build_model_tool_specs(
     *,
     include_get_image: bool = False,
-    include_task_complete: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Return the one global, task-agnostic interface shown to a model.
 
-    Task-local allowlists and overrides never enter this view. Capability-level
-    tools may differ by policy mode: ``get_image`` is exposed only when active
-    observation is enabled, and ``task_complete`` only for the legacy
-    centralized agent-prediction contract.
+    Task-local allowlists and overrides never enter this view. ``get_image``
+    is exposed only when active observation is enabled.
     """
 
     specs = deepcopy(TASK_LEVEL_ALLOWED_TOOL_SPECS)
     if not include_get_image:
         specs.pop("get_image", None)
-    if include_task_complete:
-        specs["task_complete"] = {
-            "tool_args": [],
-            "description": (
-                "Declare that the whole task goal is already satisfied and no "
-                "further actions are needed by either agent."
-            ),
-            "tool_arg_descriptions": {},
-        }
     return specs
 
 
