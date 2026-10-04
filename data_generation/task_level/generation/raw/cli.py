@@ -645,19 +645,6 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         help="Trajectory sampling strategy.",
     )
     parser.add_argument(
-        "--verbalized-k",
-        type=int,
-        default=None,
-        dest="verbalized_k",
-        help=("Number of trajectories to request per verbalized run. Defaults to 1."),
-    )
-    parser.add_argument(
-        "--verbalized_k",
-        type=int,
-        dest="verbalized_k",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
         "--thinking-level",
         type=str,
         choices=THINKING_LEVEL_CHOICES,
@@ -839,7 +826,6 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args(argv)
-    verbalized_k = 1 if args.verbalized_k is None else args.verbalized_k
     parsed_tasks = tuple(args.composite_tasks)
     normalized_tasks = RuntimeConfig._normalize_composite_tasks(None, parsed_tasks)
     # Resolve the default single-task summary path from the normalized task list
@@ -861,7 +847,6 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
         random_start_location=args.random_start_location,
         random_access_state=args.random_access_state,
         sampling=args.sampling,
-        verbalized_k=verbalized_k,
         thinking_level=args.thinking_level,
         max_workers=args.max_workers,
         max_retries=args.max_retries,

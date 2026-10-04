@@ -9,7 +9,6 @@ from typing import Any
 from data_generation.task_level.generation.raw.config import (
     COST_SUMMARY_OUTPUT_FILENAME,
     DEFAULT_OUTPUT_DIR,
-    MULTI_SAMPLE_SAMPLING_STRATEGIES,
     RuntimeConfig,
 )
 from data_generation.task_level.generation.raw.runtime_support import (
@@ -198,24 +197,6 @@ def _best_case_cost_estimate_note(attempt_counts: list[int]) -> str:
     return "Best case assumes each trajectory succeeds on the first attempt."
 
 
-def _append_sampling_cost_note(
-    summary: dict[str, Any],
-    runtime_config: RuntimeConfig,
-) -> dict[str, Any]:
-    """Adds sampling-specific cost notes when totals are shared across candidates."""
-
-    if runtime_config.sampling not in MULTI_SAMPLE_SAMPLING_STRATEGIES:
-        return summary
-    verbalized_note = (
-        "For verbalized sampling, token and cost totals are counted once "
-        "per model response and apportioned across the saved trajectories from "
-        "that response."
-    )
-    if verbalized_note not in summary["notes"]:
-        summary["notes"].append(verbalized_note)
-    return summary
-
-
 def _load_json_payload(path: Path) -> dict[str, Any] | None:
     """Loads one JSON payload from disk when the file exists and is valid."""
 
@@ -247,11 +228,6 @@ def _matches_historical_preflight_config(
     if not isinstance(sampling_payload, dict):
         return False
     if sampling_payload.get("strategy", "base") != runtime_config.sampling:
-        return False
-    if runtime_config.sampling == "verbalized":
-        if sampling_payload.get("verbalized_k") != runtime_config.verbalized_k:
-            return False
-    elif sampling_payload.get("verbalized_k", 1) != 1:
         return False
     if sampling_payload.get("temperature") != runtime_config.temperature:
         return False
@@ -445,7 +421,7 @@ def _build_cost_estimate_summary_from_generation_usages(
     }
     if shared_pricing is not None:
         summary["pricing"] = shared_pricing
-    return _append_sampling_cost_note(summary, runtime_config)
+    return summary
 
 
 def _build_cost_summary_from_generation_usages(
@@ -603,4 +579,4 @@ def _build_preflight_cost_estimate_summary(
         "Token counts come from the manual task token estimate rather than "
         "observed API usage metadata."
     )
-    return _append_sampling_cost_note(summary, runtime_config)
+    return summary

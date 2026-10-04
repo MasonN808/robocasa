@@ -53,25 +53,25 @@ class DuplicateTrajectoryValidationError(TrajectoryValidationError):
 
 
 class InsufficientValidUniqueTrajectoriesValidationError(TrajectoryValidationError):
-    """Raised when a verbalized run yields too few distinct valid trajectories."""
+    """Raised when a multi-sample run yields too few distinct valid trajectories."""
 
 
 class InsufficientValidUniqueTrajectoriesInvalidError(
     InsufficientValidUniqueTrajectoriesValidationError
 ):
-    """Raised when too many verbalized candidates fail validation checks."""
+    """Raised when too many multi-sample candidates fail validation checks."""
 
 
 class InsufficientValidUniqueTrajectoriesDuplicateError(
     InsufficientValidUniqueTrajectoriesValidationError
 ):
-    """Raised when too many verbalized candidates duplicate existing trajectories."""
+    """Raised when too many multi-sample candidates duplicate existing trajectories."""
 
 
 class InsufficientValidUniqueTrajectoriesMixedError(
     InsufficientValidUniqueTrajectoriesValidationError
 ):
-    """Raised when verbalized candidates fail from both invalid and duplicate causes."""
+    """Raised when multi-sample candidates fail from both invalid and duplicate causes."""
 
 
 class TrajectoryStructureValidationError(TrajectoryValidationError):

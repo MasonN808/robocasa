@@ -174,25 +174,6 @@ def _generation_error_status_code(exc: Exception) -> int | None:
     return None
 
 
-def _verbalized_response_count(
-    response_schema: dict[str, Any] | None,
-) -> int | None:
-    """Returns the verbalized response count encoded in one response schema."""
-
-    if response_schema is None:
-        return None
-    responses_schema = response_schema.get("properties", {}).get("responses")
-    if not isinstance(responses_schema, dict):
-        return None
-
-    min_items = responses_schema.get("minItems")
-    max_items = responses_schema.get("maxItems")
-    if isinstance(min_items, int) and min_items == max_items:
-        return min_items
-
-    return None
-
-
 def _build_attempt_usage(
     *,
     prompt: str,
@@ -707,19 +688,10 @@ class GoogleGenAIClient(BaseGenerationClient):
                     "such as Vertex AI User, then retry."
                 ) from exc
             if status_code == 400 and "INVALID_ARGUMENT" in message:
-                verbalized_response_count = _verbalized_response_count(response_schema)
-                verbalized_hint = ""
-                if verbalized_response_count is not None:
-                    verbalized_hint = (
-                        " This request uses verbalized structured output, and the "
-                        f"requested response count ({verbalized_response_count}) may exceed "
-                        "Vertex AI request limits. Retry with a smaller "
-                        "`--verbalized-k`, such as 4 or lower."
-                    )
                 raise TrajectoryGenerationError(
                     "Vertex AI rejected the generation request with "
                     "`400 INVALID_ARGUMENT`."
-                    f"{verbalized_hint} Original error: {message}"
+                    f" Original error: {message}"
                 ) from exc
             raise
         # Usage metadata is optional and field names vary a bit across SDK releases.

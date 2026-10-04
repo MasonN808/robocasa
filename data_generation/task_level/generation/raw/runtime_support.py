@@ -820,7 +820,7 @@ def _build_trajectory_record_from_candidate(
     seen_signatures_lock: threading.Lock | None,
     attempt_number: int,
 ) -> dict[str, Any]:
-    # Reuse the shared sampled-candidate path so base and verbalized modes keep
+    # Reuse the shared sampled-candidate path so every sampling mode keeps
     # one normalization and validation implementation.
     trajectory_records = _build_trajectory_records_from_sampled_candidates(
         run_index=trajectory_index,
@@ -1400,9 +1400,7 @@ def _build_multi_sample_insufficient_results_error(
         "duplicate_candidate_count": duplicate_count,
         "invalid_candidate_count": invalid_count,
     }
-    run_label = (
-        "Verbalized run" if sampling_name == "verbalized" else "Multi-sample run"
-    )
+    run_label = "Multi-sample run"
 
     if duplicate_count and invalid_count:
         return InsufficientValidUniqueTrajectoriesMixedError(

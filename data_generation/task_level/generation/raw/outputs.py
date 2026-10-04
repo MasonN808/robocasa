@@ -14,13 +14,11 @@ from data_generation.task_level.generation.raw.config import (
     DATASET_RUN_TIMESTAMP_FORMAT,
     DEFAULT_OUTPUT_DIR,
     ERROR_SUMMARY_OUTPUT_FILENAME,
-    MULTI_SAMPLE_SAMPLING_STRATEGIES,
     RuntimeConfig,
     SUMMARY_OUTPUT_FILENAME,
     TRAJECTORY_DIRECTORY_NAME,
 )
 from data_generation.task_level.generation.raw.costs import (
-    _append_sampling_cost_note,
     _build_cost_summary_from_generation_usages,
 )
 from data_generation.task_level.generation.raw.errors import (
@@ -217,8 +215,6 @@ def _build_model_config_payload(runtime_config: RuntimeConfig) -> dict[str, Any]
         "temperature": runtime_config.temperature,
         "strategy": runtime_config.sampling,
     }
-    if runtime_config.sampling == "verbalized":
-        sampling_payload["verbalized_k"] = runtime_config.verbalized_k
 
     return {
         "initialization": {
@@ -263,10 +259,7 @@ def _payload_trajectories_per_run(payload: dict[str, Any]) -> int:
     sampling_payload = model_config.get("sampling", {})
     if not isinstance(sampling_payload, dict):
         return 1
-    if sampling_payload.get("strategy") not in MULTI_SAMPLE_SAMPLING_STRATEGIES:
-        return 1
-    verbalized_k = coerce_int(sampling_payload.get("verbalized_k")) or 1
-    return max(verbalized_k, 1)
+    return 1
 
 
 def _trajectory_index_from_id(trajectory_id: str) -> int | None:
@@ -1093,7 +1086,6 @@ def _build_generation_payload(
         if "raw_output" in trajectory
     ]
     cost_summary = _build_cost_summary_from_generation_usages(generation_usages)
-    cost_summary = _append_sampling_cost_note(cost_summary, runtime_config)
     payload = {
         "composite_task": runtime_config.composite_task,
         "sdk": runtime_config.sdk,
