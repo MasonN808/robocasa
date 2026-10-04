@@ -194,15 +194,15 @@ Two side effects of `4e10706`:
 - Preprocessed artifacts and example caches are stamped `train_example_format=private_history_consume_once`, so artifacts built by the old code are rejected.
 - A latent `NameError` in the collator's empty-label check is fixed.
 
-**Not pruned, proposed as Pass C.** These generation options are unused by the production cascade, which pins `tick_format=True`, `prompt_style="simplified_v3"`, `retry_feedback_style="observational"` and `sampling="structured_random"`:
-- flat (non-tick) generation;
-- the `legacy`/`simplified`/`simplified_v2` prompt styles;
-- the `targeted` retry feedback;
-- the Vertex batch-processing path;
-- the `base` strategy;
-- the older `raw/cli.py` front end.
+**Pass C (done, 2026-10-04).** This pass covers generation.
+- A third golden snapshot, `golden_cascade.py`, rebuilds 318 recorded trajectories' task instances. All 318 initial states match exactly. It then replays each trajectory's ticks through the cascade's prompt, response schema, parse and `_validate_candidate` path, plus 2 mutations per trajectory.
+- The first golden check (`golden.py`) also stayed unchanged throughout.
 
-They sit inside the code that produced the dataset, so they get their own pass under the same golden checks.
+| Commit | Removed |
+|---|---|
+| `ed35129` | The pre-cascade generator: raw CLI, orchestrator, on-demand and Vertex-batch runners, costs, output writers, error summaries. `runtime_support` goes from 59 definitions to 12, and `progress.py` is reduced to the render sweep's components. |
+| `e5430e0` | Legacy/simplified/simplified_v2 prompt styles, the flat (non-tick) path, the `base` registry entry, and unread `RuntimeConfig` fields |
+| this commit | The Azure OpenAI client and the pricing layer |
 
 **Test status after Pass A.**
 - Run on a compute node, over all tracked `tests/test_*.py` and `training/bc_task_vlm/tests/test_*.py`.
