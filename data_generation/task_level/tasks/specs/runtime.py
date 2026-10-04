@@ -648,20 +648,16 @@ def build_task_definition_from_spec(task_spec: TaskSpec) -> TaskDefinition:
             run_index=physical_configuration_index,
             runtime_config=runtime_config,
         )
-        rules = instance.extra_execution_rules or task_spec.extra_execution_rules
-        if getattr(runtime_config, "tick_format", False):
-            rules = tuple(rules) + TICK_FORMAT_RULES
+        rules = tuple(
+            instance.extra_execution_rules or task_spec.extra_execution_rules
+        ) + TICK_FORMAT_RULES
         return replace(
             instance,
             coordinator_id=task_spec.agent_ids[run_index % len(task_spec.agent_ids)],
             extra_execution_rules=tuple(rules),
             # Tick generation lets the model author waits, so its prompt must
             # display the same full tool set as the tick response schema.
-            allowed_tool_specs=(
-                deepcopy(allowed_tool_specs)
-                if getattr(runtime_config, "tick_format", False)
-                else instance.allowed_tool_specs
-            ),
+            allowed_tool_specs=deepcopy(allowed_tool_specs),
         )
 
     def _validator_factory(task_instance: TaskInstance | None) -> SpecDrivenTaskValidator:

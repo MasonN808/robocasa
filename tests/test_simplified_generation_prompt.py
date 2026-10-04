@@ -7,7 +7,7 @@ from data_generation.task_level.tasks.shared.instances import (
 )
 
 
-def _config(prompt_style: str = "simplified") -> RuntimeConfig:
+def _config() -> RuntimeConfig:
     return RuntimeConfig(
         composite_task="AddSugarCubes",
         num_runs=1,
@@ -16,33 +16,14 @@ def _config(prompt_style: str = "simplified") -> RuntimeConfig:
         project=None,
         location="global",
         temperature=0.6,
-        max_workers=1,
-        max_retries=1,
-        tick_format=True,
-        prompt_style=prompt_style,
     )
-
-
-def test_simplified_prompt_keeps_legacy_prompt_selectable():
-    definition = get_task_definition("AddSugarCubes")
-    instance = definition.build_task_instance(0, _config())
-
-    simplified = definition.build_prompt(
-        "test", task_instance=instance, prompt_style="simplified"
-    )
-    legacy = definition.build_prompt("test", task_instance=instance)
-
-    assert "Eight rules:" in simplified
-    assert "Important rules:" not in simplified
-    assert "Important rules:" in legacy
-    assert simplified != legacy
 
 
 def test_simplified_prompt_has_eight_rules():
     definition = get_task_definition("AddSugarCubes")
     instance = definition.build_task_instance(0, _config())
     prompt = definition.build_prompt(
-        "test", task_instance=instance, prompt_style="simplified"
+        "test", task_instance=instance
     )
 
     assert sum(f"\n{number}. " in prompt for number in range(1, 9)) == 8
@@ -53,7 +34,7 @@ def test_tick_prompt_displays_wait_and_optional_communication_contract():
     definition = get_task_definition("AddSugarCubes")
     instance = definition.build_task_instance(0, _config())
     prompt = definition.build_prompt(
-        "test", task_instance=instance, prompt_style="simplified"
+        "test", task_instance=instance
     )
 
     assert "wait_for_signal\n" in prompt
@@ -65,9 +46,9 @@ def test_tick_prompt_displays_wait_and_optional_communication_contract():
 
 def test_simplified_v2_spells_out_location_and_finished_agent_transitions():
     definition = get_task_definition("AddSugarCubes")
-    instance = definition.build_task_instance(0, _config("simplified_v2"))
+    instance = definition.build_task_instance(0, _config())
     prompt = definition.build_prompt(
-        "test", task_instance=instance, prompt_style="simplified_v2"
+        "test", task_instance=instance
     )
 
     assert "give_space(X) removes it from X" in prompt
@@ -88,9 +69,9 @@ def test_simplified_v2_spells_out_location_and_finished_agent_transitions():
 
 def test_prepare_cheese_station_requires_the_goal_reference_object():
     definition = get_task_definition("PrepareCheeseStation")
-    instance = definition.build_task_instance(0, _config("simplified_v3"))
+    instance = definition.build_task_instance(0, _config())
     prompt = definition.build_prompt(
-        "test", task_instance=instance, prompt_style="simplified_v3"
+        "test", task_instance=instance
     )
 
     assert "place the cheese and grater next to salad_bowl" in prompt
@@ -102,10 +83,10 @@ def test_prepare_cheese_station_requires_the_goal_reference_object():
 
 def test_simplified_v3_uses_explicit_blocked_schema_and_prompt():
     definition = get_task_definition("AddSugarCubes")
-    config = _config("simplified_v3")
+    config = _config()
     instance = definition.build_task_instance(0, config)
     prompt = definition.build_prompt(
-        "test", task_instance=instance, prompt_style="simplified_v3"
+        "test", task_instance=instance
     )
     schema = definition.explicit_blocked_tick_response_schema
 
@@ -130,10 +111,10 @@ def test_simplified_v3_uses_explicit_blocked_schema_and_prompt():
 
 def test_simplified_v3_no_partition_prefers_coherent_two_agent_work():
     definition = get_task_definition("AddSugarCubes")
-    config = _config("simplified_v3")
+    config = _config()
     instance = definition.build_task_instance(0, config)
     prompt = definition.build_prompt(
-        "test", task_instance=instance, prompt_style="simplified_v3"
+        "test", task_instance=instance
     )
 
     assert "Prefer giving both agents a coherent physical responsibility" in prompt
@@ -142,7 +123,7 @@ def test_simplified_v3_no_partition_prefers_coherent_two_agent_work():
 
 def test_random_starts_canonicalize_cabinet_to_shared_parent_workspace():
     definition = get_task_definition("PrepareSoupServing")
-    instance = definition.build_task_instance(0, _config("simplified_v3"))
+    instance = definition.build_task_instance(0, _config())
     agents = instance.initial_state["agents"]
     assert all(state["location"] != "cab" for state in agents.values())
     validate_initial_agent_locations(instance.initial_state)

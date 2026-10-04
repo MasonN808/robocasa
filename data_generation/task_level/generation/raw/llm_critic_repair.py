@@ -146,15 +146,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         project=None,
         location=args.location,
         temperature=args.temperature,
-        max_workers=1,
-        max_retries=1,
         random_start_location=True,
         random_access_state=True,
         sampling="structured_random",
         thinking_level=args.thinking_level,
-        tick_format=True,
-        prompt_style="simplified_v3",
-        retry_feedback_style="observational",
     )
     definition = get_task_definition(args.task)
     instance = definition.build_task_instance(args.run_index, config)

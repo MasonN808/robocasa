@@ -48,7 +48,7 @@ def _candidate_signature(candidate: dict[str, Any]) -> str:
 def _sampling_strategy_for_runtime(runtime_config: RuntimeConfig):
     """Returns the configured sampling strategy for the current runtime."""
 
-    return get_sampling_strategy(getattr(runtime_config, "sampling", "base"))
+    return get_sampling_strategy(getattr(runtime_config, "sampling", "structured_random"))
 
 
 def _unwrap_generation_response(

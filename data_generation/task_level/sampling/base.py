@@ -96,7 +96,6 @@ class BaseSamplingStrategy:
             variation_key,
             task_instance=task_instance,
             retry_feedback=retry_feedback,
-            prompt_style=runtime_config.prompt_style,
         )
 
     def response_schema(
@@ -105,16 +104,12 @@ class BaseSamplingStrategy:
         task_definition: TaskDefinition,
         runtime_config: RuntimeConfig,
     ) -> dict[str, Any]:
-        """Uses the task's original single-trajectory response schema."""
+        """Uses the task's tick response schema with explicit blocked markers."""
 
-        if getattr(runtime_config, "tick_format", False):
-            tick_schema = (
-                task_definition.explicit_blocked_tick_response_schema
-                if runtime_config.prompt_style == "simplified_v3"
-                else task_definition.tick_response_schema
-            )
-            if tick_schema is not None:
-                return tick_schema
+        del runtime_config
+        tick_schema = task_definition.explicit_blocked_tick_response_schema
+        if tick_schema is not None:
+            return tick_schema
         return task_definition.response_schema
 
     def preflight_token_estimate(

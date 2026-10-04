@@ -38,21 +38,15 @@ def _config(
     return RuntimeConfig(
         composite_task=args.task,
         num_runs=args.num_runs,
-        run_indices=(args.run_index,),
         model=model,
         sdk="google-genai",
         project=None,
         location=args.location,
         temperature=args.temperature if temperature is None else temperature,
-        max_workers=1,
-        max_retries=1,
         random_start_location=True,
         random_access_state=True,
         sampling="structured_random",
         thinking_level=thinking,
-        tick_format=True,
-        prompt_style="simplified_v3",
-        retry_feedback_style="observational",
     )
 
 

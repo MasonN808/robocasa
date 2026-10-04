@@ -473,7 +473,6 @@ def make_task_prompt_builder(
         A callable that renders the task prompt for a specific variation key.
     """
 
-    agent_id_list_text = _format_agent_id_list(agent_ids)
     agent_count = len(agent_ids)
     _ = non_communicate_tool_names
 
@@ -481,7 +480,6 @@ def make_task_prompt_builder(
         variation_key: str,
         task_instance: TaskInstance | None = None,
         retry_feedback: str | None = None,
-        prompt_style: str = "legacy",
     ) -> str:
         """Renders the shared task-level prompt with task-specific content."""
 
@@ -491,12 +489,6 @@ def make_task_prompt_builder(
             deepcopy(task_instance.initial_state)
             if task_instance is not None
             else deepcopy(initial_state)
-        )
-        validation_tool_specs = (
-            deepcopy(task_instance.allowed_tool_specs)
-            if task_instance is not None
-            and task_instance.allowed_tool_specs is not None
-            else deepcopy(allowed_tool_specs)
         )
         prompt_allowed_tool_specs = deepcopy(allowed_tool_specs)
         prompt_task_goal = (
@@ -514,154 +506,118 @@ def make_task_prompt_builder(
             if task_instance is not None and task_instance.coordinator_id
             else agent_ids[0]
         )
-        allowed_tools_text = json.dumps(
-            prompt_allowed_tool_specs,
-            indent=2,
-            sort_keys=True,
-        )
-        execution_rules_text = "\n".join(
-            f"- {rule}"
-            for rule in _build_fsm_prompt_rules(
-                validation_tool_specs,
-                task_preconditions=task_preconditions,
-                task_effects=task_effects,
-                extra_rules=prompt_extra_execution_rules,
-            )
-        )
         initial_state_text = json.dumps(
             prompt_initial_state,
             indent=2,
             sort_keys=True,
         )
-        cooperation_rule_text = (
-            "- Both agents must cooperatively complete the task, a single "
-            "agent should not do all subtasks.\n"
-        )
         initial_position_text = _format_initial_agent_positions(
             prompt_initial_state,
             agent_ids,
         )
-        if prompt_style in {"simplified", "simplified_v2", "simplified_v3"}:
-            # The compact contract above replaces the legacy tick prose. Keep
-            # only genuine task facts below it.
-            from tick_format import TICK_FORMAT_RULES
+        # The compact contract above replaces the legacy tick prose. Keep
+        # only genuine task facts below it.
+        from tick_format import TICK_FORMAT_RULES
 
-            simplified_extra_rules = tuple(
-                rule
-                for rule in prompt_extra_execution_rules
-                if rule not in TICK_FORMAT_RULES
-                and not rule.startswith(
-                    "This division requires the agents to hand work"
-                )
+        simplified_extra_rules = tuple(
+            rule
+            for rule in prompt_extra_execution_rules
+            if rule not in TICK_FORMAT_RULES
+            and not rule.startswith(
+                "This division requires the agents to hand work"
             )
-            normalized_simplified_extra = {
-                " ".join(rule.strip().split()) for rule in simplified_extra_rules
-            }
-            derived_task_facts = _build_fsm_prompt_rules(
-                {},
-                task_preconditions=task_preconditions,
-                task_effects=task_effects,
-                extra_rules=simplified_extra_rules,
-            )
-            task_specific_rules = [
-                rule for rule in derived_task_facts
-                if rule in normalized_simplified_extra
-                or rule.startswith("Open ")
-                or rule.startswith("Only use ")
-            ]
-            task_specific_text = "\n".join(
-                f"- {rule}" for rule in task_specific_rules
-            ) or "- None beyond the task state and tool contracts below."
-            location_rule = (
-                "Track each agent's current fixture. navigate_to_fixture(X) sets "
-                "its location to X; give_space(X) removes it from X. Every pickup, "
-                "placement, fixture-part, and control action requires the matching "
-                "current fixture. Being near or able to see fixture X does not count as "
-                "being at X. Before using an object, container, or appliance at X, call "
-                "navigate_to_fixture(X) unless the agent's current symbolic location is "
-                "already X. After give_space, navigate again before acting there. "
-                "An agent can hold only one object at a time. There is no tool for "
-                "passing an object between agents: the agent that picks up an object "
-                "must place that same object itself before picking up another. "
-                "A cabinet and its parent counter are one shared workspace: navigate "
-                "to the parent counter and use cabinet tools from there. An agent at "
-                "an exclusive child appliance may use its parent counter and objects "
-                "on that counter without navigating again; it remains at the child. "
-                "Opening or closing a fixture part requires empty hands: if holding an "
-                "object, place it at a valid temporary location first. When practical, "
-                "open the required fixture before picking up the object."
-                if prompt_style in {"simplified_v2", "simplified_v3"}
-                else "Keep physical state legal: navigate before acting at a fixture, "
-                "hold at most one object, and place only the object currently held."
-            )
-            tail_rule = (
-                "Communicate only a plan, request, release, correction, or one "
-                "portion_complete message; never claim global completion. If an agent "
-                "finishes its assigned physical calls while its partner still has calls "
-                "remaining, it stays active: on its next call send exactly one "
-                "communicate with coordination_phase=\"portion_complete\" saying only "
-                "its own portion is done, using the finished-portion message from rule "
-                "6; on the immediately following tick make the matching wait call. If "
-                "the opening plan assigns an agent no physical actions, its first call "
-                "after the handshake is that finished-portion message and its following "
-                "call is the matching wait. If "
-                "the partner's action on the same "
-                "tick as portion_complete satisfies the FSM goal, end the episode on "
-                "that tick: do not add a wait or any later tick. It then remains "
-                "blocked until a "
-                "later matching release makes it active on the following tick. If the "
-                "partner reaches the FSM goal in the wait tick, end the episode without "
-                "a release."
-                if prompt_style in {"simplified_v2", "simplified_v3"}
-                else "Communicate only a plan, request, release, correction, or one "
-                "portion_complete message. Never claim the global task is complete. If "
-                "an agent finishes early and its partner still has work, it sends "
-                "portion_complete once and waits on the next tick. End immediately "
-                "after the FSM goal is satisfied."
-            )
-            invocation_rule = (
-                "Every tick must contain both agent fields. Give an unblocked "
-                "agent exactly one real tool call. BLOCKED is not an action and "
-                "cannot start a wait. Use {\"state\":\"blocked\"} only after that "
-                "same agent has called wait_for_signal and before its matching "
-                "release arrives. Write the blocked marker on "
-                "each later tick while the wait is unresolved; never repeat the "
-                "wait call. Keep the blocked marker on the release tick, then give "
-                "the awakened agent a real call on the following tick. Set the "
-                "top-level format to \"explicit_blocked_v1\"."
-                if prompt_style == "simplified_v3"
-                else "In every tick, include exactly one tool call for each agent "
-                "that is not blocked by an earlier wait_for_signal. Omit an agent "
-                "only while it remains blocked."
-            )
-            v3_tail_addendum = (
-                " If the first required message after physical work is a resource "
-                "release, combine it with portion_complete in that one communicate "
-                "call by including both coordination_phase=\"portion_complete\" and "
-                "releases=\"<resource id>\"."
-                if prompt_style == "simplified_v3"
-                else ""
-            )
-            blocked_example = (
-                "\n\nExclusive-fixture handover example:\n"
-                "- tick N: agent_0 communicates `When done, release \"fridge\"`; agent_1 finishes useful fridge work.\n"
-                "- tick N+1: agent_0 calls wait_for_signal(from=agent_1, about=fridge); agent_1 calls give_space(fridge).\n"
-                "- tick N+2: agent_0 is {\"state\":\"blocked\"}; agent_1 communicates to agent_0 with releases=fridge and coordination_phase=portion_complete if this was agent_1's final physical work.\n"
-                "- tick N+3: agent_0 calls navigate_to_fixture(fridge); agent_1 calls wait_for_signal about one real object or fixture in agent_0's remaining work if agent_1 is finished.\n"
-                "After give_space(X), that agent is no longer at X and must navigate before acting there again."
-                if prompt_style == "simplified_v3"
-                else ""
-            )
-            assignment_rule = (
-                "Choose an efficient division of work from the initial state. "
-                "Prefer giving both agents a coherent physical responsibility when the "
-                "task has multiple objects or separable actions. Keep each object's "
-                "pickup and placement with one owner. A single agent may do all physical "
-                "work only when the task is one inherently sequential chain or splitting "
-                "it would create work that does not help complete the goal. State the "
-                "chosen exact IDs in the opening proposal."
-            )
-            prompt = f"""
+        )
+        normalized_simplified_extra = {
+            " ".join(rule.strip().split()) for rule in simplified_extra_rules
+        }
+        derived_task_facts = _build_fsm_prompt_rules(
+            {},
+            task_preconditions=task_preconditions,
+            task_effects=task_effects,
+            extra_rules=simplified_extra_rules,
+        )
+        task_specific_rules = [
+            rule for rule in derived_task_facts
+            if rule in normalized_simplified_extra
+            or rule.startswith("Open ")
+            or rule.startswith("Only use ")
+        ]
+        task_specific_text = "\n".join(
+            f"- {rule}" for rule in task_specific_rules
+        ) or "- None beyond the task state and tool contracts below."
+        location_rule = (
+            "Track each agent's current fixture. navigate_to_fixture(X) sets "
+            "its location to X; give_space(X) removes it from X. Every pickup, "
+            "placement, fixture-part, and control action requires the matching "
+            "current fixture. Being near or able to see fixture X does not count as "
+            "being at X. Before using an object, container, or appliance at X, call "
+            "navigate_to_fixture(X) unless the agent's current symbolic location is "
+            "already X. After give_space, navigate again before acting there. "
+            "An agent can hold only one object at a time. There is no tool for "
+            "passing an object between agents: the agent that picks up an object "
+            "must place that same object itself before picking up another. "
+            "A cabinet and its parent counter are one shared workspace: navigate "
+            "to the parent counter and use cabinet tools from there. An agent at "
+            "an exclusive child appliance may use its parent counter and objects "
+            "on that counter without navigating again; it remains at the child. "
+            "Opening or closing a fixture part requires empty hands: if holding an "
+            "object, place it at a valid temporary location first. When practical, "
+            "open the required fixture before picking up the object."
+        )
+        tail_rule = (
+            "Communicate only a plan, request, release, correction, or one "
+            "portion_complete message; never claim global completion. If an agent "
+            "finishes its assigned physical calls while its partner still has calls "
+            "remaining, it stays active: on its next call send exactly one "
+            "communicate with coordination_phase=\"portion_complete\" saying only "
+            "its own portion is done, using the finished-portion message from rule "
+            "6; on the immediately following tick make the matching wait call. If "
+            "the opening plan assigns an agent no physical actions, its first call "
+            "after the handshake is that finished-portion message and its following "
+            "call is the matching wait. If "
+            "the partner's action on the same "
+            "tick as portion_complete satisfies the FSM goal, end the episode on "
+            "that tick: do not add a wait or any later tick. It then remains "
+            "blocked until a "
+            "later matching release makes it active on the following tick. If the "
+            "partner reaches the FSM goal in the wait tick, end the episode without "
+            "a release."
+        )
+        invocation_rule = (
+            "Every tick must contain both agent fields. Give an unblocked "
+            "agent exactly one real tool call. BLOCKED is not an action and "
+            "cannot start a wait. Use {\"state\":\"blocked\"} only after that "
+            "same agent has called wait_for_signal and before its matching "
+            "release arrives. Write the blocked marker on "
+            "each later tick while the wait is unresolved; never repeat the "
+            "wait call. Keep the blocked marker on the release tick, then give "
+            "the awakened agent a real call on the following tick. Set the "
+            "top-level format to \"explicit_blocked_v1\"."
+        )
+        v3_tail_addendum = (
+            " If the first required message after physical work is a resource "
+            "release, combine it with portion_complete in that one communicate "
+            "call by including both coordination_phase=\"portion_complete\" and "
+            "releases=\"<resource id>\"."
+        )
+        blocked_example = (
+            "\n\nExclusive-fixture handover example:\n"
+            "- tick N: agent_0 communicates `When done, release \"fridge\"`; agent_1 finishes useful fridge work.\n"
+            "- tick N+1: agent_0 calls wait_for_signal(from=agent_1, about=fridge); agent_1 calls give_space(fridge).\n"
+            "- tick N+2: agent_0 is {\"state\":\"blocked\"}; agent_1 communicates to agent_0 with releases=fridge and coordination_phase=portion_complete if this was agent_1's final physical work.\n"
+            "- tick N+3: agent_0 calls navigate_to_fixture(fridge); agent_1 calls wait_for_signal about one real object or fixture in agent_0's remaining work if agent_1 is finished.\n"
+            "After give_space(X), that agent is no longer at X and must navigate before acting there again."
+        )
+        assignment_rule = (
+            "Choose an efficient division of work from the initial state. "
+            "Prefer giving both agents a coherent physical responsibility when the "
+            "task has multiple objects or separable actions. Keep each object's "
+            "pickup and placement with one owner. A single agent may do all physical "
+            "work only when the task is one inherently sequential chain or splitting "
+            "it would create work that does not help complete the goal. State the "
+            "chosen exact IDs in the opening proposal."
+        )
+        prompt = f"""
 You are simulating {agent_count} cooperative robot agents in a physical kitchen.
 Generate one valid trajectory for {composite_task} as a list of simultaneous ticks.
 
@@ -696,65 +652,6 @@ Tool contracts:
 {_format_tool_contracts(prompt_allowed_tool_specs)}
 
 Variation key: {variation_key}
-""".strip()
-            if retry_feedback is None:
-                return prompt
-            return f"{prompt}\n\n{retry_feedback.strip()}"
-
-        if prompt_style != "legacy":
-            raise ValueError(f"Unsupported prompt_style: {prompt_style!r}")
-
-        prompt = f"""
-You are simulating {agent_count} cooperative robot agents in a physical kitchen environment.
-Generate a single valid multi-agent task-level trajectory for the composite task {composite_task}.
-
-Important rules:
-- Simulate both agents: {agent_id_list_text}.
-- The coordination leader for this episode is {coordinator_id}. On tick 0 the leader must communicate a concrete division of work using coordination_phase="propose", grounded in exact symbolic IDs. The other agent must use coordination_phase="await_plan" and must not independently propose a competing plan. On tick 1 the leader uses coordination_phase="await_confirmation" and the other agent uses coordination_phase="confirm" after reading the proposal. No physical task action may begin before that confirmation tick completes.
-- Never announce that the global task is complete; only the FSM ends the episode. If an agent finishes its own assigned portion while its partner still has physical work, it sends exactly one coordination_phase="portion_complete" message saying only that its own portion is done. On the next tick it calls wait_for_signal about a real object or fixture in the partner's outstanding work. It remains blocked until a later matching release from the partner.
-- Keep track of what object each agent is holding and where the agent's location is at all times.
-- Keep track of all agent's locations which can only be at fixture locations. Be sure that the agent is not "teleporting" across the environment to complete tasks; the agent should navigate first via a tool call.
-- Use give_space when an agent genuinely needs to vacate a workspace for its partner. It is a handover action, not a way to become idle, report completion, or manufacture participation. Cabinets, drawers, appliances, sinks, and stoves fit one acting robot; counters, islands, and dining tables are roomy and need no give_space when agents use different objects. Do not navigate somewhere merely to call give_space.
-- If one agent calls give_space(X), the other may enter or use X only on the following tick, never during that give_space tick.
-- A cabinet and its parent counter are one shared workspace. Navigate to the parent counter for cabinet work; distinct-object work there needs no handover. Drawers and exclusive appliances still require coordination and yielding.
-- Prefer finishing a held-object placement before calling give_space. Do not give_space while holding an item unless there is no legal alternative.
-- In the initial steps, the agents must coordinate through communication tool calls before any task action. Both agents must communicate during this time.
-- After the opening handshake, communicate only information that changes coordination: a request, handoff/release, correction, or one portion-complete status. Do not add acknowledgements, repeated plans, progress narration, filler messages, or global-completion announcements merely to keep both agents talking.
-- Each communicate step sends a message to the other agent in the scene, so args.to must be the exact ID of that other agent.
-- For each step, args must contain every required argument for that tool. Only include optional args when they are useful for the placement you are specifying, and do not invent unsupported arg keys.
-- In args, use the exact IDs shown in the allowed tools block for this task.
-- Keep args as a flat object that contains only that step's tool inputs.
-- Every agent that is not blocked by an earlier wait_for_signal must appear exactly once in every tick. Never omit an unblocked agent merely because its assigned work is temporarily or permanently finished: the live scheduler would invoke it and it must have a real supervised tool-call target. If an agent calls wait_for_signal, omit that agent from later ticks until the matching release wakes it.
-- Prefer useful concurrent work. When no physical action is available, use a truthful, useful coordination/status message or observation; use wait_for_signal only for a real dependency, not as a generic no-op.
-{cooperation_rule_text}- Use only the allowed tools for this task.
-- Every step must be executable and valid for the current task state.
-- Track each agent’s current fixture after every navigation and verify that each non-navigation action matches that current fixture.
-- Number steps consecutively starting at 0 with no gaps.
-- The reasoning text should explain why the agent is using the tool call from a first-person point-of-view. Each reasoning text must be a single short sentence.
-- In reasoning text and communicate.message text, refer to agents using exact IDs like agent_0 and agent_1, not Agent 0 or Agent 1.
-- Agents can pass each other freely in the kitchen, including around the island.
-- The other agent cannot see wait_for_signal. Immediately before waiting, communicate the exact release keyword, for example: `When done, release "<X>"`. On your very next call, use wait_for_signal(..., about="<X>"). Do nothing between that message and the wait. While blocked, do not act until the matching release.
-- Make this trajectory distinct from previous attempts by following variation key: {variation_key}
-- Output JSON only, with no markdown.
-
-Simple execution rules:
-{execution_rules_text}
-
-Composite task:
-- {composite_task}
-- Goal: {prompt_task_goal}
-
-Initial agent positions:
-{initial_position_text}
-
-Initial task state:
-{initial_state_text}
-
-{_format_placement_anchor_guide(prompt_allowed_tool_specs)}
-
-Allowed tools and exact symbolic arguments for this task:
-{allowed_tools_text}
-
 """.strip()
         if retry_feedback is None:
             return prompt

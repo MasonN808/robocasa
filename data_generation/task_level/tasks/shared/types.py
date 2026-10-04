@@ -24,7 +24,6 @@ class TaskPromptBuilder(Protocol):
         variation_key: str,
         task_instance: TaskInstance | None = None,
         retry_feedback: str | None = None,
-        prompt_style: str = "legacy",
     ) -> str:
         """Builds one task prompt, optionally including retry feedback."""
 

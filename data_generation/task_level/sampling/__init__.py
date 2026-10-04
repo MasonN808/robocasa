@@ -14,7 +14,6 @@ from data_generation.task_level.sampling.structured_random import (
 
 
 SAMPLING_STRATEGIES: dict[str, SamplingStrategy] = {
-    "base": BaseSamplingStrategy(),
     "structured_random": StructuredRandomSamplingStrategy(),
 }
 

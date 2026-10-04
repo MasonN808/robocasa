@@ -66,14 +66,9 @@ from data_generation.task_level.tasks.specs import (
 from data_generation.task_level.tasks.specs.runtime import SpecDrivenTaskValidator
 from data_generation.task_level.subatomic_tool_calls import discover_subatomic_tools
 from data_generation.task_level.generation.raw.config import (
-    ALL_COMPOSITE_TASKS_OPTION,
-    BATCH_INTERRUPTED_MESSAGE,
-    DEFAULT_OUTPUT_DIR,
     INTERRUPTED_EXIT_CODE,
     INTERRUPTED_MESSAGE,
     RuntimeConfig,
-    VERIFIED_COMPOSITE_TASKS_OPTION,
-    _validate_runtime_config,
 )
 from data_generation.task_level.generation.raw.progress import (
     PROGRESS_BAR_WIDTH,
@@ -1020,91 +1015,6 @@ class SubatomicToolCatalogTests(unittest.TestCase):
         self.assertNotIn("wait", tool_names)
         self.assertTrue(all(tool_name == tool_name.lower() for tool_name in tool_names))
 
-    def test_prepare_coffee_prompt_contains_allowed_tools_and_rules(self):
-        prompt = build_prepare_coffee_prompt("unit-test")
-        self.assertIn("give_space", prompt)
-        self.assertIn("pick_up_object", prompt)
-        self.assertIn("place_under", prompt)
-        self.assertNotIn("place_under_dispenser", prompt)
-        self.assertIn("press_button", prompt)
-        self.assertNotIn('"wait"', prompt)
-        self.assertIn("communicate", prompt)
-        self.assertIn("Simple execution rules:", prompt)
-        self.assertIn("variation key: unit-test", prompt)
-        self.assertIn(
-            "Before interacting with a fixture, surface, receptacle, or dispenser",
-            prompt,
-        )
-        self.assertIn(
-            "Only use pick_up_object when the object is still at the listed source_id",
-            prompt,
-        )
-        self.assertIn(
-            "After picking up an object, that agent should only navigate or place that same object",
-            prompt,
-        )
-        self.assertIn(
-            "Only use a placement tool for the exact object the acting agent is currently holding.",
-            prompt,
-        )
-        self.assertIn(
-            "Do not use a movable object that any agent is currently holding as a source, support, receptacle, or reference target.",
-            prompt,
-        )
-        self.assertIn(
-            "Open cab.hinged before using pick_up_object from cab.",
-            prompt,
-        )
-        self.assertIn(
-            "The coffee machine only turns on if the mug is placed under the dispenser before pressing the button.",
-            prompt,
-        )
-        self.assertIn(
-            "The other agent cannot see wait_for_signal",
-            prompt,
-        )
-        self.assertIn("On your very next call", prompt)
-        self.assertIn("Do nothing between that message and the wait", prompt)
-        self.assertIn(
-            "Use give_space when an agent genuinely needs to vacate a workspace",
-            prompt,
-        )
-        self.assertIn("not a way to become idle", prompt)
-        self.assertIn(
-            "After the opening handshake, communicate only information that changes coordination",
-            prompt,
-        )
-        self.assertIn(
-            "Each communicate step sends a message to the other agent in the scene",
-            prompt,
-        )
-        self.assertIn(
-            "args.to must be that agent's exact ID.",
-            prompt,
-        )
-        self.assertIn(
-            "args must contain every required argument for that tool",
-            prompt,
-        )
-        self.assertIn(
-            "Only include optional args when they are useful for the placement you are specifying, and do not invent unsupported arg keys.",
-            prompt,
-        )
-        self.assertIn(
-            "use the exact IDs shown in the allowed tools block",
-            prompt,
-        )
-        self.assertIn(
-            "Keep args as a flat object that contains only that step's tool inputs.",
-            prompt,
-        )
-        self.assertNotIn("Args formatting example:", prompt)
-        self.assertNotIn(
-            "Study this JSON example and mirror the same flat args structure.",
-            prompt,
-        )
-        self.assertIn("never during that give_space tick", prompt)
-        self.assertIn("Initial agent positions:", prompt)
 
     def test_prepare_coffee_prompt_appends_retry_feedback(self):
         prompt = build_prepare_coffee_prompt(
@@ -1123,34 +1033,6 @@ class SubatomicToolCatalogTests(unittest.TestCase):
         self.assertIn("Previous attempt failed validation.", prompt)
         self.assertIn("NavigationSemanticValidationError", prompt)
         self.assertIn("Regenerate the full trajectory from step 0.", prompt)
-        self.assertIn(
-            "The other agent cannot see wait_for_signal",
-            prompt,
-        )
-        self.assertIn("On your very next call", prompt)
-        self.assertNotIn("get_image", prompt)
-        self.assertNotIn("Full subatomic tool catalog for context:", prompt)
-        self.assertNotIn("Communication tool:", prompt)
-        self.assertNotIn(
-            "communicate: Send a short coordination message to the other agent.",
-            prompt,
-        )
-        self.assertIn(
-            "refer to agents using exact IDs like agent_0 and agent_1",
-            prompt,
-        )
-        self.assertIn(
-            "Number steps consecutively starting at 0 with no gaps.",
-            prompt,
-        )
-        self.assertNotIn("entity_refs", prompt)
-        self.assertNotIn("Output requirements:", prompt)
-        self.assertNotIn("Return an object with key: steps.", prompt)
-        self.assertNotIn("top-level agents field", prompt)
-        self.assertNotIn(
-            "Each agent entry must contain: agent, role, initial_plan.",
-            prompt,
-        )
 
     def test_prepare_coffee_allowed_tools_exclude_wait(self):
         self.assertIn("give_space", PREPARE_COFFEE_ALLOWED_TOOL_SPECS)
@@ -1220,8 +1102,6 @@ class PrepareCoffeeTaskInstanceTests(unittest.TestCase):
             location="us-central1",
             temperature=0.0,
             random_start_location=False,
-            max_workers=1,
-            max_retries=1,
         )
 
         task_instance = PREPARE_COFFEE_TASK.build_task_instance(0, runtime_config)
@@ -1254,8 +1134,6 @@ class PrepareCoffeeTaskInstanceTests(unittest.TestCase):
             project=None,
             location="us-central1",
             temperature=0.0,
-            max_workers=1,
-            max_retries=1,
         )
         task_instance = PREPARE_COFFEE_TASK.build_task_instance(0, runtime_config)
 
@@ -1566,14 +1444,6 @@ class DotenvLoadingTests(unittest.TestCase):
 
 
 
-    def test_default_output_dir_points_to_repo_task_level_data_directory(self):
-        self.assertEqual(
-            DEFAULT_OUTPUT_DIR,
-            Path(__file__).resolve().parents[1]
-            / "data_generation"
-            / "task_level"
-            / "data",
-        )
 
 
 
@@ -3474,8 +3344,6 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
                 project="demo-project",
                 location="global",
                 temperature=0.5,
-                max_workers=1,
-                max_retries=1,
             ),
             task_instance=make_prepare_coffee_task_instance(0),
             variation_key="traj-000000-attempt-00",
@@ -3491,70 +3359,7 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
 
 
 
-    def test_structured_random_sampling_strategy_prompt_assigns_configurations(self):
-        strategy = StructuredRandomSamplingStrategy()
 
-        with mock.patch(
-            "data_generation.task_level.sampling.structured_random."
-            "_structured_random_seed_and_configuration",
-            return_value=(
-                12345,
-                {
-                    "communication_message_length": "low",
-                    "communication_message_complexity": "medium",
-                    "tool_call_diversity": "high",
-                },
-            ),
-        ):
-            prompt = strategy.build_prompt(
-                task_definition=PREPARE_COFFEE_TASK,
-                runtime_config=RuntimeConfig(
-                    composite_task="PrepareCoffee",
-                    num_runs=1,
-                    model="gemini-3-flash-preview",
-                    sdk="google-genai",
-                    project="demo-project",
-                    location="global",
-                    temperature=0.5,
-                    max_workers=1,
-                    max_retries=1,
-                    sampling="structured_random",
-                ),
-                task_instance=make_prepare_coffee_task_instance(0),
-                variation_key="traj-000000-attempt-00",
-            )
-
-        self.assertIn("Structured random configuration", prompt)
-        self.assertNotIn("Structured random generator seed", prompt)
-        self.assertIn("communication_message_length=low", prompt)
-        self.assertIn("communication_message_complexity=medium", prompt)
-        self.assertIn("tool_call_diversity=high", prompt)
-        self.assertIn("Return exactly one trajectory", prompt)
-        self.assertIn("Do not return a samples array", prompt)
-        self.assertIn("Counters, islands, and dining tables are roomy", prompt)
-        self.assertIn("Do not add acknowledgements, repeated plans", prompt)
-        self.assertIn("omit that agent from later ticks", prompt)
-
-    def test_structured_random_sampling_strategy_preserves_base_schema(self):
-        strategy = StructuredRandomSamplingStrategy()
-
-        response_schema = strategy.response_schema(
-            task_definition=PREPARE_COFFEE_TASK,
-            runtime_config=RuntimeConfig(
-                composite_task="PrepareCoffee",
-                num_runs=1,
-                model="gemini-3-flash-preview",
-                sdk="google-genai",
-                project="demo-project",
-                location="global",
-                temperature=0.5,
-                max_workers=1,
-                max_retries=1,
-                sampling="structured_random",
-            ),
-        )
-
-        self.assertEqual(response_schema, PREPARE_COFFEE_TASK.response_schema)
 
     def test_structured_random_sampling_strategy_extracts_base_candidate(self):
         strategy = StructuredRandomSamplingStrategy()
@@ -3571,8 +3376,6 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
                 project="demo-project",
                 location="global",
                 temperature=0.5,
-                max_workers=1,
-                max_retries=1,
                 sampling="structured_random",
             ),
         )
@@ -3595,8 +3398,6 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
                 project="demo-project",
                 location="global",
                 temperature=0.5,
-                max_workers=1,
-                max_retries=1,
                 sampling="structured_random",
             ),
             variation_key="traj-000000-attempt-02",
