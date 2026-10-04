@@ -72,7 +72,7 @@ A release is "complete and clean" when every item below holds.
 - The repository holds no large binaries.
 
 **6. Results are reproducible from the README.**
-- A table mirrors each quantitative paper result: Table III with Fig. 4 (diversity), Fig. 3 (task phases), Fig. 5 (communication ablation; conditions in Table IV), Figs. 6–7 (SFT scaling, rationale ablation), and dataset statistics.
+- A table mirrors each quantitative paper result in scope: Fig. 3 (task phases), Fig. 5 (communication ablation; conditions in Table IV), Figs. 6–7 (SFT scaling, rationale ablation), and dataset statistics.
 - Each row has the one command that regenerates it.
 - The fast path evaluates the released adapters; the full path also retrains.
 - The figure scripts run on whatever that command writes to `outputs/`.
@@ -140,7 +140,7 @@ A release is "complete and clean" when every item below holds.
    - Portability rules still apply: no cluster paths, accounts, partitions or e-mail addresses (Step 5).
 3. **Scope is strictly what the paper reports.** That means:
    - the multi-agent simulator with its 53 tasks, FSM and coordination mechanisms;
-   - the generation pipeline, including the four sampling strategies and the diversity analysis;
+   - the generation pipeline with the production Structured Random sampling (the other sampling strategies and the Table III / Fig. 4 diversity analysis are deferred to Step 12);
    - the dataset export;
    - LoRA SFT: scale 30–150, Instruct/Thinking × rationale;
    - live-sim evaluation;
@@ -158,7 +158,7 @@ A release is "complete and clean" when every item below holds.
 
 4. **Licenses:** see B.1a below. These match RoboCasa365.
 5. **Results are reported, not shipped.**
-   - The README carries the paper's numbers (Table III, Figs. 3 and 5–7, dataset statistics).
+   - The README carries the paper's numbers (Figs. 3 and 5–7, dataset statistics).
    - No result files, eval logs or figure PNGs go into the public repo.
    - Each number and figure instead gets a short documented command; see Step 8 and the `reproduce` entry point in Step 4.
    - Before writing the README table, confirm that it uses the camera-ready numbers. Implementation reference §11.1: the communication-ablation numbers predate the `_waitfix_v3` reruns.
@@ -233,7 +233,6 @@ This table is the whitelist. Anything not reachable from it, by import or by a d
 | Coordination mechanisms (leader–follower, wait–release, exclusive workspaces) | Same as above, plus `communication_profiles.py`. |
 | Generation pipeline and retry cascade | `generation/raw/{production_cascade,cascade_canary}.py`, `sampling/structured_random.py`, `generation/image/processor.py`, render and postprocess entry points, and the scene compatibility cache builder. |
 | Fig. 3: task-phase distribution by split | `scripts/plot_task_phase_distribution.py` / `training/bc_task_vlm/export_task_phase_pngs.py`, plus the per-task phase counts from the original single-agent RoboCasa365 implementations. |
-| Table III and Fig. 4: sampling strategies (Base, High Temp at 1.0 vs 0.6, Random/UUID, Structured Random, Verbalized with 3 trajectories per call); 30 trajectories × 53 tasks per strategy | The sampling modes in `sampling/` and the generation prompt variants. Diversity code is `data_analysis/analyze_sampling_methods.py`: communication diversity is 1 − mean pairwise cosine over Qwen3-Embedding-4B embeddings of concatenated messages (435 pairs), and action diversity is normalized Levenshtein over tool-name+sorted-args tokens, keeping recipients and dropping message text and agent identity. Drop the plotting variants the paper does not use. |
 | Dataset release | `training/bc_task_vlm/robotalk_hf/{export_robotalk.py,publish_models.py,static_space}`. **Drop** `anonymize_review.py`. |
 | SFT (LoRA; Instruct/Thinking × rationale; scale 30–150) | `training/bc_task_vlm/{prompting,dataset,preprocess,preprocessed_data,main,peft_compat,metrics}.py`, `build_scale_experiment_manifests.py`, `materialize_scale_artifacts.py`, `accelerate_multigpu.yaml`. |
 | Live-sim evaluation, cohorts and metrics | `live_sim_eval.py`, `live_sim_parallel_eval.py`, `fixed_cohort_selection.py`, `freeze_configuration_cohort.py`, `fixed_live_sim_cohort.py`, `summarize_fixed_live_sim.py`, and the vLLM serving launcher (generalized). |
@@ -258,14 +257,8 @@ This table is the whitelist. Anything not reachable from it, by import or by a d
 - **Instruct 60/90 epochs.** Their source runs are labelled `ep0p5`, but `paper_checkpoint_provenance_audit.md` establishes from `trainer_state.json` that they are the true one-epoch checkpoints (1298, 1945). The directory labels were swapped. The released HF adapters point at these same checkpoints.
 - **Held-out cohort.** Thinking+rationale 60/90/120 held-out numbers come from `_native43matched` reruns on the native 43/10 cohort. The reproduction path, which always uses the native cohort, therefore targets the same episodes as the paper.
 - **The Thinking-without-rationale arm** was evaluated with parser recovery (`_recovery_v1`). Its released config must enable that flag, and its model card must say so.
-- **Tension with scope decision 3.** The paper's §IV "Task Selection" describes "a verification pipeline combining task filtering, specification validation, and simulator replay". That pipeline is excluded as outdated. The README should say the 53 verified specifications are its output and are released as-is.
-- **Table III provenance.**
-  - The numbers were computed by Mason on NCSA Delta (`scripts/analyze_sampling_method_cosine_qwen3.sbatch`, `--chdir=/work/hdd/bgjs/mnakamura/robocasa`), not on Unity.
-  - The only archived output here is `data_analysis/plots/model_sampling_comparison/model_method_diversity_summary.csv` (commit `86808cd`, 2026-07-01). It matches the paper's Base and Structured Random communication values (0.058174, 0.088427) and covers **51 tasks** for Gemini-3-Flash, not 53. That is because the comparison predates the final 53-task suite: its input is `sampling_methods_data_52Tasks_30Trajectories`.
-  - The raw trajectories are **not on Unity**. Locate them on Delta (Mason) or on Dorian's laptop (`~/Projects/robocasa/data_generation/task_level/data/diversity_analysis/…`).
-  - Also confirm the source of the High Temp, Random and Verbalized rows and of the action-sequence column.
-  - The README must state the task count used for Table III.
-- **Table III reproduction cost.** It needs 5 strategies × 53 tasks × 30 Gemini-generated trajectories, which costs API spend and is nondeterministic. **Recommended:** publish those sampling-comparison trajectories as an extra config of the HF dataset (e.g. `sampling_comparison`). `reproduce.py table3` then only embeds and scores them on a single GPU, and regenerating with Gemini stays an optional `--regenerate` path. This is data, not a results file, so it fits decision 5.
+- **Task specifications.** The README and docs refer to the 53 verified task specifications as they are. They do not mention how the specs were produced, and the task-spec generation pipeline is not released.
+- **Table III / Fig. 4 (diversity) are deferred** to the post-release Step 12. The raw sampling-comparison trajectories are not on Unity: Mason computed the numbers on NCSA Delta from `sampling_methods_data_52Tasks_30Trajectories`, and the archived summary `data_analysis/plots/model_sampling_comparison/model_method_diversity_summary.csv` covers 51 tasks.
 
 #### Step 3 — Trim (on `publication-cleanup`)
 
@@ -287,7 +280,7 @@ This table is the whitelist. Anything not reachable from it, by import or by a d
   - all of `reports/` and `eval_runs/`.
 - **`eval_manifests/` (4.5 MB).** Keep only the manifests that define the paper's evaluation population: the 43/10 split, the nested scale manifests, and the fixed configuration cohort. Move them to `configs/eval/`.
   - Better still, check that `freeze_configuration_cohort.py` and `build_scale_experiment_manifests.py` regenerate them byte-identically from a seed. Then ship only the seed, plus the files as a checksum test.
-- **`data_analysis/`.** Keep the diversity analysis. Drop `vllm_no_flash_attn/`, model-comparison plots and `plots/`.
+- **`data_analysis/`.** Delete all of it from the release, including the diversity analysis (deferred to Step 12) and `select_held_out_tasks.py`. The 43/10 split ships as a config file. Also delete the non-production sampling modes (High Temp, Random, Verbalized) from `sampling/` and the generation prompts.
 - **Dead code paths** flagged in the implementation reference:
   - the legacy flat-example replay;
   - the centralized-history and step-index prompt options;
@@ -308,13 +301,13 @@ robotalk/                      # github.com/DorianAtSchool/robotalk
 ├── robotalk/
 │   ├── tasks/                # specs/verified/*.json, runtime, fsm, concurrent_fsm, scheduling, workspace_semantics
 │   ├── tools/                # tool specs/calls, grounding
-│   ├── generation/           # sampling strategies, prompts, retry cascade, observation insertion, render/postprocess
+│   ├── generation/           # structured-random sampling, prompts, retry cascade, observation insertion, render/postprocess
 │   ├── training/             # dataset, preprocess, prompting, main (LoRA SFT)
 │   ├── evaluation/           # live_sim_eval, parallel eval, cohorts, metrics, summarize
-│   ├── analysis/             # diversity metrics; table + figure builders
+│   ├── analysis/             # metrics summary; figure builders (Figs. 3, 5–7)
 │   └── release/              # HF dataset export, adapter publishing
 ├── configs/
-│   ├── generation/           # cascade + 4 sampling strategies
+│   ├── generation/           # production cascade (structured random)
 │   ├── train/                # scale{30..150} × {instruct,thinking} × {rationale,no_rationale}
 │   └── eval/                 # split, cohort, comm_mode ∈ {none,unguided,minimal,intermediate,full}
 ├── scripts/
@@ -331,8 +324,6 @@ robotalk/                      # github.com/DorianAtSchool/robotalk
 
   ```bash
   python scripts/reproduce.py fig3                         # task-phase distribution (CPU, seconds)
-  python scripts/reproduce.py table3                       # Table III + Fig. 4 diversity from the released sampling-comparison trajectories (1 GPU)
-  python scripts/reproduce.py table3 --regenerate          # same, regenerating 5×53×30 trajectories with Gemini first (needs GEMINI_API_KEY)
   python scripts/reproduce.py fig5                         # comm ablation: Gemini 3 Flash + untuned Qwen3-VL-8B × 5 conditions
   python scripts/reproduce.py fig6 --from-adapters         # SFT scaling: eval the 10 released adapters, then plot
   python scripts/reproduce.py fig6 --train                 # same, but retrain all 10 adapters first
@@ -362,7 +353,7 @@ robotalk/                      # github.com/DorianAtSchool/robotalk
   - `[gen]`: google-genai, …
   - `[train]`: torch, transformers, peft, accelerate, qwen-vl-utils, flash-attn (pinned)
   - `[eval]`: vllm 0.27.1 (or the container tag)
-  - `[analysis]`: matplotlib, sentence-transformers, …
+  - `[analysis]`: matplotlib, …
 - Regenerate `uv.lock`.
 - Pin robosuite to a commit. Prefer an upstream ARISE commit if our `MasonN808/robosuite@dev` changes are not needed. Otherwise either:
   - fold the needed changes into `robocasa/` as a patch; or
@@ -397,7 +388,7 @@ These are inputs for others to build on. Results files are not shipped.
   1. title, authors, paper, dataset and model links, teaser figure (one image, under 1 MB);
   2. Installation;
   3. Quickstart (load the dataset, replay a trajectory, run one eval episode);
-  4. **Results**: the paper's numbers for Table III, Figs. 5–7 and the Fig. 3 phase counts (values in the Step 2 cross-check), as markdown tables, each followed by its `reproduce.py` command with expected compute (GPU-hours, API cost) and the fast versus full path;
+  4. **Results**: the paper's numbers for Figs. 5–7 and the Fig. 3 phase counts (values in the Step 2 cross-check), as markdown tables, each followed by its `reproduce.py` command with expected compute (GPU-hours, API cost) and the fast versus full path;
   5. Repository structure;
   6. Generating new data (needs a Gemini API key);
   7. Limitations;
@@ -420,7 +411,7 @@ These are inputs for others to build on. Results files are not shipped.
 #### Step 10 — Reproduction verification (acceptance gate)
 
 - From a fresh clone and a fresh environment on a machine *other than* this cluster's usual setup:
-  - `reproduce.py dataset-stats`, `fig3` and `table3` (from the released trajectories) match the paper exactly;
+  - `reproduce.py dataset-stats` and `fig3` match the paper exactly;
   - `fig7 --from-adapters` (smallest GPU cost) matches the paper within Wilson CI on each cell.
 - Spot-check one `fig5` condition and one `fig6` scale point. The full sweeps are optional.
 - Have a co-author who was not involved in the cleanup follow the README unaided, and record their friction points.
@@ -436,6 +427,18 @@ These are inputs for others to build on. Results files are not shipped.
 - Make a final scan of the exported tree: `gitleaks`, the path and e-mail guard, and `du` to confirm no large files.
 - Push, tag `v1.0`, and create a GitHub release with no result attachments. Optionally connect Zenodo for a DOI.
 - Link the code from the HF dataset and model cards, the arXiv comments field, and the project page.
+
+#### Step 12 — After release: diversity analysis (Table III / Fig. 4)
+
+Run this from this archive repo, not the public one, once `DorianAtSchool/robotalk` is published.
+
+1. Recover the sampling-comparison trajectories from Delta (Mason) or `~/Projects/robocasa/.../sampling_methods_data_52Tasks_30Trajectories`, or regenerate them for the 53 tasks.
+2. Re-run `data_analysis/analyze_sampling_methods.py` (Qwen3-Embedding-4B cosine, normalized Levenshtein) and compare against Table III.
+3. Decide whether it is worth adding to the public repo. If yes, add:
+   - the four sampling modes;
+   - the analysis module;
+   - `reproduce.py table3`, scoring trajectories released as an HF dataset config `sampling_comparison`, with `--regenerate` as the Gemini path;
+   - a README row stating the task count used.
 
 ### B.3 Definition of done
 
