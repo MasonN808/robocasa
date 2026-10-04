@@ -14,18 +14,13 @@ import tempfile
 import types
 
 from data_generation.task_level.runtime.client import (
-    AZURE_OPENAI_SDK,
-    AzureOpenAIChatClient,
-    DEFAULT_MODEL,
     GenerationResult,
     GenerationUsage,
     GoogleGenAIClient,
     SUPPORTED_GENERATION_SDKS,
     TrajectoryGenerationError,
     _generation_error_status_code,
-    _resolve_pricing_tier,
     build_generation_usage_metadata,
-    build_openai_chat_generation_usage,
     load_dotenv_file,
     validate_google_auth,
 )
@@ -1675,176 +1670,10 @@ class DotenvLoadingTests(unittest.TestCase):
 
         self.assertIn("400 INVALID_ARGUMENT", str(context.exception))
 
-    def test_azure_openai_client_requires_endpoint_and_api_key(self):
-        with mock.patch.dict("os.environ", {}, clear=True):
-            with self.assertRaises(TrajectoryGenerationError) as context:
-                AzureOpenAIChatClient()
 
-        self.assertIn("AZURE_OPENAI_ENDPOINT", str(context.exception))
 
-        with mock.patch.dict(
-            "os.environ",
-            {"AZURE_OPENAI_ENDPOINT": "https://demo.openai.azure.com"},
-            clear=True,
-        ):
-            with self.assertRaises(TrajectoryGenerationError) as context:
-                AzureOpenAIChatClient()
 
-        self.assertIn("AZURE_OPENAI_API_KEY", str(context.exception))
 
-    def test_azure_openai_client_posts_chat_completion_request(self):
-        calls = []
-
-        def fake_urlopen(request_obj, timeout=None):
-            calls.append(
-                {
-                    "url": request_obj.full_url,
-                    "timeout": timeout,
-                    "headers": request_obj.headers,
-                    "payload": json.loads(request_obj.data.decode("utf-8")),
-                }
-            )
-            return FakeHTTPResponse(
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "content": '{"ok": true}',
-                            }
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 11,
-                        "completion_tokens": 3,
-                        "total_tokens": 14,
-                        "prompt_tokens_details": {"cached_tokens": 2},
-                        "completion_tokens_details": {"reasoning_tokens": 1},
-                    },
-                }
-            )
-
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "AZURE_OPENAI_ENDPOINT": "https://demo.openai.azure.com",
-                "AZURE_OPENAI_API_KEY": "unit-test-key",
-            },
-            clear=True,
-        ):
-            with mock.patch(
-                "data_generation.task_level.runtime.client.request.urlopen",
-                side_effect=fake_urlopen,
-            ):
-                client = AzureOpenAIChatClient(timeout_sec=7)
-                result = client.generate(
-                    model="gpt-4.1-deployment",
-                    prompt="Return JSON.",
-                    response_schema={
-                        "type": "OBJECT",
-                        "properties": {"ok": {"type": "BOOLEAN"}},
-                    },
-                    temperature=0.2,
-                )
-
-        self.assertEqual(result.payload, '{"ok": true}')
-        self.assertEqual(result.usage.prompt_tokens, 11)
-        self.assertEqual(result.usage.candidates_tokens, 3)
-        self.assertEqual(result.usage.cached_content_tokens, 2)
-        self.assertEqual(result.usage.thoughts_tokens, 1)
-        self.assertEqual(calls[0]["timeout"], 7)
-        self.assertEqual(
-            calls[0]["url"],
-            "https://demo.openai.azure.com/openai/v1/chat/completions",
-        )
-        self.assertEqual(calls[0]["headers"]["Api-key"], "unit-test-key")
-        self.assertEqual(calls[0]["payload"]["model"], "gpt-4.1-deployment")
-        self.assertEqual(
-            calls[0]["payload"]["messages"][0]["content"],
-            "Return only valid JSON. Do not include markdown.",
-        )
-        response_format = calls[0]["payload"]["response_format"]
-        self.assertEqual(response_format["type"], "json_schema")
-        self.assertEqual(
-            response_format["json_schema"]["schema"]["type"],
-            "object",
-        )
-        self.assertEqual(
-            response_format["json_schema"]["schema"]["properties"]["ok"]["type"],
-            "boolean",
-        )
-
-    def test_azure_openai_client_accepts_ai_foundry_project_env(self):
-        calls = []
-
-        def fake_urlopen(request_obj, timeout=None):
-            calls.append(
-                {
-                    "url": request_obj.full_url,
-                    "headers": request_obj.headers,
-                    "payload": json.loads(request_obj.data.decode("utf-8")),
-                }
-            )
-            return FakeHTTPResponse(
-                {
-                    "choices": [{"message": {"content": '{"ok": true}'}}],
-                    "usage": {"prompt_tokens": 2, "completion_tokens": 1},
-                }
-            )
-
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "AI_FOUNDRY_PROJECT_ENDPOINT": (
-                    "https://demo.services.ai.azure.com/api/projects/demo"
-                ),
-                "AI_FOUNDRY_API_KEY": "foundry-key",
-                "AI_FOUNDRY_AUTH_MODE": "api_key",
-            },
-            clear=True,
-        ):
-            with mock.patch(
-                "data_generation.task_level.runtime.client.request.urlopen",
-                side_effect=fake_urlopen,
-            ):
-                client = AzureOpenAIChatClient()
-                result = client.generate(
-                    model="gpt-5.4-mini",
-                    prompt="Return JSON.",
-                    response_schema=None,
-                    temperature=0.2,
-                )
-
-        self.assertEqual(result.payload, '{"ok": true}')
-        self.assertEqual(
-            calls[0]["url"],
-            (
-                "https://demo.services.ai.azure.com/api/projects/demo/"
-                "openai/v1/chat/completions"
-            ),
-        )
-        self.assertEqual(calls[0]["headers"]["Api-key"], "foundry-key")
-        self.assertEqual(calls[0]["payload"]["model"], "gpt-5.4-mini")
-
-    def test_azure_openai_client_rejects_unsupported_ai_foundry_auth_mode(self):
-        with mock.patch.dict(
-            "os.environ",
-            {
-                "AI_FOUNDRY_PROJECT_ENDPOINT": (
-                    "https://demo.services.ai.azure.com/api/projects/demo"
-                ),
-                "AI_FOUNDRY_API_KEY": "foundry-key",
-                "AI_FOUNDRY_AUTH_MODE": "managed_identity",
-            },
-            clear=True,
-        ):
-            with self.assertRaises(TrajectoryGenerationError) as context:
-                AzureOpenAIChatClient()
-
-        self.assertIn("AI_FOUNDRY_AUTH_MODE", str(context.exception))
-        self.assertIn("api_key", str(context.exception))
-
-    def test_build_openai_chat_generation_usage_handles_missing_usage(self):
-        self.assertIsNone(build_openai_chat_generation_usage(None))
 
 
 class FiniteStateTaskValidatorTests(unittest.TestCase):
@@ -3442,41 +3271,6 @@ class PrepareCoffeeValidatorTests(unittest.TestCase):
 
 
 class GenerationTests(unittest.TestCase):
-    def test_resolve_pricing_tier_supports_gemini_31_flash_lite_preview(self):
-        on_demand_pricing = _resolve_pricing_tier(
-            "gemini-3.1-flash-lite-preview",
-            "ON_DEMAND",
-        )
-        priority_pricing = _resolve_pricing_tier(
-            "gemini-3.1-flash-lite-preview",
-            "ON_DEMAND_PRIORITY",
-        )
-        flex_pricing = _resolve_pricing_tier(
-            "gemini-3.1-flash-lite-preview",
-            "ON_DEMAND_FLEX",
-        )
-
-        self.assertIsNotNone(on_demand_pricing)
-        self.assertEqual(on_demand_pricing.input_usd_per_million_tokens, 0.25)
-        self.assertEqual(
-            on_demand_pricing.cached_input_usd_per_million_tokens,
-            0.025,
-        )
-        self.assertEqual(on_demand_pricing.output_usd_per_million_tokens, 1.5)
-        self.assertIsNotNone(priority_pricing)
-        self.assertEqual(priority_pricing.input_usd_per_million_tokens, 0.45)
-        self.assertEqual(
-            priority_pricing.cached_input_usd_per_million_tokens,
-            0.045,
-        )
-        self.assertEqual(priority_pricing.output_usd_per_million_tokens, 2.7)
-        self.assertIsNotNone(flex_pricing)
-        self.assertEqual(flex_pricing.input_usd_per_million_tokens, 0.13)
-        self.assertEqual(
-            flex_pricing.cached_input_usd_per_million_tokens,
-            0.013,
-        )
-        self.assertEqual(flex_pricing.output_usd_per_million_tokens, 0.75)
 
     def test_build_generation_usage_metadata_reads_cached_content_token_count(self):
         usage = build_generation_usage_metadata(
