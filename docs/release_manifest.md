@@ -232,3 +232,28 @@ Two side effects of `4e10706`:
   - 3 of the 6 have identical executed call sequences.
   - The other 3 diverge mid-episode, after identical earlier calls and observations, and only in the wording of a free-text message; the tool and coordination phase are the same.
   - That pattern is consistent with greedy-decoding nondeterminism under different request batching: the paper ran 4 workers on one server, the smoke test ran 1. It does not point to a prompt change, which would diverge at the first call.
+
+## 8. Step 4 (restructure) progress
+
+**Package move (`0d86582`).** The paper code now lives in `robotalk/`:
+- `tasks`, `tools`, `generation`, `training`, `evaluation`, `analysis` and `release` subpackages;
+- `configs/` holds the 43/10 split, the nested selections, the evaluation cohort, the scene compatibility cache and the accelerate config.
+
+All golden checks are unchanged after the move.
+
+**Reproduction entry point.**
+- `configs/experiments.yaml` defines every Fig. 5–7 cell with the exact settings recovered from the paper's saved `run_config.json` / `parallel_run.json`:
+  - all 12 SFT runs share every hyperparameter and differ only in base model, `train_reasoning` and scale;
+  - Thinking models were evaluated with sampling (temperature 0.6, top-p 0.95, top-k 20, 2048 new tokens), so they are stochastic.
+- `scripts/reproduce.py {fig3,fig5,fig6,fig7,figures} [--train]` runs download-or-train → vLLM serve → parallel eval → aggregate → plot. `scripts/slurm/reproduce.sbatch` wraps it.
+- `robotalk/analysis/paper_results.py` replaces the archive-specific 43/10 artifact builder.
+  - Run against the archived paper evaluation logs, it reproduces all 24 Fig. 6–7 values exactly.
+  - The exporters then regenerate Figs. 3, 6 and 7 pixel-identical to the paper's PNGs.
+
+**Fig. 5 caveat.** The paper's communication ablation was run on the 47/6 manifest and regrouped to 43/10. Configuration lists are identical per task, but episode sampling seeds include the split name. A native 43/10 rerun therefore draws different episodes for the 4 tasks that moved to held-out (40 of 100 held-out episodes). Expect agreement within CI, not identical held-out episodes. Gemini is also not bit-reproducible through the API.
+
+**Open item: training data on the Hub.**
+- `--train` needs the rendered per-trajectory layout: `original_trajectory.json`, `plan.json`, `metadata.json` and the images.
+- The HF export has the images (identical files) and the raw generation records, but not those three JSON files.
+- Proposed: publish them as an extra HF config (well under 1.8 GB) and add a converter that rebuilds `data/robotalk_rendered/` from the Hub.
+- Evaluation from released adapters does not need the dataset; the cohort is configuration-native.

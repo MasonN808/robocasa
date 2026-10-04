@@ -26,7 +26,7 @@ from robotalk.analysis.plot_caption_metadata import write_caption_csv
 
 
 SPLIT = ROOT / "configs/splits/43_train_10_heldout.json"
-ATTRIBUTES = ROOT / "docs/composite_tasks/task_attributes.json"
+ATTRIBUTES = ROOT / "robotalk/tasks/task_attributes.json"
 VERIFIED_SPECS = ROOT / "robotalk/tasks/specs/verified"
 PHASES = ("Phase 1", "Phase 2", "Phase 3", "Phase 4")
 PHASE_LABELS = ("Phase 1\n1 stage", "Phase 2\n2–3 stages", "Phase 3\n4–5 stages", "Phase 4\n6+ stages")

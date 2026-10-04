@@ -274,3 +274,7 @@ training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/*
 !training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/plate_store_dinner_traj088_initial_interior_lower.png
 !training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/camera_configs.json
 training/bc_task_vlm/reports/communication_waitfix_v3/email_monitor.log
+
+# Reproduction outputs (evaluations, figures, checkpoints)
+/outputs/
+/data/
