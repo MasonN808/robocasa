@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 
-COMMUNICATION_MODES = ("full", "minimal", "unguided", "none")
+COMMUNICATION_MODES = ("full", "intermediate", "minimal", "unguided", "none")
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,8 @@ class CommunicationProfile:
     expose_coordination_phase: bool
     require_opening_protocol: bool
     require_initial_communication: bool
+    # Waits have no automatic timeout. In communicative modes a matching
+    # release still wakes the agent; this does not mean communication is absent.
     permanent_wait: bool
 
 
@@ -39,6 +41,15 @@ _PROFILES = {
     ),
     "minimal": CommunicationProfile(
         mode="minimal",
+        expose_communicate=True,
+        expose_wait_for_signal=True,
+        expose_coordination_phase=False,
+        require_opening_protocol=False,
+        require_initial_communication=False,
+        permanent_wait=True,
+    ),
+    "intermediate": CommunicationProfile(
+        mode="intermediate",
         expose_communicate=True,
         expose_wait_for_signal=True,
         expose_coordination_phase=False,
@@ -95,6 +106,14 @@ def _drop_coordination_phase(spec: dict[str, Any]) -> None:
         spec.pop("allowed_arg_values", None)
 
 
+def _drop_coordination_phase_description(spec: dict[str, Any]) -> None:
+    description = str(spec.get("description", ""))
+    marker = " args.coordination_phase is required for protocol messages"
+    if marker in description:
+        description = description.split(marker, 1)[0].rstrip()
+    spec["description"] = description
+
+
 def apply_communication_profile(
     tool_specs: Mapping[str, Mapping[str, Any]],
     mode: str = "full",
@@ -109,6 +128,9 @@ def apply_communication_profile(
     communicate = projected.get("communicate")
     if not profile.expose_communicate:
         projected.pop("communicate", None)
+    elif communicate is not None and mode == "intermediate":
+        _drop_coordination_phase(communicate)
+        _drop_coordination_phase_description(communicate)
     elif communicate is not None:
         communicate["description"] = (
             "Send a message to the other agent. The optional releases argument "
@@ -119,7 +141,7 @@ def apply_communication_profile(
     wait = projected.get("wait_for_signal")
     if not profile.expose_wait_for_signal:
         projected.pop("wait_for_signal", None)
-    elif wait is not None and profile.permanent_wait:
+    elif wait is not None and not profile.expose_communicate:
         wait["description"] = (
             "Stop this agent from acting for the rest of the episode. "
             "Communication is unavailable, so no release signal can arrive. "
@@ -136,10 +158,13 @@ def apply_communication_profile(
                 "agent is leaving to the other agent."
             ),
         }
-    elif wait is not None:
+    elif wait is not None and mode != "intermediate":
         wait["description"] = (
             "Pause until the agent named by from sends a message whose releases "
             "value matches the exact symbolic object or fixture ID in about."
         )
+
+    # Intermediate keeps the canonical detailed wait/release mechanics, just
+    # as it keeps detailed communication mechanics without coordination phases.
 
     return projected

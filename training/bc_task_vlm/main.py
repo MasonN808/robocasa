@@ -942,6 +942,7 @@ def _load_model(config: RunConfiguration):
     if config.init_adapter_path:
         # v2-continue: start from a published adapter's weights and keep
         # training them (fresh optimizer state, unlike --resume-from-checkpoint).
+        _ensure_peft_tensor_parallel_import_compatibility(model)
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(
@@ -964,6 +965,40 @@ def _load_model(config: RunConfiguration):
     )
     model = get_peft_model(model, lora_config)
     return model
+
+
+def _ensure_peft_tensor_parallel_import_compatibility(model: Any) -> None:
+    """Bridge PEFT 0.19.1 to Transformers 4.57 for non-TP adapter loading.
+
+    PEFT imports ``EmbeddingParallel`` unconditionally while loading any
+    adapter, but Transformers 4.57 does not export that newer class. The PEFT
+    function only uses it for modules carrying an active HF tensor-parallel
+    plan and device mesh. Our DDP LoRA training has neither, so a distinct
+    placeholder restores the import without altering execution. Fail closed
+    if a future caller actually enables tensor parallelism.
+    """
+
+    from transformers.integrations import tensor_parallel
+
+    if hasattr(tensor_parallel, "EmbeddingParallel"):
+        return
+    active_tp_modules = [
+        name
+        for name, module in model.named_modules()
+        if getattr(module, "_hf_tp_plan", None) is not None
+        and getattr(module, "_hf_device_mesh", None) is not None
+    ]
+    if active_tp_modules:
+        raise RuntimeError(
+            "The installed PEFT/Transformers pair lacks EmbeddingParallel "
+            "while the model uses tensor parallelism; use compatible package "
+            f"versions instead. Example modules: {active_tp_modules[:3]}"
+        )
+
+    class EmbeddingParallel:  # intentionally not a Col/Row parallel subclass
+        pass
+
+    tensor_parallel.EmbeddingParallel = EmbeddingParallel
 
 
 def _launcher_world_size() -> int:

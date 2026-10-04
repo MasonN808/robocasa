@@ -169,6 +169,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--phase2-concurrent-canary",
+        action="store_true",
+        help=(
+            "Generate one simplified_v3 tick trajectory per statically valid "
+            "spec and gate Phase 2 on the production concurrent validator."
+        ),
+    )
+    parser.add_argument(
         "--phase2-repair-retries",
         type=int,
         default=DEFAULT_PHASE2_REPAIR_RETRIES,
@@ -832,6 +840,7 @@ def _repair_phase2_failures(
             result
             for result in current_results
             if not getattr(result, "passed", False)
+            and not getattr(result, "concurrent_canary_error", None)
             and getattr(result, "task_name", None) in candidate_by_name
         ]
         if not failed_results:
@@ -970,7 +979,12 @@ def _run_phase2(
 ) -> list[Any]:
     """Run Phase 2 (static spec validation) on the generated specs."""
 
-    from .phase2 import run_phase2
+    from .phase2 import (
+        apply_concurrent_canary_results,
+        run_phase2,
+        write_phase2_results,
+    )
+    from .phase3 import run_phase3
 
     spec_paths = _load_phase1_spec_paths(run_dir, task_names=args.tasks)
 
@@ -993,6 +1007,40 @@ def _run_phase2(
         enable_sim_alignment=args.phase2_sim_alignment,
     )
 
+    if args.phase2_concurrent_canary:
+        canary_spec_paths = [
+            Path(result.spec_path) for result in results if result.passed
+        ]
+        print(
+            f"  Concurrent canary: generating one simplified_v3 tick trajectory "
+            f"for {len(canary_spec_paths)} statically valid specs..."
+        )
+
+        def _canary_progress(completed: int, total: int, task_name: str) -> None:
+            print(f"  [{completed}/{total}] concurrent canary {task_name}")
+
+        canary_results = run_phase3(
+            output_dir=run_dir,
+            spec_paths=canary_spec_paths,
+            model=args.model,
+            num_runs=1,
+            workers=args.workers,
+            max_retries=args.max_retries,
+            sdk=args.sdk,
+            project=args.project,
+            location=args.location or "global",
+            dry_run=False,
+            progress_callback=_canary_progress,
+            generation_timeout_sec=(
+                None
+                if args.generation_timeout_sec == 0
+                else args.generation_timeout_sec
+            ),
+            phase_name="phase2/concurrent_canary",
+        )
+        results = apply_concurrent_canary_results(results, canary_results)
+        write_phase2_results(run_dir, results)
+
     passed = sum(1 for r in results if r.passed)
     failed = len(results) - passed
     print(f"  Validated {len(results)}: passed={passed}, failed={failed}")
@@ -1012,8 +1060,9 @@ def _run_phase2(
             for err in r.referential_errors:
                 print(f"        referential: {err}")
             if r.dry_run_error:
-                # Keep dry-run lines short — the file has the full text.
-                print(f"        dry_run: {r.dry_run_error[:200]}")
+                print(f"        legacy_example_warning: {r.dry_run_error[:200]}")
+            if r.concurrent_canary_error:
+                print(f"        concurrent_canary: {r.concurrent_canary_error[:200]}")
 
     state.mark_phase_completed("2")
     return results

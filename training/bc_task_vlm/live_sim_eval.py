@@ -31,6 +31,7 @@ import base64
 import hashlib
 import json
 import mimetypes
+import os
 import shutil
 import time
 import traceback
@@ -252,6 +253,7 @@ def _check_pruned_organize_condiments_success(
 
 WAIT_TOOL_NAME = "wait_for_signal"
 REJECTION_MODE_REPORT_FAILED = "report-failed"
+REJECTION_MODE_TERMINATE_FIRST = "terminate-first-rejection"
 
 
 def _prioritize_incumbent_fixture_users(
@@ -995,6 +997,8 @@ class HfPolicy:
     """One local HF VLM shared across trajectories; generates one step/turn."""
 
     def __init__(self, args: argparse.Namespace) -> None:
+        import os
+
         import torch
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
@@ -1065,6 +1069,19 @@ class VllmPolicy:
         self.top_p = getattr(args, "vllm_top_p", None)
         self.top_k = getattr(args, "vllm_top_k", None)
         self.enable_thinking = bool(getattr(args, "enable_thinking", False))
+        # Opt-in debugging for parser integration. Keep this disabled by
+        # default because raw assistant messages can be large and ordinary
+        # evaluations should not change their logging behavior.
+        self.log_raw_responses = os.environ.get(
+            "VLLM_LOG_RAW_RESPONSES", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.raw_text_mode = bool(getattr(args, "vllm_raw_text_mode", False)) or (
+            os.environ.get("VLLM_RAW_TEXT_MODE", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        self.recover_missing_open_tool_tag = bool(
+            getattr(args, "recover_missing_open_tool_tag", False)
+        )
         self.last_usage: dict[str, Any] = {}
 
     @staticmethod
@@ -1116,13 +1133,16 @@ class VllmPolicy:
             "model": self.model,
             "messages": self._request_messages(feature),
             "tools": feature["tool_schemas"],
-            "tool_choice": "auto",
             "temperature": self.temperature,
             "max_tokens": self.max_new_tokens,
             "seed": self.seed,
             "stream": False,
             "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
         }
+        # vLLM defaults to "auto" whenever tools are present, so parser-free
+        # diagnostics must explicitly request "none" rather than omitting the
+        # field. The schemas remain available to the model's chat template.
+        payload["tool_choice"] = "none" if self.raw_text_mode else "auto"
         if self.top_p is not None:
             payload["top_p"] = float(self.top_p)
         if self.top_k is not None:
@@ -1156,6 +1176,12 @@ class VllmPolicy:
             raise RuntimeError(
                 f"Malformed vLLM response: {response_payload!r}"
             ) from exc
+        if self.log_raw_responses:
+            print(
+                "[vllm_raw_response] "
+                + json.dumps(message, ensure_ascii=False, sort_keys=True),
+                flush=True,
+            )
         tool_calls = message.get("tool_calls") or []
         reasoning_text = ""
         reasoning = message.get("reasoning_content")
@@ -1187,6 +1213,35 @@ class VllmPolicy:
             return _GeneratedPolicyText(decoded, reasoning_text=reasoning_text)
         content = message.get("content")
         if isinstance(content, str):
+            if self.recover_missing_open_tool_tag:
+                candidate = content.strip()
+                closing_tag = "</tool_call>"
+                if (
+                    candidate.endswith(closing_tag)
+                    and "<tool_call>" not in candidate
+                ):
+                    body = candidate[: -len(closing_tag)].strip()
+                    try:
+                        recovered_payload = json.loads(body)
+                    except json.JSONDecodeError:
+                        recovered_payload = None
+                    if (
+                        isinstance(recovered_payload, dict)
+                        and set(recovered_payload) == {"name", "arguments"}
+                        and isinstance(recovered_payload.get("name"), str)
+                        and bool(recovered_payload["name"].strip())
+                        and isinstance(recovered_payload.get("arguments"), dict)
+                    ):
+                        recovered = (
+                            "<tool_call>\n"
+                            + json.dumps(recovered_payload, separators=(",", ":"))
+                            + "\n</tool_call>"
+                        )
+                        return _GeneratedPolicyText(
+                            recovered,
+                            reasoning_text=reasoning_text,
+                            parser_recovery="recovered_missing_open_tool_tag",
+                        )
             return content
         if isinstance(content, list):
             return "".join(
@@ -1202,9 +1257,16 @@ class VllmPolicy:
 class _GeneratedPolicyText(str):
     """Decoded action plus private, non-contextual model diagnostics."""
 
-    def __new__(cls, value: str, *, reasoning_text: str = ""):
+    def __new__(
+        cls,
+        value: str,
+        *,
+        reasoning_text: str = "",
+        parser_recovery: str = "",
+    ):
         instance = super().__new__(cls, value)
         instance.reasoning_text = reasoning_text
+        instance.parser_recovery = parser_recovery
         return instance
 
 
@@ -1572,6 +1634,7 @@ def run_trajectory(
             break
 
         private_reasoning = str(proposal.pop("_private_reasoning", "") or "")
+        parser_recovery = str(proposal.pop("_parser_recovery", "") or "")
 
         record: dict[str, Any] = {
             "step_index": step_index,
@@ -1582,6 +1645,7 @@ def run_trajectory(
                 proposal_observation_agent if train_get_image else None
             ),
             "private_reasoning": private_reasoning or None,
+            "parser_recovery": parser_recovery or None,
         }
         if "error" in proposal:
             # Unparseable model output: no-op with feedback.
@@ -1809,6 +1873,14 @@ def run_trajectory(
         None,
     )
     had_rejection = first_rejection is not None
+    first_rejection_category = None
+    if first_rejection is not None:
+        first_rejection_category = (
+            "simulator_execution_after_fsm_acceptance"
+            if first_rejection.get("legal") is not False
+            and first_rejection.get("sim_success") is False
+            else "model_call_or_symbolic_validation"
+        )
     return {
         "task_name": task_name,
         "composite_task": composite_task,
@@ -1832,6 +1904,7 @@ def run_trajectory(
         "fsm_goal_satisfied": fsm_goal,
         "had_rejection": had_rejection,
         "first_rejection": deepcopy(first_rejection),
+        "first_rejection_category": first_rejection_category,
         "fsm_success_if_terminate_on_first_rejection": bool(
             fsm_goal and not had_rejection
         ),
@@ -2149,6 +2222,10 @@ def run_trajectory_partial(
             agent.agent_id: str(proposal.pop("_private_reasoning", "") or "")
             for agent, proposal, _ in proposals
         }
+        parser_recovery_by_agent = {
+            agent.agent_id: str(proposal.pop("_parser_recovery", "") or "")
+            for agent, proposal, _ in proposals
+        }
 
         # --- resource conflict resolution against the same pre-batch state ---
         symbolic_initial_state = mirror.validator.initial_state
@@ -2221,6 +2298,7 @@ def run_trajectory_partial(
                 "proposal_elapsed_s": elapsed,
                 "cycle_agents": [a.agent_id for a in ready],
                 "private_reasoning": private_reasoning_by_agent[agent.agent_id] or None,
+                "parser_recovery": parser_recovery_by_agent[agent.agent_id] or None,
             }
             agent.local_turn += 1
             proposal_index += 1
@@ -2404,6 +2482,11 @@ def run_trajectory_partial(
                     }
                 )
                 record.update(legal=True, executed=True, reason=None)
+                # Persist the exact observation files used by this turn. This
+                # is backward-compatible evaluation metadata and lets DAgger
+                # replay materialize multimodal training examples without
+                # guessing filenames from requested view names.
+                record["image_paths"] = list(image_paths)
                 agent.ready_at, agent.consecutive_obs, capped = observation_ready_at(
                     clock,
                     consecutive_obs=agent.consecutive_obs,
@@ -2570,6 +2653,11 @@ def run_trajectory_partial(
             termination = "goal_satisfied"
             scheduler.finish_cycle(goal_satisfied=True)
 
+        # Calls in a cycle were proposed against one frozen pre-cycle state.
+        # Classify the whole cycle, but do not generate another learner call.
+        if cycle_rejected and rejection_mode == REJECTION_MODE_TERMINATE_FIRST:
+            termination = "first_rejection"
+
         if not reached:
             budget_termination = _partial_budget_termination(
                 rejected_total=rejected_total,
@@ -2589,6 +2677,7 @@ def run_trajectory_partial(
             "max_consecutive_rejections",
             "rejection_budget_exhausted",
             "proposal_budget_exhausted",
+            "first_rejection",
         ):
             break
 
@@ -2603,6 +2692,14 @@ def run_trajectory_partial(
         None,
     )
     had_rejection = first_rejection is not None
+    first_rejection_category = None
+    if first_rejection is not None:
+        first_rejection_category = (
+            "simulator_execution_after_fsm_acceptance"
+            if first_rejection.get("legal") is not False
+            and first_rejection.get("sim_success") is False
+            else "model_call_or_symbolic_validation"
+        )
     return {
         "task_name": task_name,
         "composite_task": composite_task,
@@ -2642,6 +2739,7 @@ def run_trajectory_partial(
         "fsm_goal_satisfied": mirror.goal_satisfied,
         "had_rejection": had_rejection,
         "first_rejection": deepcopy(first_rejection),
+        "first_rejection_category": first_rejection_category,
         "fsm_success_if_terminate_on_first_rejection": bool(
             mirror.goal_satisfied and not had_rejection
         ),
@@ -2716,10 +2814,16 @@ def _handle_rejection(
     multiplier: float,
     record: dict[str, Any],
 ) -> None:
-    """Record every rejection in private history before allowing recovery."""
+    """Record a rejection, optionally without exposing it for recovery."""
 
-    if mode != REJECTION_MODE_REPORT_FAILED:
+    if mode not in (REJECTION_MODE_REPORT_FAILED, REJECTION_MODE_TERMINATE_FIRST):
         raise ValueError(f"Unsupported rejection mode: {mode!r}")
+    if mode == REJECTION_MODE_TERMINATE_FIRST:
+        # Avoidance-target DAgger branches before this rejected call. No later
+        # learner call should receive a failure message in this mode.
+        record["failure_reported"] = False
+        record["terminated_on_rejection"] = True
+        return
     # This is deliberately visible even though FAILED lines are absent from
     # SFT. Recovery therefore measures a general model capability; the
     # counterfactual no-rejection metric separately scores learned execution.
@@ -2982,6 +3086,7 @@ def _generate_once(
     try:
         decoded = policy.generate(feature)
         private_reasoning = str(getattr(decoded, "reasoning_text", "") or "")
+        parser_recovery = str(getattr(decoded, "parser_recovery", "") or "")
         parsed = parse_first_qwen_tool_call(decoded)
         # eval-only cab<->cabinet leniency; never makes a legal call illegal
         parsed = apply_eval_fixture_aliases(parsed, tool_specs)
@@ -3008,6 +3113,8 @@ def _generate_once(
         }
         if private_reasoning:
             result["_private_reasoning"] = private_reasoning
+        if parser_recovery:
+            result["_parser_recovery"] = parser_recovery
         return result
     except Exception as exc:
         result = {"error": f"{type(exc).__name__}: {exc}"}
@@ -3016,6 +3123,11 @@ def _generate_once(
         )
         if private_reasoning:
             result["_private_reasoning"] = private_reasoning
+        parser_recovery = str(
+            getattr(locals().get("decoded"), "parser_recovery", "") or ""
+        )
+        if parser_recovery:
+            result["_parser_recovery"] = parser_recovery
         return result
 
 
@@ -3188,6 +3300,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vllm-top-p", type=float, default=None)
     parser.add_argument("--vllm-top-k", type=int, default=None)
     parser.add_argument(
+        "--vllm-raw-text-mode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Diagnostic mode: omit OpenAI tool_choice so a parser-free vLLM "
+            "server returns ordinary assistant text. Tool schemas are still "
+            "included in the request."
+        ),
+    )
+    parser.add_argument(
+        "--recover-missing-open-tool-tag",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Opt-in compatibility recovery for exactly one JSON tool call "
+            "followed by </tool_call> but missing <tool_call>."
+        ),
+    )
+    parser.add_argument(
         "--dagger-prefixes",
         type=Path,
         default=None,
@@ -3223,8 +3354,9 @@ def parse_args() -> argparse.Namespace:
         default="full",
         help=(
             "Communication ablation. 'full' is the unchanged canonical SFT/eval "
-            "contract; other modes alter only eval-time prompts, tool exposure, "
-            "and matching protocol gates."
+            "contract; 'intermediate' retains its communication guidance but "
+            "removes the coordinator handshake; other modes progressively reduce "
+            "eval-time guidance and tool exposure."
         ),
     )
     parser.add_argument("--no-forced-json", action="store_true")
@@ -3354,11 +3486,11 @@ def parse_args() -> argparse.Namespace:
     )
     partial.add_argument(
         "--rejection-mode",
-        choices=(REJECTION_MODE_REPORT_FAILED,),
+        choices=(REJECTION_MODE_REPORT_FAILED, REJECTION_MODE_TERMINATE_FIRST),
         default=REJECTION_MODE_REPORT_FAILED,
-        help="Append every rejected call as a FAILED: history line. The model "
-        "may recover, while metrics separately report the counterfactual in "
-        "which the first rejection makes the trajectory unsuccessful.",
+        help="'report-failed' appends a FAILED history line and permits "
+        "recovery. 'terminate-first-rejection' stops after classifying the "
+        "current proposal cycle and is intended for avoidance-target DAgger.",
     )
     partial.add_argument(
         "--rejection-budget-ratio",
@@ -3861,6 +3993,14 @@ def _write_metrics(
         and r.get("fsm_goal_satisfied") is not None
     )
     rejection_counts = [int(r.get("rejected_total", r.get("rejected_steps", 0))) for r in records]
+    parser_recovery_counts = [
+        sum(
+            1
+            for step in r.get("steps", [])
+            if step.get("parser_recovery") == "recovered_missing_open_tool_tag"
+        )
+        for r in records
+    ]
     task_action_counts = [_task_action_counts_by_agent(r) for r in records]
     single_task_action_agent = [
         sum(count > 0 for count in counts.values()) == 1
@@ -3892,6 +4032,13 @@ def _write_metrics(
             1 for r in records if r.get("had_rejection", r.get("rejected_steps", 0) > 0)
         ),
         "total_rejected_tool_calls": sum(rejection_counts),
+        "total_recovered_missing_open_tool_tags": sum(parser_recovery_counts),
+        "num_trajectories_with_recovered_missing_open_tool_tag": sum(
+            count > 0 for count in parser_recovery_counts
+        ),
+        "mean_recovered_missing_open_tool_tags_per_trajectory": (
+            sum(parser_recovery_counts) / n
+        ),
         "mean_rejected_tool_calls_per_trajectory": sum(rejection_counts) / n,
         "num_error_free_trajectories": sum(count == 0 for count in rejection_counts),
         "error_free_trajectory_rate": sum(count == 0 for count in rejection_counts) / n,

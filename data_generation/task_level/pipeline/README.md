@@ -24,7 +24,11 @@ User-facing `TaskSpec` reference:
   simulator-facing IDs from the model. It normalizes fixture parts, controls,
   support sites, and selected symbolic locations against live simulator
   metadata in `sim_normalization.py`.
-- Phase 2 always runs schema, referential, and symbolic FSM validation. Slow
+- Phase 2 always runs schema, referential, and symbolic validation. The flat
+  `example_trajectory` replay is retained as a legacy diagnostic, not as the
+  concurrency gate. Add `--phase2-concurrent-canary` to generate one fresh
+  `simplified_v3` tick trajectory with no work partition and gate each
+  otherwise-valid spec through the production concurrent FSM. Slow
   live-simulator alignment checks are opt-in with `--phase2-sim-alignment`;
   this is separate from `--phase1-sim-normalization`.
 - Stove controls keep burner-specificity. Generic knob aliases are rewritten
@@ -33,7 +37,10 @@ User-facing `TaskSpec` reference:
 - Guarded `communicate` task effects ignore exact message text so specs do not
   depend on one brittle string literal.
 - Phase 2 validates both the JSON spec structure and the example trajectory by
-  replaying it through the shared symbolic FSM.
+  replaying it as a legacy diagnostic; the concurrent canary is the runtime
+  validity check when enabled.
+- Phase 3 uses the production concurrent generation contract by default:
+  `simplified_v3`, tick format, and no predefined work partition.
 - Phase 2 and Phase 2.5 can repair failures by regenerating specs with compact
   feedback from the validator or review step. Rejected Phase 2.5 specs do not
   continue to trajectory generation.

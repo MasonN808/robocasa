@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import lru_cache
 from importlib import import_module
+import os
 import re
 from typing import Any
 
@@ -230,6 +231,7 @@ def _load_task_simulation_snapshot(
                 layout=layout,
                 style=style,
                 seed=seed,
+                gl_backend=os.environ.get("MUJOCO_GL", "osmesa"),
             )
             scene = deepcopy(executor.get_scene_description())
             fixture_details: dict[str, dict[str, Any]] = {}

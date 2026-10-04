@@ -9,6 +9,7 @@ registry aligned with the generated specs and avoids import-order issues.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -61,12 +62,12 @@ def _load_json_object(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _task_output_dir(output_dir: Path, task_name: str) -> Path:
-    return output_dir / "phase3" / "raw" / task_name
+def _task_output_dir(output_dir: Path, task_name: str, *, phase_name: str = "phase3") -> Path:
+    return output_dir / phase_name / "raw" / task_name
 
 
-def _task_log_dir(output_dir: Path) -> Path:
-    return output_dir / "phase3" / "logs"
+def _task_log_dir(output_dir: Path, *, phase_name: str = "phase3") -> Path:
+    return output_dir / phase_name / "logs"
 
 
 def _summarize_phase3_results(results: list[Phase3TaskResult]) -> dict[str, Any]:
@@ -129,14 +130,22 @@ def _run_one_task(
     spec_dir: Path,
     dry_run: bool,
     sampling: str | None = None,
+    phase_name: str = "phase3",
 ) -> Phase3TaskResult:
     spec_payload = _load_json_object(spec_path)
     task_name = str((spec_payload or {}).get("composite_task") or spec_path.stem)
     task_dir_name = spec_path.stem
-    task_output_dir = _task_output_dir(output_dir, task_dir_name)
+    if phase_name != "phase3":
+        spec_digest = hashlib.sha256(spec_path.read_bytes()).hexdigest()[:12]
+        task_dir_name = f"{task_dir_name}-{spec_digest}"
+    task_output_dir = _task_output_dir(
+        output_dir,
+        task_dir_name,
+        phase_name=phase_name,
+    )
     summary_path = task_output_dir / "summary.json"
     error_summary_path = task_output_dir / "summary_errors.json"
-    log_dir = _task_log_dir(output_dir)
+    log_dir = _task_log_dir(output_dir, phase_name=phase_name)
     stdout_log_path = log_dir / f"{task_dir_name}.stdout.log"
     stderr_log_path = log_dir / f"{task_dir_name}.stderr.log"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -157,6 +166,11 @@ def _run_one_task(
             "--enable-validation",
             "--thinking-level",
             "low",
+            "--tick-format",
+            "--prompt-style",
+            "simplified_v3",
+            "--partition-policy",
+            "none",
         ]
         if sampling:
             command.extend(["--sampling", sampling])
@@ -284,10 +298,11 @@ def run_phase3(
     heartbeat_interval_sec: float = _DEFAULT_HEARTBEAT_INTERVAL_SEC,
     generation_timeout_sec: int | None = 300,
     sampling: str | None = None,
+    phase_name: str = "phase3",
 ) -> list[Phase3TaskResult]:
     """Generate raw trajectories for the given TaskSpec files."""
 
-    phase_dir = output_dir / "phase3"
+    phase_dir = output_dir / phase_name
     phase_dir.mkdir(parents=True, exist_ok=True)
     spec_dir = output_dir / "phase1" / "specs"
     spec_task_names = [
@@ -313,6 +328,7 @@ def run_phase3(
                 spec_dir=spec_dir,
                 dry_run=dry_run,
                 sampling=sampling,
+                phase_name=phase_name,
             )
             results.append(result)
             if progress_callback is not None:
@@ -339,6 +355,7 @@ def run_phase3(
                     spec_dir=spec_dir,
                     dry_run=dry_run,
                     sampling=sampling,
+                    phase_name=phase_name,
                 ): index
                 for index, spec_path in enumerate(spec_paths)
             }

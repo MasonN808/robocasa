@@ -19,7 +19,7 @@ cohort=training/bc_task_vlm/eval_manifests/fixed_live_sim_configuration_v1/froze
 mkdir -p "${artifact}/summaries"
 
 models=(gemini3flash qwen3vl8b)
-modes=(full minimal unguided none)
+modes=(full intermediate minimal unguided none)
 
 run_dir() {
   local model=$1
@@ -27,11 +27,15 @@ run_dir() {
   if [[ "${model}" == gemini3flash ]]; then
     if [[ "${mode}" == full ]]; then
       echo ootb_gemini3flash_fixed10_promptv9
+    elif [[ "${mode}" != none ]]; then
+      echo "ootb_gemini3flash_fixed10_promptv9_comm_${mode}_waitfix_v3_job853823"
     else
       echo "ootb_gemini3flash_fixed10_promptv9_comm_${mode}_v2"
     fi
   elif [[ "${mode}" == full ]]; then
     echo ootb_qwen3vl8b_fixed10_promptv9_vllm
+  elif [[ "${mode}" != none ]]; then
+    echo "ootb_qwen3vl8b_fixed10_promptv9_vllm_comm_${mode}_waitfix_v3_job853823"
   else
     echo "ootb_qwen3vl8b_fixed10_promptv9_vllm_comm_${mode}_v2"
   fi
@@ -113,3 +117,12 @@ done
   --output "${artifact}/report.html"
 
 echo "Communication-ablation artifact: ${artifact}/report.html"
+
+# Keep the consolidated 43/10 report and its paper-ready communication figures
+# synchronized with the same summaries.
+MPLCONFIGDIR=/tmp/robocasa-mpl-cache \
+XDG_CACHE_HOME=/tmp/robocasa-xdg-cache \
+  "${python_bin}" -m training.bc_task_vlm.build_43_10_eval_artifact
+MPLCONFIGDIR=/tmp/robocasa-mpl-cache \
+XDG_CACHE_HOME=/tmp/robocasa-xdg-cache \
+  "${python_bin}" training/bc_task_vlm/export_communication_ablation_png.py

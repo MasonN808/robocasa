@@ -40,6 +40,9 @@ MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-256}
 VLLM_TEMPERATURE=${VLLM_TEMPERATURE:-0.0}
 VLLM_TOP_P=${VLLM_TOP_P:-}
 VLLM_TOP_K=${VLLM_TOP_K:-}
+VLLM_RAW_TEXT_MODE=${VLLM_RAW_TEXT_MODE:-false}
+REJECTION_MODE=${REJECTION_MODE:-}
+RECOVER_MISSING_OPEN_TOOL_TAG=${RECOVER_MISSING_OPEN_TOOL_TAG:-false}
 
 export HF_HOME=/work/umass/shlomo_umass/hf_cache
 export MUJOCO_GL=egl
@@ -72,6 +75,9 @@ args=(
 )
 if [[ "${BACKEND}" == "vllm" ]]; then
   args+=(--vllm-temperature "${VLLM_TEMPERATURE}")
+  if [[ "${VLLM_RAW_TEXT_MODE}" == "true" ]]; then
+    args+=(--vllm-raw-text-mode)
+  fi
   if [[ -n "${VLLM_TOP_P}" ]]; then
     args+=(--vllm-top-p "${VLLM_TOP_P}")
   fi
@@ -82,6 +88,9 @@ fi
 if [[ "${ENABLE_THINKING}" == "true" ]]; then
   args+=(--enable-thinking)
 fi
+if [[ "${RECOVER_MISSING_OPEN_TOOL_TAG}" == "true" ]]; then
+  args+=(--recover-missing-open-tool-tag)
+fi
 # Preserve byte-for-byte command identity for pre-ablation `full` runs so
 # strict resume can reuse their existing parallel outputs. `full` is also the
 # Python default; only non-default experimental arms need an explicit flag.
@@ -90,6 +99,9 @@ if [[ "${COMMUNICATION_MODE}" != "full" ]]; then
 fi
 if [[ -n "${MAX_CONFIGS_PER_TASK}" ]]; then
   args+=(--max-configs-per-task "${MAX_CONFIGS_PER_TASK}")
+fi
+if [[ -n "${REJECTION_MODE}" ]]; then
+  args+=(--rejection-mode "${REJECTION_MODE}")
 fi
 if [[ -n "${SCENE_COMPATIBILITY_CACHE}" ]]; then
   args+=(

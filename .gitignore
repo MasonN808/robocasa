@@ -261,3 +261,16 @@ training/bc_task_vlm/dagger/
 training/bc_task_vlm/plans/dagger_resynchronization_plan.md
 tests/test_bc_task_vlm_dagger.py
 launch_dagger_*.sbatch
+
+# RoboTalk bulk exports (contents live on the Hugging Face Hub; see upload_receipt.json files)
+training/bc_task_vlm/reports/robotalk_hf_full/
+training/bc_task_vlm/reports/robotalk_hf_smoke/
+training/bc_task_vlm/reports/robotalk_anonymous_review/*
+!training/bc_task_vlm/reports/robotalk_anonymous_review/README.md
+!training/bc_task_vlm/reports/robotalk_anonymous_review/audit.json
+!training/bc_task_vlm/reports/robotalk_anonymous_review/upload_receipt.json
+training/bc_task_vlm/reports/robotalk_model_release/upload/
+training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/*
+!training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/plate_store_dinner_traj088_initial_interior_lower.png
+!training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/camera_configs.json
+training/bc_task_vlm/reports/communication_waitfix_v3/email_monitor.log

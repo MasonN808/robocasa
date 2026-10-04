@@ -107,6 +107,8 @@ class SpecValidationResult:
     simulation_errors: list[str] = field(default_factory=list)
     referential_errors: list[str] = field(default_factory=list)
     dry_run_error: str | None = None
+    concurrent_canary_error: str | None = None
+    concurrent_canary_output_dir: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +122,8 @@ class SpecValidationResult:
             "simulation_errors": list(self.simulation_errors),
             "referential_errors": list(self.referential_errors),
             "dry_run_error": self.dry_run_error,
+            "concurrent_canary_error": self.concurrent_canary_error,
+            "concurrent_canary_output_dir": self.concurrent_canary_output_dir,
         }
 
 
@@ -1019,10 +1023,53 @@ def validate_one_spec(
     ):
         return result
 
-    # 4. Example-trajectory dry-run.
+    # 4. Legacy example-trajectory dry-run. Verified v1 specs store a flat
+    # witness that is not shown to current tick-based demo generation. Keep
+    # its diagnostics for repair/audit, but do not use the sequential replay
+    # as the concurrency gate. The optional Phase 2 concurrent canary owns
+    # that decision using the production prompt and ConcurrentTaskValidator.
     result.dry_run_error = _dry_run_example_trajectory(task_spec)
-    result.passed = result.dry_run_error is None
+    result.passed = True
     return result
+
+
+def apply_concurrent_canary_results(
+    validation_results: list[SpecValidationResult],
+    canary_results: list[Any],
+) -> list[SpecValidationResult]:
+    """Gate otherwise-valid specs on one production tick-generation canary."""
+
+    canary_by_task = {result.task_name: result for result in canary_results}
+    for validation in validation_results:
+        if not validation.passed:
+            continue
+        canary = canary_by_task.get(validation.task_name)
+        if canary is None:
+            validation.passed = False
+            validation.concurrent_canary_error = "concurrent canary result missing"
+            continue
+        validation.concurrent_canary_output_dir = str(canary.output_dir)
+        if not canary.completed or canary.num_trajectories < 1:
+            validation.passed = False
+            validation.concurrent_canary_error = (
+                canary.error
+                or "concurrent canary did not produce one validated trajectory"
+            )
+    return validation_results
+
+
+def write_phase2_results(
+    output_dir: Path,
+    results: list[SpecValidationResult],
+) -> None:
+    """Persist Phase 2 results after static checks and optional canary gating."""
+
+    phase_dir = output_dir / "phase2"
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    with (phase_dir / "validation_results.json").open("w", encoding="utf-8") as f:
+        json.dump([r.to_dict() for r in results], f, indent=2)
+    with (phase_dir / "summary.json").open("w", encoding="utf-8") as f:
+        json.dump(_summarize_validation(results), f, indent=2)
 
 
 def _summarize_validation(results: list[SpecValidationResult]) -> dict[str, Any]:
@@ -1053,11 +1100,6 @@ def run_phase2(
         for path in spec_paths
     ]
 
-    phase_dir = output_dir / "phase2"
-    phase_dir.mkdir(parents=True, exist_ok=True)
-    with (phase_dir / "validation_results.json").open("w", encoding="utf-8") as f:
-        json.dump([r.to_dict() for r in results], f, indent=2)
-    with (phase_dir / "summary.json").open("w", encoding="utf-8") as f:
-        json.dump(_summarize_validation(results), f, indent=2)
+    write_phase2_results(output_dir, results)
 
     return results

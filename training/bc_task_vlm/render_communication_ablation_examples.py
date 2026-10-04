@@ -287,6 +287,12 @@ def render_card(images: dict, selection: dict, record: dict, step: dict | None, 
             detail_face = font(detail_font, bold=True)
             detail_lines = [] if is_idle else wrap_to_pixels(draw, detail, detail_face, width - 68)
             line_height = 36
+            if selection.get("fit_full_messages"):
+                while len(detail_lines) * line_height > 100 and detail_font > 14:
+                    detail_font -= 1
+                    detail_face = font(detail_font, bold=True)
+                    line_height = detail_font + 3
+                    detail_lines = wrap_to_pixels(draw, detail, detail_face, width - 68)
             card_top = 875
             draw.rounded_rectangle((x + 14, card_top, x + width - 14, 1040), radius=12,
                                    fill=(11, 15, 23), outline=badge_color, width=3)

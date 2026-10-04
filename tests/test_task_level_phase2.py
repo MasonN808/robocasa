@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 from data_generation.task_level.pipeline.phase2 import (
+    SpecValidationResult,
+    apply_concurrent_canary_results,
     _collect_goal_consistency_errors,
     _validate_fixture_references,
 )
@@ -12,6 +15,27 @@ from data_generation.task_level.pipeline.sim_normalization import (
 
 
 class Phase2FixtureReferenceValidationTests(unittest.TestCase):
+    def test_concurrent_canary_gates_otherwise_valid_spec(self):
+        validation = SpecValidationResult(
+            task_name="ExampleTask",
+            spec_path="example.json",
+            passed=True,
+            dry_run_error="legacy flat witness is invalid",
+        )
+        canary = SimpleNamespace(
+            task_name="ExampleTask",
+            completed=True,
+            num_trajectories=1,
+            output_dir="canary/example",
+            error=None,
+        )
+
+        results = apply_concurrent_canary_results([validation], [canary])
+
+        self.assertTrue(results[0].passed)
+        self.assertIsNone(results[0].concurrent_canary_error)
+        self.assertEqual(results[0].concurrent_canary_output_dir, "canary/example")
+
     def test_goal_consistency_rejects_source_goal_contradicted_by_trajectory(self):
         payload = {
             "initial_state": {

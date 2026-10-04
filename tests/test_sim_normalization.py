@@ -1,13 +1,54 @@
 import unittest
+from unittest.mock import patch
 
 from data_generation.task_level.pipeline.sim_normalization import (
     FixtureSimulationMetadata,
+    _load_task_simulation_snapshot,
     _normalize_token_for_fixture,
     _resolve_symbolic_fixture_metadata,
 )
 
 
 class TestSimNormalization(unittest.TestCase):
+    def test_snapshot_uses_configured_gl_backend(self):
+        captured_kwargs = {}
+
+        class FakeEnv:
+            @staticmethod
+            def get_ep_meta():
+                return {}
+
+        class FakeExecutor:
+            env = FakeEnv()
+
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+            @staticmethod
+            def get_scene_description():
+                return {"fixtures": {}, "objects": {}}
+
+            @staticmethod
+            def close():
+                return None
+
+        _load_task_simulation_snapshot.cache_clear()
+        with (
+            patch.dict("os.environ", {"MUJOCO_GL": "egl"}),
+            patch(
+                "data_generation.task_level.pipeline.sim_normalization._ordered_scene_candidates",
+                return_value=((11, 14, 42),),
+            ),
+            patch(
+                "data_generation.task_level.pipeline.sim_normalization.SimToolExecutor",
+                FakeExecutor,
+            ),
+        ):
+            _load_task_simulation_snapshot("ExampleTask", 2)
+        _load_task_simulation_snapshot.cache_clear()
+
+        self.assertEqual(captured_kwargs["gl_backend"], "egl")
+
     def test_anchor_parent_wins_over_generic_counter_role(self):
         payload = {
             "initial_state": {

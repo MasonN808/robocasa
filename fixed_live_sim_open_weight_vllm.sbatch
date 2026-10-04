@@ -25,6 +25,7 @@ VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-16384}
 VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.70}
 VLLM_MAX_LORA_RANK=${VLLM_MAX_LORA_RANK:-64}
 ENABLE_TOWER_CONNECTOR_LORA=${ENABLE_TOWER_CONNECTOR_LORA:-false}
+VLLM_ENABLE_AUTO_TOOL_CHOICE=${VLLM_ENABLE_AUTO_TOOL_CHOICE:-true}
 VLLM_TOOL_CALL_PARSER=${VLLM_TOOL_CALL_PARSER:-hermes}
 VLLM_REASONING_PARSER=${VLLM_REASONING_PARSER:-}
 VLLM_READY_TIMEOUT_S=${VLLM_READY_TIMEOUT_S:-600}
@@ -61,10 +62,14 @@ server=(
   --limit-mm-per-prompt '{"image":3}'
   --mm-processor-kwargs '{"min_pixels":262144,"max_pixels":262144}'
   --mm-processor-cache-gb 2
-  --enable-auto-tool-choice
-  --tool-call-parser "${VLLM_TOOL_CALL_PARSER}"
   --served-model-name "${SERVED_MODEL}"
 )
+if [[ "${VLLM_ENABLE_AUTO_TOOL_CHOICE}" == "true" ]]; then
+  server+=(
+    --enable-auto-tool-choice
+    --tool-call-parser "${VLLM_TOOL_CALL_PARSER}"
+  )
+fi
 if [[ -n "${VLLM_REASONING_PARSER}" ]]; then
   server+=(--reasoning-parser "${VLLM_REASONING_PARSER}")
 fi

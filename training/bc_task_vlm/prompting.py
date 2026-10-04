@@ -56,6 +56,21 @@ MINIMAL_COMMUNICATION_RULES = (
     "waiting agent.\n"
 )
 
+INTERMEDIATE_COMMUNICATION_RULES = (
+    "Communication guidance:\n"
+    "- Communicate with the other agent to divide work, share relevant state, "
+    "and coordinate access to workspaces.\n"
+    "- When you need to wait for X, first communicate a request naming the "
+    "exact symbolic ID X. On your next call, use wait_for_signal with about=X. "
+    "The wait call is private. A later message with releases=X wakes the "
+    "waiting agent.\n"
+    "- Never claim that the global task is complete; the FSM alone ends the "
+    "episode. If your own portion finishes first, communicate only that your "
+    "part is done and name one exact release keyword X, then call "
+    "wait_for_signal with about=X on your next turn. Stay blocked until the "
+    "partner sends a later matching release.\n"
+)
+
 ACTIVE_OBSERVATION_RULES = (
     "Camera observations:\n"
     "- get_image.views must be a non-empty list containing only these exact "
@@ -286,6 +301,9 @@ def build_user_prompt(
     acting_agent_line = "" if predict_agent else f"Current acting agent: {agent_id}\n"
     participation_line = {
         "full": "",
+        "intermediate": (
+            "You are one of two agents working together to complete the task.\n"
+        ),
         "minimal": (
             "You are one of two agents working together to complete the task.\n"
         ),
@@ -329,6 +347,7 @@ def build_user_prompt(
     )
     communication_rules = {
         "full": PHYSICAL_HANDOFF_RULES,
+        "intermediate": INTERMEDIATE_COMMUNICATION_RULES + PHYSICAL_HANDOFF_RULES,
         "minimal": MINIMAL_COMMUNICATION_RULES + PHYSICAL_GIVE_SPACE_RULE,
         "unguided": PHYSICAL_GIVE_SPACE_RULE,
         "none": PHYSICAL_GIVE_SPACE_RULE,

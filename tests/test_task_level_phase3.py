@@ -58,6 +58,46 @@ class Phase3Tests(unittest.TestCase):
         self.assertEqual(result.pending_run_indices, [0])
         self.assertIn("OSError: boom", result.error or "")
 
+    def test_run_one_task_uses_current_concurrent_generation_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            spec_dir = output_dir / "phase1" / "specs"
+            spec_dir.mkdir(parents=True)
+            spec_path = self._write_spec(spec_dir, "task.json", "ExampleTask")
+            captured_command: list[str] = []
+
+            def fake_run(command, **_kwargs):
+                captured_command.extend(command)
+                return mock.Mock(returncode=1, stdout="", stderr="")
+
+            with mock.patch(
+                "data_generation.task_level.pipeline.phase3.subprocess.run",
+                side_effect=fake_run,
+            ):
+                _run_one_task(
+                    spec_path,
+                    output_dir=output_dir,
+                    num_runs=1,
+                    model=None,
+                    sdk="google-genai",
+                    project=None,
+                    location="global",
+                    max_retries=1,
+                    generation_timeout_sec=300,
+                    spec_dir=spec_dir,
+                    dry_run=False,
+                )
+
+        self.assertIn("--tick-format", captured_command)
+        self.assertEqual(
+            captured_command[captured_command.index("--prompt-style") + 1],
+            "simplified_v3",
+        )
+        self.assertEqual(
+            captured_command[captured_command.index("--partition-policy") + 1],
+            "none",
+        )
+
     def test_run_phase3_emits_heartbeat_and_persists_partial_outputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
