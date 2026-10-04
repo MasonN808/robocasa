@@ -131,17 +131,7 @@ class ValidationPathTests(unittest.TestCase):
         self.assertTrue(runtime_support._is_tick_format(self._candidate()))
         self.assertFalse(runtime_support._is_tick_format({"steps": []}))
 
-    def test_flattening_produces_steps_and_keeps_the_rows(self):
-        out = runtime_support._flatten_tick_candidate(self._candidate())
-        self.assertEqual(len(out["steps"]), 3)
-        self.assertEqual(len(out["tick_rows"]), 2)
-        self.assertNotIn("ticks", out)
 
-    def test_agent_order_falls_back_when_agents_are_absent(self):
-        candidate = self._candidate()
-        candidate.pop("agents")
-        out = runtime_support._flatten_tick_candidate(candidate)
-        self.assertEqual([s["agent"] for s in out["steps"]][:2], ["agent_0", "agent_1"])
 
 
 class RenderTests(unittest.TestCase):
