@@ -982,77 +982,6 @@ class OraclePolicy:
         }
 
 
-class DegeneratePolicy:
-    """Emits an unparseable/illegal call every turn."""
-
-    def next_step(self, **_ignored) -> dict[str, Any] | None:
-        return {
-            "agent": "agent_0",
-            "tool": "pick_up_object",
-            "args": {"object_id": "nonexistent_object_xyz", "source_id": "counter"},
-        }
-
-
-class HfPolicy:
-    """One local HF VLM shared across trajectories; generates one step/turn."""
-
-    def __init__(self, args: argparse.Namespace) -> None:
-        import os
-
-        import torch
-        from transformers import AutoModelForImageTextToText, AutoProcessor
-
-        from training.bc_task_vlm.evaluation import VisionGenerationCollator
-
-        self._torch = torch
-        model_kwargs: dict[str, Any] = {"torch_dtype": torch.bfloat16}
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            args.model_name_or_path, **model_kwargs
-        )
-        if args.adapter_path:
-            from training.bc_task_vlm.peft_compat import (
-                ensure_peft_tensor_parallel_import_compatibility,
-            )
-
-            ensure_peft_tensor_parallel_import_compatibility()
-            from peft import PeftModel
-
-            self.model = PeftModel.from_pretrained(
-                self.model, str(args.adapter_path)
-            )
-        self.model.eval()
-        if torch.cuda.is_available():
-            self.model.to("cuda")
-        self.collator = VisionGenerationCollator(
-            processor_name_or_path=args.model_name_or_path,
-            max_length=args.max_length,
-            trust_remote_code=False,
-            sft_format="tool_call",
-            image_resolution=args.image_resolution,
-        )
-        from transformers import AutoProcessor as _AP
-
-        self.processor = _AP.from_pretrained(args.model_name_or_path)
-        self.max_new_tokens = args.max_new_tokens
-
-    def generate(self, feature: dict[str, Any]) -> str:
-        torch = self._torch
-        batch = self.collator([feature])
-        batch.pop("sample_metadata", None)
-        device = next(self.model.parameters()).device
-        batch = {
-            k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()
-        }
-        with torch.inference_mode():
-            generated = self.model.generate(
-                **batch, max_new_tokens=self.max_new_tokens, do_sample=False
-            )
-        trimmed = generated[0][batch["input_ids"].shape[1] :]
-        return self.processor.decode(
-            trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-        )
-
-
 class VllmPolicy:
     """OpenAI-compatible client for a localhost vLLM multimodal server."""
 
@@ -1333,10 +1262,10 @@ class GeminiPolicy:
     def generate(self, feature: dict[str, Any]) -> str:
         from google.genai import types
 
-        from training.bc_task_vlm.eval_standalone import (
-            _GEMINI_MIME_BY_SUFFIX,
-            _message_text,
+        from training.bc_task_vlm.gemini_function_calling import (
+            GEMINI_MIME_BY_SUFFIX,
             build_vertex_function_declarations,
+            message_text,
         )
 
         messages = feature["messages"]
@@ -1345,7 +1274,7 @@ class GeminiPolicy:
             path = Path(image_path)
             parts.append(types.Part.from_bytes(
                 data=path.read_bytes(),
-                mime_type=_GEMINI_MIME_BY_SUFFIX.get(path.suffix.lower(), "image/jpeg"),
+                mime_type=GEMINI_MIME_BY_SUFFIX.get(path.suffix.lower(), "image/jpeg"),
             ))
         # build_messages() appends a trailing assistant turn to preserve the
         # training-example shape, and live-sim builds it with target_text="",
@@ -1359,7 +1288,7 @@ class GeminiPolicy:
         )
         if user_message is None:
             raise ValueError("No user message to send to Gemini.")
-        prompt_text = _message_text(user_message)
+        prompt_text = message_text(user_message)
         if not prompt_text.strip():
             raise ValueError("Refusing to query Gemini with an empty prompt.")
         parts.append(types.Part.from_text(text=prompt_text))
@@ -1379,7 +1308,7 @@ class GeminiPolicy:
         config_kwargs: dict[str, Any] = {
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
-            "system_instruction": _message_text(messages[0]),
+            "system_instruction": message_text(messages[0]),
             "tools": [types.Tool(function_declarations=declarations)],
             "tool_config": types.ToolConfig(function_calling_config=
                 types.FunctionCallingConfig(mode="ANY")),
@@ -1451,57 +1380,6 @@ def _uses_model_generation(policy: Any) -> bool:
     """Return whether a policy implements the shared model generate contract."""
 
     return callable(getattr(policy, "generate", None))
-
-
-class DaggerPrefixPolicy:
-    """Replay an accepted correction prefix, then delegate to the SFT model."""
-
-    def __init__(self, delegate: Any, row: dict[str, Any]) -> None:
-        self.delegate = delegate
-        diagnostic = row["diagnostic"]
-        correction = row["expert_review"]["correction"]
-        branch = int(correction["branch_before_event_position"])
-        calls = []
-        for event in diagnostic["full_trajectory"][:branch]:
-            if event.get("legal") is True and event.get("executed") is True:
-                proposal = event.get("proposal") or {}
-                if proposal.get("tool"):
-                    calls.append((str(event.get("agent")), deepcopy(proposal)))
-        for tick in [*(correction.get("resync_ticks") or []), *(correction.get("post_correction_ticks") or [])]:
-            for agent in AGENT_IDS:
-                value = tick.get(f"{agent}_call_json")
-                try:
-                    call = json.loads(value)
-                except (TypeError, json.JSONDecodeError):
-                    continue
-                if call != {"state": "blocked"}:
-                    calls.append((agent, call))
-        self.queues = {agent: [] for agent in AGENT_IDS}
-        for agent, call in calls:
-            if agent in self.queues:
-                # The stored diagnostic/correction representation uses
-                # ``tool``/``args``.  The Qwen tool-call parser consumes the
-                # OpenAI-style ``name``/``arguments`` body inside
-                # <tool_call>.  Normalize here so replayed expert calls pass
-                # through exactly the same parser as model-generated calls.
-                call = {
-                    "name": call.get("name") or call.get("tool"),
-                    "arguments": call.get("arguments") or call.get("args") or {},
-                }
-                self.queues[agent].append(call)
-        # Replaying the already accepted learner prefix and expert correction
-        # reconstructs the branch state; it is not new continuation work.  The
-        # live loop uses this immutable count to give the delegate its normal
-        # action budget after replay has finished.
-        self.replay_call_count = sum(len(queue) for queue in self.queues.values())
-
-    def generate(self, feature: dict[str, Any]) -> str:
-        agent = str(feature.get("agent_id") or "")
-        queue = self.queues.get(agent) or []
-        if queue:
-            call = queue.pop(0)
-            return "<tool_call>\n" + json.dumps(call, sort_keys=True) + "\n</tool_call>"
-        return self.delegate.generate(feature)
 
 
 # ---------------------------------------------------------------------------
@@ -2850,7 +2728,7 @@ def _handle_rejection(
 def _model_propose_step(
     *,
     session: SimSession,
-    policy: "HfPolicy | VllmPolicy | GeminiPolicy",
+    policy: "VllmPolicy | GeminiPolicy",
     args: argparse.Namespace,
     task_metadata,
     tool_specs: dict[str, Any],
@@ -2954,7 +2832,7 @@ def _model_propose_step(
 def _generate_once(
     *,
     session: SimSession,
-    policy: "HfPolicy | VllmPolicy | GeminiPolicy",
+    policy: "VllmPolicy | GeminiPolicy",
     args: argparse.Namespace,
     task_metadata,
     tool_specs: dict[str, Any],
@@ -3073,16 +2951,6 @@ def _generate_once(
         "tool_schemas": tool_schemas,
         "allowed_tool_specs": model_tool_specs,
     }
-    from training.bc_task_vlm.prompting import append_few_shot_block
-
-    if args.task_spec_detail:
-        feature["messages"] = append_few_shot_block(
-            feature["messages"], args.task_spec_blocks[task_metadata.dataset_name]
-        )
-    if args.few_shot:
-        feature["messages"] = append_few_shot_block(
-            feature["messages"], args.few_shot_blocks[task_metadata.dataset_name]
-        )
     try:
         decoded = policy.generate(feature)
         private_reasoning = str(getattr(decoded, "reasoning_text", "") or "")
@@ -3201,7 +3069,7 @@ def _finalize_first_recording(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--backend", choices=("oracle", "degenerate", "hf", "vllm", "gemini"), required=True
+        "--backend", choices=("oracle", "vllm", "gemini"), required=True
     )
     parser.add_argument(
         "--save-frames",
@@ -3268,7 +3136,6 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Record stills for the first success and first failure per task.",
     )
-    parser.add_argument("--model-name-or-path", type=str, default=None)
     parser.add_argument(
         "--adapter-path",
         type=str,
@@ -3317,12 +3184,6 @@ def parse_args() -> argparse.Namespace:
             "Opt-in compatibility recovery for exactly one JSON tool call "
             "followed by </tool_call> but missing <tool_call>."
         ),
-    )
-    parser.add_argument(
-        "--dagger-prefixes",
-        type=Path,
-        default=None,
-        help="JSONL of FSM-accepted DAgger corrections to replay before model continuation; only listed episode IDs run.",
     )
     parser.add_argument(
         "--predict-task-complete",
@@ -3383,8 +3244,6 @@ def parse_args() -> argparse.Namespace:
             "used."
         ),
     )
-    parser.add_argument("--task-spec-detail", action="store_true")
-    parser.add_argument("--few-shot", type=int, choices=(0, 1), default=0)
     parser.add_argument("--model", default="gemini-3.5-flash-preview")
     parser.add_argument("--project", default=None)
     parser.add_argument("--location", default=None)
@@ -3656,20 +3515,11 @@ def main() -> None:
                 f"--tasks matched no manifest tasks. Available tasks: {available}"
             )
 
-    from training.bc_task_vlm.eval_standalone import (
-        _load_few_shot_blocks,
-        _load_task_spec_blocks,
-    )
-
     task_names = sorted(episodes_by_task)
     from data_generation.task_level.tasks.specs import load_verified_task_specs
     verified_specs_by_composite = {
         spec.composite_task: spec for spec in load_verified_task_specs()
     }
-    args.task_spec_blocks = (
-        _load_task_spec_blocks(task_names) if args.task_spec_detail else {}
-    )
-    args.few_shot_blocks = _load_few_shot_blocks(task_names) if args.few_shot else {}
 
     results_path = args.output_dir / "live_sim_trajectories.jsonl"
     done: set[tuple[str, str]] = set()
@@ -3682,11 +3532,7 @@ def main() -> None:
 
     policy = None
     policy_started = time.perf_counter()
-    if args.backend == "hf":
-        if not args.model_name_or_path:
-            raise SystemExit("--backend hf requires --model-name-or-path")
-        policy = HfPolicy(args)
-    elif args.backend == "vllm":
+    if args.backend == "vllm":
         if not args.vllm_model:
             raise SystemExit("--backend vllm requires --vllm-model")
         if args.vllm_request_timeout <= 0:
@@ -3694,21 +3540,8 @@ def main() -> None:
         policy = VllmPolicy(args)
     elif args.backend == "gemini":
         policy = GeminiPolicy(args)
-    elif args.backend == "degenerate":
-        policy = DegeneratePolicy()
     policy_load_s = round(time.perf_counter() - policy_started, 3)
     print(f"[timing] policy_load_s={policy_load_s}", flush=True)
-    dagger_prefixes = None
-    if args.dagger_prefixes is not None:
-        dagger_prefixes = {}
-        with args.dagger_prefixes.open(encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                if (row.get("fsm_replay") or {}).get("fsm_replay_status") != "accepted":
-                    continue
-                dagger_prefixes[row["diagnostic"]["trajectory_id"]] = row
 
     total_done = len(done)
     firsts: dict[tuple[str, bool], bool] = {}
@@ -3727,8 +3560,6 @@ def main() -> None:
             for episode in episodes:
                 trajectory_id = episode.get("trajectory_id") or episode.get("episode_id")
                 completion_id = episode.get("episode_id") or trajectory_id
-                if dagger_prefixes is not None and completion_id not in dagger_prefixes:
-                    continue
                 if (task_name, completion_id) in done:
                     continue
                 if (
@@ -3880,10 +3711,6 @@ def main() -> None:
                         trajectory_policy = OraclePolicy(trajectory["steps"])
                     else:
                         trajectory_policy = policy
-                    if dagger_prefixes is not None:
-                        trajectory_policy = DaggerPrefixPolicy(
-                            trajectory_policy, dagger_prefixes[completion_id]
-                        )
                     runner = (
                         run_trajectory_partial
                         if getattr(args, "partial_history", False)

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from training.bc_task_vlm import merge_pretokenized_shards, preprocessed_data
+from training.bc_task_vlm import preprocessed_data
 from training.bc_task_vlm.dataset import (
     LazyVisionSFTCollator,
     build_centralized_examples,
@@ -419,94 +419,6 @@ class PreprocessedArtifactTests(unittest.TestCase):
         )
         self.assertEqual(shard.train_blobs_by_sample_id, {"train-a": b"a"})
 
-    def test_streamed_merge_output_loads_from_disk(self):
-        temp_root = Path(
-            self.enterContext(tempfile.TemporaryDirectory(dir=DATASET_ROOT.parent))
-        )
-        output_dir = temp_root / "artifact"
-        shard_dir = output_dir / "pretokenized_shards"
-        dataset_root = self._build_single_trajectory_dataset_root()
-        train_examples = build_centralized_examples(
-            dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
-        )[:2]
-        validation_examples = build_centralized_examples(
-            dataset_root=dataset_root,
-            task_names=["hot_dog_setup"],
-        )[:1]
-        all_examples = train_examples + validation_examples
-        image_relpaths_by_source = preprocessed_data.stage_artifact_images_for_examples(
-            examples=all_examples,
-            output_dir=output_dir,
-            artifact_image_size=(16, 16),
-        )
-
-        with preprocessed_data.PretokenizedShardWriter(
-            shard_dir=shard_dir,
-            shard_index=0,
-            num_shards=1,
-            pretokenization={"processor_family": "qwen"},
-        ) as shard_writer:
-            shard_writer.write_split_chunk(
-                split_name="train",
-                blobs_by_sample_id={
-                    example.sample_id: f"train-{index}".encode("utf-8")
-                    for index, example in enumerate(train_examples)
-                },
-            )
-            shard_writer.write_split_chunk(
-                split_name="validation",
-                blobs_by_sample_id={validation_examples[0].sample_id: b"validation-0"},
-            )
-
-        with preprocessed_data.StreamedPreprocessedArtifactWriter(
-            output_dir=output_dir,
-        ) as artifact_writer:
-            merge_pretokenized_shards._stream_split_from_shards(
-                split_name="train",
-                examples_by_sample_id={
-                    example.sample_id: example for example in train_examples
-                },
-                expected_sample_ids={example.sample_id for example in train_examples},
-                image_relpaths_by_source=image_relpaths_by_source,
-                shard_dir=shard_dir,
-                num_shards=1,
-                artifact_writer=artifact_writer,
-                flush_interval=1,
-            )
-            merge_pretokenized_shards._stream_split_from_shards(
-                split_name="validation",
-                examples_by_sample_id={
-                    example.sample_id: example for example in validation_examples
-                },
-                expected_sample_ids={
-                    example.sample_id for example in validation_examples
-                },
-                image_relpaths_by_source=image_relpaths_by_source,
-                shard_dir=shard_dir,
-                num_shards=1,
-                artifact_writer=artifact_writer,
-                flush_interval=1,
-            )
-        split_manifest = build_split_manifest(
-            dataset_root=dataset_root,
-            train_examples=train_examples,
-            val_examples=validation_examples,
-        )
-        preprocessed_data.write_preprocessed_artifact_sidecars(
-            output_dir=output_dir,
-            split_manifest=split_manifest,
-            preprocess_config={"pretokenized": True},
-        )
-
-        loaded = preprocessed_data.load_preprocessed_artifact_from_disk(output_dir)
-
-        self.assertEqual(len(loaded.train_split), 2)
-        self.assertEqual(len(loaded.validation_split), 1)
-        self.assertEqual(
-            loaded.train_split[0][preprocessed_data._PRETOKENIZED_BLOB_COLUMN],
-            b"train-0",
-        )
 
     def test_local_artifact_round_trip_preserves_pretokenized_tensors(self):
         dataset_root = self._build_single_trajectory_dataset_root()

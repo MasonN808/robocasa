@@ -10,10 +10,6 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import robosuite.utils.transform_utils as T
 
-from robocasa.utils.generate_llm_task_descriptions import (
-    build_compact_task_context,
-    render_llm_prompt,
-)
 import robocasa.utils.object_utils as OU
 from robocasa.utils.placement import (  # noqa: E402
     MAX_FRONT_WORKING_LATERAL_OFFSET,
@@ -231,32 +227,6 @@ class TestSimToolExecutor(unittest.TestCase):
         finally:
             executor.close()
 
-    def test_compact_context_and_prompt_generation(self):
-        context = build_compact_task_context(
-            task_name="HotDogSetup",
-            robots=2,
-            layout=11,
-            style=34,
-            seed=42,
-            width=160,
-            height=128,
-        )
-        self.assertEqual(context["task_name"], "HotDogSetup")
-        self.assertIn("instruction", context)
-        self.assertIn("objects", context)
-        self.assertIn("fixtures", context)
-        self.assertTrue(any(obj["object_id"] == "plate" for obj in context["objects"]))
-        self.assertTrue(
-            any(fx["fixture_type"] == "fridge" for fx in context["fixtures"])
-        )
-
-        prompt_text = render_llm_prompt(context)
-        self.assertIn("Task:", prompt_text)
-        self.assertIn("Tools:", prompt_text)
-        self.assertIn("hotdog_bun", prompt_text)
-        self.assertIn("dining_dining_group", prompt_text)
-        self.assertNotIn("O1=", prompt_text)
-        self.assertNotIn("F1=", prompt_text)
 
     def test_hotdog_demo_plan_renders_and_places_on_plate(self):
         executor = SimToolExecutor(

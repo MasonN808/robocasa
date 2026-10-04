@@ -49,7 +49,6 @@ from training.bc_task_vlm.dataset import (
     select_held_out_trajectory_ids,
 )
 from data_generation.task_level.runtime.client import load_dotenv_file
-from training.bc_task_vlm.evaluation import evaluate_structured_generation
 from training.bc_task_vlm.preprocessed_data import (
     PreprocessedFeatureDataset,
     load_preprocessed_artifact_from_disk,
@@ -119,11 +118,7 @@ class RunConfiguration:
     warmup_ratio: float
     lr_scheduler_type: str
     optim: str
-    eval_max_new_tokens: int
-    eval_generation_batch_size: int
     eval_max_samples: int | None
-    eval_generation_max_samples: int | None
-    eval_generation_max_trajectories: int | None
     report_to: list[str]
     wandb_project: str | None
     wandb_entity: str | None
@@ -497,25 +492,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--lr-scheduler-type", default="cosine")
     parser.add_argument("--optim", default="adamw_torch")
-    parser.add_argument("--eval-max-new-tokens", type=int, default=256)
-    parser.add_argument("--eval-generation-batch-size", type=int, default=1)
     parser.add_argument(
         "--eval-max-samples",
         type=int,
         default=None,
         help="Optional cap for the evaluation dataset used by Trainer eval.",
-    )
-    parser.add_argument(
-        "--eval-generation-max-samples",
-        type=int,
-        default=None,
-        help="Optional cap for structured generation evaluation.",
-    )
-    parser.add_argument(
-        "--eval-generation-max-trajectories",
-        type=int,
-        default=None,
-        help="Optional trajectory cap for structured generation evaluation.",
     )
     parser.add_argument(
         "--report-to",
@@ -827,18 +808,9 @@ def _build_run_configuration(args: argparse.Namespace) -> RunConfiguration:
         warmup_ratio=args.warmup_ratio,
         lr_scheduler_type=args.lr_scheduler_type,
         optim=args.optim,
-        eval_max_new_tokens=args.eval_max_new_tokens,
-        eval_generation_batch_size=args.eval_generation_batch_size,
         eval_max_samples=(
             args.eval_max_samples
             if args.eval_max_samples and args.eval_max_samples > 0
-            else None
-        ),
-        eval_generation_max_samples=args.eval_generation_max_samples,
-        eval_generation_max_trajectories=(
-            args.eval_generation_max_trajectories
-            if args.eval_generation_max_trajectories
-            and args.eval_generation_max_trajectories > 0
             else None
         ),
         report_to=report_targets,
@@ -1658,24 +1630,6 @@ def _wandb_eval_section_metrics(
     return grouped_metrics
 
 
-def _wandb_structured_section_metrics(
-    metrics: dict[str, float],
-    *,
-    section: str,
-) -> dict[str, float]:
-    grouped_metrics: dict[str, float] = {}
-    for key, value in metrics.items():
-        if not _is_loggable_metric_value(value):
-            continue
-        if key.startswith("fsm_"):
-            metric_name = key.removeprefix("fsm_")
-            grouped_metrics[f"eval_fsm/{metric_name}"] = value
-        elif key.startswith("structured_eval_"):
-            metric_name = key.removeprefix("structured_eval_")
-            grouped_metrics[f"eval_{section}/{metric_name}"] = value
-    return grouped_metrics
-
-
 class FractionalEpochCheckpointCallback(TrainerCallback):
     """Request checkpoints when training crosses fixed fractional epochs."""
 
@@ -1695,20 +1649,15 @@ class FractionalEpochCheckpointCallback(TrainerCallback):
         return control
 
 
-class StructuredEvalTrainer(Trainer):
-    """Trainer that runs structured generation on the active evaluation dataset."""
+class LengthGroupedTrainer(Trainer):
+    """Trainer that can sample batches grouped by precomputed example length."""
 
     def __init__(
         self,
         *,
-        structured_eval_config: RunConfiguration | None = None,
-        structured_eval_output_dir: Path | None = None,
         train_example_lengths: list[int] | None = None,
         **kwargs: Any,
     ) -> None:
-        self.structured_eval_config = structured_eval_config
-        self.structured_eval_output_dir = structured_eval_output_dir
-        self.latest_structured_metrics: dict[str, float] = {}
         self.train_example_lengths = train_example_lengths
         super().__init__(**kwargs)
 
@@ -1747,80 +1696,7 @@ class StructuredEvalTrainer(Trainer):
         )
         if base_section_metrics:
             self.log(base_section_metrics)
-        structured_metrics = self._run_structured_eval(eval_dataset=eval_dataset)
-        if structured_metrics:
-            metrics.update(structured_metrics)
         return metrics
-
-    def _run_structured_eval(
-        self,
-        *,
-        eval_dataset: Any | None = None,
-    ) -> dict[str, float]:
-        config = self.structured_eval_config
-        output_dir = self.structured_eval_output_dir
-        if config is None or output_dir is None:
-            return {}
-        if config.eval_generation_max_samples == 0:
-            return {}
-
-        resolved_eval_dataset = (
-            self.eval_dataset if eval_dataset is None else eval_dataset
-        )
-        if resolved_eval_dataset is None or isinstance(resolved_eval_dataset, dict):
-            return {}
-        try:
-            if len(resolved_eval_dataset) == 0:
-                return {}
-        except TypeError:
-            pass
-
-        self.accelerator.wait_for_everyone()
-        structured_metrics: dict[str, float] = {}
-        try:
-            if self.is_world_process_zero():
-                distributed_state = PartialState()
-                step_output_dir = (
-                    output_dir
-                    / "structured_eval"
-                    / f"step_{self.state.global_step:08d}"
-                )
-                _log_startup(
-                    "Running structured tool-call generation evaluation on "
-                    "the evaluation dataset",
-                    state=distributed_state,
-                )
-                unwrapped_model = self.accelerator.unwrap_model(self.model)
-                structured_metrics = evaluate_structured_generation(
-                    model=unwrapped_model,
-                    eval_dataset=resolved_eval_dataset,
-                    processor_name_or_path=config.processor_name_or_path,
-                    output_dir=step_output_dir,
-                    max_length=config.max_length,
-                    max_new_tokens=config.eval_max_new_tokens,
-                    batch_size=config.eval_generation_batch_size,
-                    num_workers=config.num_workers,
-                    trust_remote_code=config.trust_remote_code,
-                    sft_format=config.sft_format,
-                    max_samples=config.eval_generation_max_samples,
-                    max_trajectories=config.eval_generation_max_trajectories,
-                    image_resolution=config.image_resolution,
-                    predict_agent=config.predict_acting_agent,
-                )
-                self.latest_structured_metrics = dict(structured_metrics)
-                grouped_structured_metrics = _wandb_structured_section_metrics(
-                    structured_metrics,
-                    section="structured",
-                )
-                if grouped_structured_metrics:
-                    self.log(grouped_structured_metrics)
-                _save_json(
-                    output_dir / "structured_eval_metrics.json",
-                    structured_metrics,
-                )
-            return structured_metrics
-        finally:
-            self.accelerator.wait_for_everyone()
 
 
 def main() -> None:
@@ -2134,9 +2010,7 @@ def main() -> None:
         if config.checkpoints_per_epoch > 0
         else None
     )
-    trainer = StructuredEvalTrainer(
-        structured_eval_config=config if len(val_dataset) > 0 else None,
-        structured_eval_output_dir=output_dir,
+    trainer = LengthGroupedTrainer(
         train_example_lengths=train_example_lengths,
         model=model,
         args=training_args,
@@ -2174,9 +2048,7 @@ def main() -> None:
 
     trainer.accelerator.wait_for_everyone()
     if trainer.is_world_process_zero():
-        final_metrics = (
-            train_result.metrics | eval_metrics | trainer.latest_structured_metrics
-        )
+        final_metrics = train_result.metrics | eval_metrics
         _save_json(output_dir / "final_metrics.json", final_metrics)
     trainer.accelerator.wait_for_everyone()
     _log_startup("Run complete", state=distributed_state)

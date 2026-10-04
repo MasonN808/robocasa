@@ -10,7 +10,6 @@ from data_generation.task_level.tasks.shared.concurrent_fsm import (
     simultaneous_contentions,
 )
 
-from training.bc_task_vlm.build_fixed_live_sim_artifact import build_html
 from training.bc_task_vlm.fixed_live_sim_cohort import freeze_manifest
 from training.bc_task_vlm.live_sim_eval import (
     _budget_reference_action_count,
@@ -224,37 +223,7 @@ def test_summary_reports_micro_and_macro() -> None:
     assert wilson_interval(2, 3)[0] < 2 / 3 < wilson_interval(2, 3)[1]
     assert hierarchical_bootstrap({"a": [1], "b": [0]}, draws=10, seed=1)
 
-    artifact_summary = {"label": "smoke", "splits": {"train_task_types": summary}}
-    report = build_html(
-        [artifact_summary], {"contract": {}, "content_hash": "test", "frozen": True}
-    )
-    assert report.count('<section class="chart">') == 2
-    assert '<section class="chart overall-chart">' in report
-    assert "Overall success by model and communication mode" in report
-    assert "error-free FSM success" in report
-    assert "FSM success + one agent performed ≥80%" in report
-    assert "error-free FSM success + one agent performed ≥80%" in report
-    assert "Success by task" in report
-    assert "Errors by task" in report
-    assert "Success by split" not in report
 
-    epoch_summary = {
-        "label": "scale-30 epoch 1.0",
-        "epoch": "1.0",
-        "splits": {
-            "train_task_types": summary,
-            "heldout_task_types": summary,
-        },
-    }
-    epoch_report = build_html(
-        [artifact_summary],
-        {"contract": {}, "content_hash": "test", "frozen": True},
-        [epoch_summary],
-    )
-    assert '<section class="chart epoch-chart">' in epoch_report
-    assert "Success rate by epoch and split" in epoch_report
-    assert epoch_report.count("T·FSM") >= 2
-    assert epoch_report.count("H·EF") >= 2
 
 
 def test_parallel_sharding_supports_configuration_cohort() -> None:

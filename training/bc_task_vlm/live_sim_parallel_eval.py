@@ -244,41 +244,6 @@ def _selected_mapping(
     return mapping
 
 
-def _filter_dagger_mapping(
-    mapping: dict[str, list[str]], dagger_prefixes_path: Path
-) -> dict[str, list[str]]:
-    """Restrict worker ownership to accepted episodes present in DAgger JSONL."""
-
-    allowed: set[tuple[str, str]] = set()
-    with dagger_prefixes_path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-                diagnostic = row["diagnostic"]
-                replay = row.get("fsm_replay") or {}
-                if replay.get("fsm_replay_status") != "accepted":
-                    continue
-                allowed.add(
-                    (str(diagnostic["task_name"]), str(diagnostic["trajectory_id"]))
-                )
-            except (json.JSONDecodeError, KeyError, TypeError) as exc:
-                raise ParallelEvalError(
-                    f"invalid DAgger prefix row {line_number} in "
-                    f"{dagger_prefixes_path}: {exc}"
-                ) from exc
-    filtered = {
-        task: [trajectory_id for trajectory_id in ids if (task, trajectory_id) in allowed]
-        for task, ids in mapping.items()
-    }
-    filtered = {task: ids for task, ids in filtered.items() if ids}
-    if not filtered:
-        raise ParallelEvalError(
-            "no selected manifest trajectories have accepted DAgger prefixes"
-        )
-    return filtered
-
 
 def _task_weights(
     manifest: dict[str, Any], mapping: dict[str, list[str]]
@@ -449,11 +414,6 @@ def prepare_parallel_run(
     """Create or validate a stable parallel layout without launching workers."""
 
     normalized, tasks_value = _normalize_live_args(live_args)
-    backend = _option_value(normalized, "--backend")
-    if backend == "hf" and requested_workers > 1:
-        raise ParallelEvalError(
-            "parallel HF would load one model copy per worker; use --backend vllm"
-        )
     manifest_path = Path(_option_value(normalized, "--manifest") or "").resolve()
     output_root = Path(_option_value(normalized, "--output-dir") or "").resolve()
     if not manifest_path.is_file():
@@ -481,14 +441,6 @@ def prepare_parallel_run(
         max_configs_per_task=max_configs_per_task,
         evaluation_seed=evaluation_seed,
     )
-    dagger_prefixes_value = _option_value(normalized, "--dagger-prefixes")
-    if dagger_prefixes_value is not None:
-        dagger_prefixes_path = Path(dagger_prefixes_value).resolve()
-        if not dagger_prefixes_path.is_file():
-            raise ParallelEvalError(
-                f"DAGger prefixes do not exist: {dagger_prefixes_path}"
-            )
-        selected = _filter_dagger_mapping(selected, dagger_prefixes_path)
     shard_mappings = shard_task_mapping(manifest, selected, requested_workers)
     effective_workers = len(shard_mappings)
 

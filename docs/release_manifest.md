@@ -158,8 +158,55 @@ By directory. Counts are tracked `.py` files unless noted.
 | **Mixed: delete** | `test_derived_coordination` (`lockstep_check`), `test_wait_for_signal` (`insert_wait_for_signal`), `test_task_level_phase1`/`phase4`/`prompts`, `test_task_specs` (pipeline). `test_door_fixtures`/`test_fixtures`/`test_layouts` need upstream `robocasa/scripts` entry points: keep them as upstream tests only if those scripts stay, otherwise delete. |
 | **Delete (16)** | `test_asset_load_speed`, `test_env_speed`, `test_bc_task_vlm_average_tokens`, `test_exemplar_normalization`, `test_list_hf_robocasa_repos`, `test_lockstep_check`, `test_low_level_data_export`, `test_merge_hf_stage_shards`, `test_stage_hf_sweep_datasets`, `test_shared_workspace` (imports the pipeline's `phase1`), `test_sim_normalization`, `test_task_groups`, `test_task_level_phase{2,3,5}`, `test_task_level_pipeline_cli` |
 
-## 6. Open questions for the author
+## 6. Decisions (2026-10-04)
 
-1. **DAgger is not in the archive.** `training/bc_task_vlm/dagger/` has always been gitignored (`.gitignore:260`), so neither `pre-publication-snapshot` nor any branch contains it. `tests/test_dagger_data_generation.py` was committed in `293a799` and imports it. Should it be force-added to the private archive branch before trimming, so "going back" includes it?
-2. **HF backend.** Ship the transformers-based `--backend hf` generation path, or only vLLM plus Gemini? It costs one moved class. Paper runs never used it.
-3. **Check tools.** `validate_scale_artifacts`, `verify_generation_training_eval_prompts` and `verify_scene_cohort_contract` were used as gates in the paper pipeline but are not needed to reproduce it. My suggestion is to turn the prompt-parity check into a test and drop the rest.
+1. **DAgger:** not committed anywhere; it stays only on disk.
+2. **Backends:** only vLLM and Gemini ship.
+   - `HfPolicy`, `DegeneratePolicy`, the `--backend hf`/`degenerate` choices and `--model-name-or-path` are removed.
+   - `OraclePolicy` (expert replay) stays for now because tests and render checks use it.
+3. **Checks:** the prompt-consistency gate (`verify_generation_training_eval_prompts.py`) is the only check tool kept. It becomes a test in Step 9; `validate_scale_artifacts` and `verify_scene_cohort_contract` are deleted.
+
+## 7. Step 3 progress
+
+**Pass A (done).**
+- §3 code moves:
+  - Gemini helpers → `training/bc_task_vlm/gemini_function_calling.py`;
+  - HF, degenerate and DAgger-prefix paths removed from `live_sim_eval.py`/`live_sim_parallel_eval.py`;
+  - `--few-shot`/`--task-spec-detail` removed;
+  - in-training off-sim eval removed from `main.py` (trainer renamed `LengthGroupedTrainer`).
+- 1,016 files deleted per §4/§5.
+- Tests trimmed:
+  - divergence-analysis and LLM-task-description cases removed;
+  - `test_fixed_live_sim` keeps its summarizer and Wilson assertions but drops the HTML-report half;
+  - `test_dataset_playback` deleted, because its `robocasa.scripts.playback_dataset` import was already missing upstream at the fork point.
+
+**Pass B (next).** Prune dead options inside kept files:
+- the centralized (non-partial) `run_trajectory` path;
+- step-index modes;
+- non-consume-once observations;
+- the Table III sampling modes;
+- `partitions.py`.
+
+Pass B also covers the root `tick_format.py`/`insert_waits.py` moves (or folds them into Step 4).
+
+**Test status after Pass A.**
+- Run on a compute node, over all tracked `tests/test_*.py` and `training/bc_task_vlm/tests/test_*.py`.
+- Every remaining failure is **pre-existing**: the identical files at `pre-publication-snapshot` give 65 failed / 19 errors.
+- After Pass A, the failures are exactly that baseline set, minus the 3 tests of removed features (deleted) and the 2 removed cases.
+- The 82 inherited failures and errors are concentrated in:
+
+| File | Failures + errors |
+|---|---|
+| `test_sim_tool_executor` | 33 |
+| `test_bc_task_vlm_preprocessed_data` | 11 |
+| `test_occupancy_grid*` | 11 |
+| `test_bc_task_vlm_dataset` | 7 |
+| `test_task_level_trajectory_generation` | 4 |
+| `test_task_level_grounding` | 3 |
+| `test_wait_release_rule`, `test_trajectory_adapter`, `test_sim_tool_specs`, `test_bc_task_vlm_partial_observability`, `test_bc_task_vlm_live_sim_parallel_eval` | 2 each |
+| 5 other files | 1 each |
+
+- These are stale tests, written against older behaviour. Step 9 must:
+  - triage each one as stale (update or delete) or as a real bug (fix code);
+  - get the suite green before release.
+- Login-node caveat: some tests need a compute node, because a native extension raises SIGILL on the login CPU.

@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from training.bc_task_vlm import live_sim_eval
-from training.bc_task_vlm.divergence_analysis import analyze
 from training.bc_task_vlm.live_sim_eval import (
     FsmMirror,
     OVERHEAD_VIEWS,
@@ -981,30 +980,6 @@ def test_metrics_include_rejections_partial_goal_and_turns(tmp_path):
     assert metrics["same_agent_run_lengths"] == {"1": 1, "2": 1}
 
 
-def test_divergence_analysis_ranks_noncontiguous_step_indices(tmp_path):
-    predictions = tmp_path / "predictions.jsonl"
-    rows = [
-        {
-            "sample_id": "task/traj/step_2", "task_name": "task",
-            "trajectory_id": "traj", "step_index": 2,
-            "target_tool_call": {"name": "communicate"},
-            "exact_action_step_match": False,
-        },
-        {
-            "sample_id": "task/traj/step_7", "task_name": "task",
-            "trajectory_id": "traj", "step_index": 7,
-            "target_tool_call": {"name": "pick_up_object"},
-            "exact_action_step_match": True,
-        },
-    ]
-    predictions.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    judge = tmp_path / "judge.jsonl"
-    judge.write_text(json.dumps({"sample_id": rows[0]["sample_id"], "equivalent": False}) + "\n")
-    output = analyze(predictions, judge)
-    first = next(row for row in output if row["row_type"] == "first_divergence_position")
-    assert first["key"] == 0
-    positions = [row["key"] for row in output if row["row_type"] == "position_accuracy"]
-    assert positions == [0, 1]
 
 
 def test_vllm_policy_preserves_prompt_and_image_order(tmp_path):
@@ -1166,39 +1141,3 @@ def test_model_policy_dispatch_uses_generate_interface():
     )
     assert not live_sim_eval._uses_model_generation(StepPolicy())
 
-
-def test_dagger_prefix_policy_normalizes_stored_calls_for_qwen_parser():
-    class Delegate:
-        def generate(self, _feature):
-            raise AssertionError("delegate should not run before the prefix is exhausted")
-
-    row = {
-        "diagnostic": {
-            "full_trajectory": [
-                {
-                    "agent": "agent_0",
-                    "legal": True,
-                    "executed": True,
-                    "proposal": {
-                        "tool": "communicate",
-                        "args": {"to": "agent_1", "message": "ready"},
-                    },
-                }
-            ]
-        },
-        "expert_review": {
-            "correction": {
-                "branch_before_event_position": 1,
-                "resync_ticks": [],
-                "post_correction_ticks": [],
-            }
-        },
-    }
-    policy = live_sim_eval.DaggerPrefixPolicy(Delegate(), row)
-
-    decoded = policy.generate({"agent_id": "agent_0"})
-
-    assert live_sim_eval.parse_first_qwen_tool_call(decoded) == {
-        "name": "communicate",
-        "arguments": {"to": "agent_1", "message": "ready"},
-    }

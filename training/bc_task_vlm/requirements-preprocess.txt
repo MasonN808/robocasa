@@ -1,8 +1,0 @@
-datasets
-huggingface_hub
-Pillow
-torch
-torchvision
-tqdm
-transformers
-zstandard
