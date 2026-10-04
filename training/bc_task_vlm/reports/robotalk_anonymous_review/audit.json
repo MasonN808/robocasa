@@ -1,0 +1,12 @@
+{
+  "source_revision": "ddfa8aad5a3f1b2e996c0a05c59e724fe266f2af",
+  "files_audited": 16210,
+  "archives_rebuilt": 7950,
+  "archive_images_verified": 354228,
+  "trajectory_rows": 7950,
+  "tick_rows": 66557,
+  "removed_files": [
+    "preview.html"
+  ],
+  "main_unchanged": true
+}

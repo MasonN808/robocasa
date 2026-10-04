@@ -1,0 +1,819 @@
+{
+  "experiment": "communication_waitfix_v3",
+  "prompt_contract_version": "state_grounded_global_tools_no_index_v9_unambiguous_garnish_cake_goal",
+  "source_sha256": {
+    "training/bc_task_vlm/communication_profiles.py": "8ddb66f735a152cd90e5bbd4b09af1b59a636b14c4c6e760f8417ff02b1ee4d2",
+    "training/bc_task_vlm/prompting.py": "81ee174fa755e45c33c7b43f1c383ff12363da1ea2f01dd5da55162169103f9c",
+    "data_generation/task_level/subatomic_tool_specs.py": "c7116b49f701d517ea8c30f3f14ca561b411e17497ee8299aa7e601f1ff007da",
+    "training/bc_task_vlm/live_sim_eval.py": "735fbf3b416aaa2558335110f899098e4839f85939c65c39cdd7e084652cd62f"
+  },
+  "example": "PrepareCoffee/traj_000000, agent_0, initial invocation, no images",
+  "schema_reconstruction": "Replace communicate/wait_for_signal in canonical_tool_schemas with each mode communication_tool_schemas; all other tool schemas unchanged.",
+  "canonical_tool_schemas": [
+    {
+      "type": "function",
+      "function": {
+        "name": "communicate",
+        "description": "Send a short coordination message to the other agent in the scene. args.to must be that agent's exact ID. Set args.releases to the exact symbolic id of a thing you have finished with and are handing over -- that, and only that, wakes a partner who is waiting on it. Omit args.releases from every other message. args.releases must be an object id or a fixture id that appears in initial_state, copied exactly. It names a THING, never an event or a status: 'coffee_machine' and 'mug' are ids; 'mug_placed', 'counter_free' and 'task_done' are not, and an id that does not exist releases nothing at all. args.coordination_phase is required for protocol messages and must be one of propose, await_plan, await_confirmation, confirm, or portion_complete. Omit it from ordinary requests, corrections, handoffs, and informational messages.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "type": "string",
+              "enum": [
+                "agent_0",
+                "agent_1"
+              ],
+              "description": "Exact ID of the agent receiving the message."
+            },
+            "message": {
+              "type": "string",
+              "description": "Short natural-language coordination message for the other agent."
+            },
+            "coordination_phase": {
+              "type": "string",
+              "enum": [
+                "propose",
+                "await_plan",
+                "await_confirmation",
+                "confirm",
+                "portion_complete"
+              ],
+              "description": "Optional opening-protocol phase, or portion_complete when reporting only this agent's assigned work complete. Omit for ordinary messages."
+            },
+            "releases": {
+              "type": "string",
+              "description": "Optional exact symbolic object or fixture ID being handed over. Include only for a real handover; omit from all other messages."
+            }
+          },
+          "required": [
+            "to",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_signal",
+        "description": "Pause until the other agent hands over what you are waiting for. args.about names that thing by its exact symbolic id -- an object id or a fixture id that appears in initial_state, copied exactly. It is a THING you are waiting FOR, never an event you are waiting ON: wait about='coffee_machine', never about='mug_placed' or 'your_turn'. An id that is not in initial_state can never be released, so the wait blocks forever and the whole plan is thrown away. You stay paused until args.from sends a communicate whose args.releases names the same id -- their other messages do not wake you, so you do not need to wait again after an unrelated one.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Exact ID of the agent whose matching release will end the wait."
+            },
+            "about": {
+              "type": "string",
+              "description": "Exact symbolic object or fixture ID being awaited."
+            }
+          },
+          "required": [
+            "from",
+            "about"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "close_hinged_part",
+        "description": "Close a hinged door, lid, or articulated head on a fixture.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture, receptacle, or destination targeted by the action."
+            },
+            "part_id": {
+              "type": "string",
+              "description": "Exact key of the part under initial_state.fixtures[target_id].parts; copy it verbatim (for example door, hinged, lid, or sliding)."
+            }
+          },
+          "required": [
+            "target_id",
+            "part_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "close_sliding_part",
+        "description": "Push in a sliding drawer or rack on a fixture.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture, receptacle, or destination targeted by the action."
+            },
+            "part_id": {
+              "type": "string",
+              "description": "Exact key of the part under initial_state.fixtures[target_id].parts; copy it verbatim (for example door, hinged, lid, or sliding)."
+            }
+          },
+          "required": [
+            "target_id",
+            "part_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_image",
+        "description": "Request one or more canonical camera views before choosing the next action.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "views": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "top_view",
+                  "room_view",
+                  "map",
+                  "wrist",
+                  "agentview_center",
+                  "agentview_left",
+                  "agentview_right"
+                ]
+              },
+              "description": "A non-empty list containing only these exact camera-view names: top_view, room_view, map, wrist, agentview_center, agentview_left, agentview_right. Copy the names exactly; do not invent directional, object, fixture, or scene-specific view names."
+            }
+          },
+          "required": [
+            "views"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "give_space",
+        "description": "Leave a workspace when vacating it is genuinely needed so another agent can enter or work there. This is a handover action, not an idle, completion, or participation action. Roomy counters, islands, and dining tables normally need no give_space when agents use different objects.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "fixture_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture or workspace."
+            }
+          },
+          "required": [
+            "fixture_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "navigate_to_fixture",
+        "description": "Move the robot base to the working pose of a fixture.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "fixture_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture or workspace."
+            }
+          },
+          "required": [
+            "fixture_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "open_hinged_part",
+        "description": "Open a hinged door, lid, or articulated head on a fixture.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture, receptacle, or destination targeted by the action."
+            },
+            "part_id": {
+              "type": "string",
+              "description": "Exact key of the part under initial_state.fixtures[target_id].parts; copy it verbatim (for example door, hinged, lid, or sliding)."
+            }
+          },
+          "required": [
+            "target_id",
+            "part_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "open_sliding_part",
+        "description": "Pull out a sliding drawer or rack on a fixture.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture, receptacle, or destination targeted by the action."
+            },
+            "part_id": {
+              "type": "string",
+              "description": "Exact key of the part under initial_state.fixtures[target_id].parts; copy it verbatim (for example door, hinged, lid, or sliding)."
+            }
+          },
+          "required": [
+            "target_id",
+            "part_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "pick_up_object",
+        "description": "Grasp and lift an object from a symbolic source region.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "object_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the movable object being manipulated."
+            },
+            "source_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the object's current source region."
+            },
+            "source_site_id": {
+              "type": "string",
+              "description": "Optional exact sub-site within the source; omit when no named sub-site matters."
+            }
+          },
+          "required": [
+            "object_id",
+            "source_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "place_in_receptacle",
+        "description": "Place an object into an interior or container-like receptacle. Use target_site_id separately when the exact basin, bowl, rack, shelf, slot, or tray matters.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "object_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the movable object being manipulated."
+            },
+            "receptacle_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the destination receptacle."
+            },
+            "relative_position": {
+              "type": "string",
+              "description": "Optional named relative placement; omit unless the goal requires one."
+            },
+            "target_site_id": {
+              "type": "string",
+              "description": "Optional exact sub-site within the destination; omit when no named sub-site matters."
+            }
+          },
+          "required": [
+            "object_id",
+            "receptacle_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "place_next_to",
+        "description": "Place an object on the surrounding fixture surface, beside a reference object or fixture. This tool never places an object on or inside a movable object. To place something on a plate, tray, cutting board, or other movable support, use place_on_object. To place something inside a bowl or other container, use place_in_receptacle. When using reference_fixture_id, the agent may navigate either to that reference fixture or to its declared adjacent_location_id before placing. Requires at least one of: reference_object_id or reference_fixture_id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "object_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the movable object being manipulated."
+            },
+            "reference_fixture_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture used as the placement reference."
+            },
+            "reference_object_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the movable object used as the placement reference."
+            },
+            "relative_position": {
+              "type": "string",
+              "description": "Optional named relative placement; omit unless the goal requires one."
+            },
+            "target_site_id": {
+              "type": "string",
+              "description": "Optional exact sub-site within the destination; omit when no named sub-site matters."
+            }
+          },
+          "required": [
+            "object_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "place_on_object",
+        "description": "Place an object on top of another movable support object such as a plate or cutting_board.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "object_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the movable object being manipulated."
+            },
+            "support_object_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the movable object supporting the placed object."
+            },
+            "relative_position": {
+              "type": "string",
+              "description": "Optional named relative placement; omit unless the goal requires one."
+            }
+          },
+          "required": [
+            "object_id",
+            "support_object_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "place_on_surface",
+        "description": "Place an object onto an exposed support surface or attachment seat. Keep the fixture id in support_id or target_id and put the exact burner, rack, or other sub-location in target_site_id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "object_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the movable object being manipulated."
+            },
+            "support_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture or surface supporting the placement."
+            },
+            "relative_position": {
+              "type": "string",
+              "description": "Optional named relative placement; omit unless the goal requires one."
+            },
+            "target_site_id": {
+              "type": "string",
+              "description": "Optional exact sub-site within the destination; omit when no named sub-site matters."
+            }
+          },
+          "required": [
+            "object_id",
+            "support_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "place_under",
+        "description": "Place an object directly beneath a reference fixture. For dispensers (e.g. coffee machine nozzle, sink faucet) the object is positioned at the dispenser output site; for other fixtures (e.g. wall cabinet) the object is placed on the nearest surface below.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "object_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the movable object being manipulated."
+            },
+            "reference_fixture_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture used as the placement reference."
+            },
+            "target_site_id": {
+              "type": "string",
+              "description": "Optional exact sub-site within the destination; omit when no named sub-site matters."
+            }
+          },
+          "required": [
+            "object_id",
+            "reference_fixture_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "press_button",
+        "description": "Activate a discrete button-like control on a fixture.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture, receptacle, or destination targeted by the action."
+            },
+            "control_id": {
+              "type": "string",
+              "description": "Exact key of the control under initial_state.fixtures[target_id].controls; copy it verbatim."
+            }
+          },
+          "required": [
+            "target_id",
+            "control_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "press_lever",
+        "description": "Activate a discrete lever-like control on a fixture.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture, receptacle, or destination targeted by the action."
+            },
+            "control_id": {
+              "type": "string",
+              "description": "Exact key of the control under initial_state.fixtures[target_id].controls; copy it verbatim."
+            }
+          },
+          "required": [
+            "target_id",
+            "control_id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "set_rotary_control",
+        "description": "Set a rotary or handle-like control to an explicit goal state.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string",
+              "description": "Exact symbolic ID of the fixture, receptacle, or destination targeted by the action."
+            },
+            "control_id": {
+              "type": "string",
+              "description": "Exact key of the control under initial_state.fixtures[target_id].controls; copy it verbatim."
+            },
+            "goal": {
+              "type": "string",
+              "description": "Requested final symbolic state of the control."
+            }
+          },
+          "required": [
+            "target_id",
+            "control_id",
+            "goal"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "modes": {
+    "none": {
+      "user_prompt": "Task family: PrepareCoffee\nTask instruction: Pick the mug from the cabinet, place it under the coffee machine dispenser, and press the start button.\nCurrent acting agent: agent_0\nYou are one of two agents jointly completing the task. The other agent acts independently, but you cannot exchange messages. Choose actions that contribute to the shared task goal.\nObservation views attached in order: none\n\nSymbolic initial state:\n{\n  \"agents\": {\n    \"agent_0\": {\n      \"held_object\": null,\n      \"location\": \"cabinet_parent_counter\"\n    },\n    \"agent_1\": {\n      \"held_object\": null,\n      \"location\": \"coffee_machine\"\n    }\n  },\n  \"fixtures\": {\n    \"cab\": {\n      \"controls\": {},\n      \"fixture_type\": \"cabinet\",\n      \"parent_fixture\": \"cabinet_parent_counter\",\n      \"parts\": {\n        \"hinged\": {\n          \"part_type\": \"hinged_part\",\n          \"state\": \"closed\"\n        }\n      }\n    },\n    \"cabinet_parent_counter\": {\n      \"controls\": {},\n      \"fixture_type\": \"counter\",\n      \"parts\": {}\n    },\n    \"coffee_machine\": {\n      \"controls\": {\n        \"start_button\": {\n          \"control_type\": \"button\",\n          \"state\": \"off\"\n        }\n      },\n      \"fixture_type\": \"coffee_machine\",\n      \"parts\": {}\n    }\n  },\n  \"machine_state\": {\n    \"coffee_machine\": {\n      \"turned_on\": false\n    },\n    \"prepare_coffee\": {}\n  },\n  \"objects\": {\n    \"mug\": {\n      \"location\": \"cab\",\n      \"object_type\": \"mug\"\n    }\n  }\n}\n\nConcurrency facts (derived from the same fixture-type policy as the concurrent validator):\n- Exclusive, one agent at a time: coffee_machine.\n- Roomy/shared for simultaneous work on different objects: cab, cabinet_parent_counter.\n\nPrevious executed symbolic action history:\n- none\n\nCamera observations:\n- get_image.views must be a non-empty list containing only these exact names: top_view, room_view, map, wrist, agentview_center, agentview_left, agentview_right.\n- Copy these names exactly. Do not invent view names from a direction, task, scene, object, or fixture. For example, use `get_image(views=[\"agentview_center\", \"wrist\"])`. Names such as front, back, overhead, left, right, counter, and fridge_interior are invalid.\n\nPhysical workspace handoffs:\n- give_space(X) frees X only after that tool call finishes. The other agent may enter or use X starting on the following tick, not during the same tick.\nWorkspace relationships:\n- A cabinet and its parent counter are one shared workspace. Navigate to the parent counter for cabinet work. Cabinet tools may be used from that counter, and different agents may use different objects there without a handover. Do not open or close the cabinet during another agent's access to its contents.\n- If an agent is at an exclusive child appliance on a parent counter, it may use that counter and objects on it without navigating again. This does not move the agent: its location remains the exclusive child appliance.\nThe tool schemas are provided separately as function definitions.\n\nRules:\n- Predict exactly one next tool call.\n- Use symbolic IDs only, never concrete simulator IDs.\n- Symbolic IDs are dictionary keys in the initial state; copy the relevant object, fixture, part, or control key verbatim. Use a site ID only when the state explicitly provides a named site.\n- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n- The tool must be one of the provided function schemas.\n- Supply exactly the arguments required by the selected tool.\n- Prefer the most immediate executable next action.\n- Do not emit markdown or narrative after the tool call.",
+      "communication_tool_schemas": [
+        {
+          "type": "function",
+          "function": {
+            "name": "wait_for_signal",
+            "description": "Stop this agent from acting for the rest of the episode. Communication is unavailable, so no release signal can arrive. Use this only when this agent has no remaining useful work and the other agent can finish the shared task alone.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "description": "Exact ID of the other agent; retained for schema compatibility. No message can arrive in this mode."
+                },
+                "about": {
+                  "type": "string",
+                  "description": "Exact symbolic object or fixture ID documenting the work this agent is leaving to the other agent."
+                }
+              },
+              "required": [
+                "from",
+                "about"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "unguided": {
+      "user_prompt": "Task family: PrepareCoffee\nTask instruction: Pick the mug from the cabinet, place it under the coffee machine dispenser, and press the start button.\nCurrent acting agent: agent_0\nYou are one of two agents jointly completing the task. Communication with the other agent is possible.\nObservation views attached in order: none\n\nSymbolic initial state:\n{\n  \"agents\": {\n    \"agent_0\": {\n      \"held_object\": null,\n      \"location\": \"cabinet_parent_counter\"\n    },\n    \"agent_1\": {\n      \"held_object\": null,\n      \"location\": \"coffee_machine\"\n    }\n  },\n  \"fixtures\": {\n    \"cab\": {\n      \"controls\": {},\n      \"fixture_type\": \"cabinet\",\n      \"parent_fixture\": \"cabinet_parent_counter\",\n      \"parts\": {\n        \"hinged\": {\n          \"part_type\": \"hinged_part\",\n          \"state\": \"closed\"\n        }\n      }\n    },\n    \"cabinet_parent_counter\": {\n      \"controls\": {},\n      \"fixture_type\": \"counter\",\n      \"parts\": {}\n    },\n    \"coffee_machine\": {\n      \"controls\": {\n        \"start_button\": {\n          \"control_type\": \"button\",\n          \"state\": \"off\"\n        }\n      },\n      \"fixture_type\": \"coffee_machine\",\n      \"parts\": {}\n    }\n  },\n  \"machine_state\": {\n    \"coffee_machine\": {\n      \"turned_on\": false\n    },\n    \"prepare_coffee\": {}\n  },\n  \"objects\": {\n    \"mug\": {\n      \"location\": \"cab\",\n      \"object_type\": \"mug\"\n    }\n  }\n}\n\nConcurrency facts (derived from the same fixture-type policy as the concurrent validator):\n- Exclusive, one agent at a time: coffee_machine.\n- Roomy/shared for simultaneous work on different objects: cab, cabinet_parent_counter.\n\nPrevious executed symbolic action history:\n- none\n\nCamera observations:\n- get_image.views must be a non-empty list containing only these exact names: top_view, room_view, map, wrist, agentview_center, agentview_left, agentview_right.\n- Copy these names exactly. Do not invent view names from a direction, task, scene, object, or fixture. For example, use `get_image(views=[\"agentview_center\", \"wrist\"])`. Names such as front, back, overhead, left, right, counter, and fridge_interior are invalid.\n\nPhysical workspace handoffs:\n- give_space(X) frees X only after that tool call finishes. The other agent may enter or use X starting on the following tick, not during the same tick.\nWorkspace relationships:\n- A cabinet and its parent counter are one shared workspace. Navigate to the parent counter for cabinet work. Cabinet tools may be used from that counter, and different agents may use different objects there without a handover. Do not open or close the cabinet during another agent's access to its contents.\n- If an agent is at an exclusive child appliance on a parent counter, it may use that counter and objects on it without navigating again. This does not move the agent: its location remains the exclusive child appliance.\nThe tool schemas are provided separately as function definitions.\n\nRules:\n- Predict exactly one next tool call.\n- Use symbolic IDs only, never concrete simulator IDs.\n- Symbolic IDs are dictionary keys in the initial state; copy the relevant object, fixture, part, or control key verbatim. Use a site ID only when the state explicitly provides a named site.\n- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n- The tool must be one of the provided function schemas.\n- Supply exactly the arguments required by the selected tool.\n- Prefer the most immediate executable next action.\n- Do not emit markdown or narrative after the tool call.",
+      "communication_tool_schemas": [
+        {
+          "type": "function",
+          "function": {
+            "name": "communicate",
+            "description": "Send a message to the other agent. The optional releases argument names one exact symbolic object or fixture ID being released.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string",
+                  "enum": [
+                    "agent_0",
+                    "agent_1"
+                  ],
+                  "description": "Exact ID of the agent receiving the message."
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Short natural-language coordination message for the other agent."
+                },
+                "releases": {
+                  "type": "string",
+                  "description": "Optional exact symbolic object or fixture ID being handed over. Include only for a real handover; omit from all other messages."
+                }
+              },
+              "required": [
+                "to",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "wait_for_signal",
+            "description": "Pause until the agent named by from sends a message whose releases value matches the exact symbolic object or fixture ID in about.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "description": "Exact ID of the agent whose matching release will end the wait."
+                },
+                "about": {
+                  "type": "string",
+                  "description": "Exact symbolic object or fixture ID being awaited."
+                }
+              },
+              "required": [
+                "from",
+                "about"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "minimal": {
+      "user_prompt": "Task family: PrepareCoffee\nTask instruction: Pick the mug from the cabinet, place it under the coffee machine dispenser, and press the start button.\nCurrent acting agent: agent_0\nYou are one of two agents working together to complete the task.\nObservation views attached in order: none\n\nSymbolic initial state:\n{\n  \"agents\": {\n    \"agent_0\": {\n      \"held_object\": null,\n      \"location\": \"cabinet_parent_counter\"\n    },\n    \"agent_1\": {\n      \"held_object\": null,\n      \"location\": \"coffee_machine\"\n    }\n  },\n  \"fixtures\": {\n    \"cab\": {\n      \"controls\": {},\n      \"fixture_type\": \"cabinet\",\n      \"parent_fixture\": \"cabinet_parent_counter\",\n      \"parts\": {\n        \"hinged\": {\n          \"part_type\": \"hinged_part\",\n          \"state\": \"closed\"\n        }\n      }\n    },\n    \"cabinet_parent_counter\": {\n      \"controls\": {},\n      \"fixture_type\": \"counter\",\n      \"parts\": {}\n    },\n    \"coffee_machine\": {\n      \"controls\": {\n        \"start_button\": {\n          \"control_type\": \"button\",\n          \"state\": \"off\"\n        }\n      },\n      \"fixture_type\": \"coffee_machine\",\n      \"parts\": {}\n    }\n  },\n  \"machine_state\": {\n    \"coffee_machine\": {\n      \"turned_on\": false\n    },\n    \"prepare_coffee\": {}\n  },\n  \"objects\": {\n    \"mug\": {\n      \"location\": \"cab\",\n      \"object_type\": \"mug\"\n    }\n  }\n}\n\nConcurrency facts (derived from the same fixture-type policy as the concurrent validator):\n- Exclusive, one agent at a time: coffee_machine.\n- Roomy/shared for simultaneous work on different objects: cab, cabinet_parent_counter.\n\nPrevious executed symbolic action history:\n- none\n\nCamera observations:\n- get_image.views must be a non-empty list containing only these exact names: top_view, room_view, map, wrist, agentview_center, agentview_left, agentview_right.\n- Copy these names exactly. Do not invent view names from a direction, task, scene, object, or fixture. For example, use `get_image(views=[\"agentview_center\", \"wrist\"])`. Names such as front, back, overhead, left, right, counter, and fridge_interior are invalid.\n\nCommunication guidance:\n- Communicate with the other agent to complete the task together.\n- When you need to wait for X, first communicate a request naming the exact symbolic ID X. On your next call, use wait_for_signal with about=X. The wait call is private. A later message with releases=X wakes the waiting agent.\nPhysical workspace handoffs:\n- give_space(X) frees X only after that tool call finishes. The other agent may enter or use X starting on the following tick, not during the same tick.\nWorkspace relationships:\n- A cabinet and its parent counter are one shared workspace. Navigate to the parent counter for cabinet work. Cabinet tools may be used from that counter, and different agents may use different objects there without a handover. Do not open or close the cabinet during another agent's access to its contents.\n- If an agent is at an exclusive child appliance on a parent counter, it may use that counter and objects on it without navigating again. This does not move the agent: its location remains the exclusive child appliance.\nThe tool schemas are provided separately as function definitions.\n\nRules:\n- Predict exactly one next tool call.\n- Use symbolic IDs only, never concrete simulator IDs.\n- Symbolic IDs are dictionary keys in the initial state; copy the relevant object, fixture, part, or control key verbatim. Use a site ID only when the state explicitly provides a named site.\n- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n- The tool must be one of the provided function schemas.\n- Supply exactly the arguments required by the selected tool.\n- Prefer the most immediate executable next action.\n- Do not emit markdown or narrative after the tool call.",
+      "communication_tool_schemas": [
+        {
+          "type": "function",
+          "function": {
+            "name": "communicate",
+            "description": "Send a message to the other agent. The optional releases argument names one exact symbolic object or fixture ID being released.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string",
+                  "enum": [
+                    "agent_0",
+                    "agent_1"
+                  ],
+                  "description": "Exact ID of the agent receiving the message."
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Short natural-language coordination message for the other agent."
+                },
+                "releases": {
+                  "type": "string",
+                  "description": "Optional exact symbolic object or fixture ID being handed over. Include only for a real handover; omit from all other messages."
+                }
+              },
+              "required": [
+                "to",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "wait_for_signal",
+            "description": "Pause until the agent named by from sends a message whose releases value matches the exact symbolic object or fixture ID in about.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "description": "Exact ID of the agent whose matching release will end the wait."
+                },
+                "about": {
+                  "type": "string",
+                  "description": "Exact symbolic object or fixture ID being awaited."
+                }
+              },
+              "required": [
+                "from",
+                "about"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "intermediate": {
+      "user_prompt": "Task family: PrepareCoffee\nTask instruction: Pick the mug from the cabinet, place it under the coffee machine dispenser, and press the start button.\nCurrent acting agent: agent_0\nYou are one of two agents working together to complete the task.\nObservation views attached in order: none\n\nSymbolic initial state:\n{\n  \"agents\": {\n    \"agent_0\": {\n      \"held_object\": null,\n      \"location\": \"cabinet_parent_counter\"\n    },\n    \"agent_1\": {\n      \"held_object\": null,\n      \"location\": \"coffee_machine\"\n    }\n  },\n  \"fixtures\": {\n    \"cab\": {\n      \"controls\": {},\n      \"fixture_type\": \"cabinet\",\n      \"parent_fixture\": \"cabinet_parent_counter\",\n      \"parts\": {\n        \"hinged\": {\n          \"part_type\": \"hinged_part\",\n          \"state\": \"closed\"\n        }\n      }\n    },\n    \"cabinet_parent_counter\": {\n      \"controls\": {},\n      \"fixture_type\": \"counter\",\n      \"parts\": {}\n    },\n    \"coffee_machine\": {\n      \"controls\": {\n        \"start_button\": {\n          \"control_type\": \"button\",\n          \"state\": \"off\"\n        }\n      },\n      \"fixture_type\": \"coffee_machine\",\n      \"parts\": {}\n    }\n  },\n  \"machine_state\": {\n    \"coffee_machine\": {\n      \"turned_on\": false\n    },\n    \"prepare_coffee\": {}\n  },\n  \"objects\": {\n    \"mug\": {\n      \"location\": \"cab\",\n      \"object_type\": \"mug\"\n    }\n  }\n}\n\nConcurrency facts (derived from the same fixture-type policy as the concurrent validator):\n- Exclusive, one agent at a time: coffee_machine.\n- Roomy/shared for simultaneous work on different objects: cab, cabinet_parent_counter.\n\nPrevious executed symbolic action history:\n- none\n\nCamera observations:\n- get_image.views must be a non-empty list containing only these exact names: top_view, room_view, map, wrist, agentview_center, agentview_left, agentview_right.\n- Copy these names exactly. Do not invent view names from a direction, task, scene, object, or fixture. For example, use `get_image(views=[\"agentview_center\", \"wrist\"])`. Names such as front, back, overhead, left, right, counter, and fridge_interior are invalid.\n\nCommunication guidance:\n- Communicate with the other agent to divide work, share relevant state, and coordinate access to workspaces.\n- When you need to wait for X, first communicate a request naming the exact symbolic ID X. On your next call, use wait_for_signal with about=X. The wait call is private. A later message with releases=X wakes the waiting agent.\n- Never claim that the global task is complete; the FSM alone ends the episode. If your own portion finishes first, communicate only that your part is done and name one exact release keyword X, then call wait_for_signal with about=X on your next turn. Stay blocked until the partner sends a later matching release.\nPhysical workspace handoffs:\n- give_space(X) frees X only after that tool call finishes. The partner must not enter or use X in the same concurrent tick.\n- An unblocked partner may enter or use X on the following tick without calling wait_for_signal and without receiving a release.\n- Use wait_for_signal only when the agent must actually block before X becomes free. Once waiting, it remains blocked throughout a later matching release tick and resumes only on the following tick. Never wait and receive the matching release in the same tick.\nWorkspace relationships:\n- A cabinet and its parent counter are one shared workspace. Navigate to the parent counter for cabinet work. Cabinet tools may be used from that counter, and different agents may use different objects there without a handover. Do not open or close the cabinet during another agent's access to its contents.\n- If an agent is at an exclusive child appliance on a parent counter, it may use that counter and objects on it without navigating again. This does not move the agent: its location remains the exclusive child appliance.\nThe tool schemas are provided separately as function definitions.\n\nRules:\n- Predict exactly one next tool call.\n- Use symbolic IDs only, never concrete simulator IDs.\n- Symbolic IDs are dictionary keys in the initial state; copy the relevant object, fixture, part, or control key verbatim. Use a site ID only when the state explicitly provides a named site.\n- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n- The tool must be one of the provided function schemas.\n- Supply exactly the arguments required by the selected tool.\n- Prefer the most immediate executable next action.\n- Do not emit markdown or narrative after the tool call.",
+      "communication_tool_schemas": [
+        {
+          "type": "function",
+          "function": {
+            "name": "communicate",
+            "description": "Send a short coordination message to the other agent in the scene. args.to must be that agent's exact ID. Set args.releases to the exact symbolic id of a thing you have finished with and are handing over -- that, and only that, wakes a partner who is waiting on it. Omit args.releases from every other message. args.releases must be an object id or a fixture id that appears in initial_state, copied exactly. It names a THING, never an event or a status: 'coffee_machine' and 'mug' are ids; 'mug_placed', 'counter_free' and 'task_done' are not, and an id that does not exist releases nothing at all.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string",
+                  "enum": [
+                    "agent_0",
+                    "agent_1"
+                  ],
+                  "description": "Exact ID of the agent receiving the message."
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Short natural-language coordination message for the other agent."
+                },
+                "releases": {
+                  "type": "string",
+                  "description": "Optional exact symbolic object or fixture ID being handed over. Include only for a real handover; omit from all other messages."
+                }
+              },
+              "required": [
+                "to",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "wait_for_signal",
+            "description": "Pause until the other agent hands over what you are waiting for. args.about names that thing by its exact symbolic id -- an object id or a fixture id that appears in initial_state, copied exactly. It is a THING you are waiting FOR, never an event you are waiting ON: wait about='coffee_machine', never about='mug_placed' or 'your_turn'. An id that is not in initial_state can never be released, so the wait blocks forever and the whole plan is thrown away. You stay paused until args.from sends a communicate whose args.releases names the same id -- their other messages do not wake you, so you do not need to wait again after an unrelated one.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "description": "Exact ID of the agent whose matching release will end the wait."
+                },
+                "about": {
+                  "type": "string",
+                  "description": "Exact symbolic object or fixture ID being awaited."
+                }
+              },
+              "required": [
+                "from",
+                "about"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "full": {
+      "user_prompt": "Task family: PrepareCoffee\nTask instruction: Pick the mug from the cabinet, place it under the coffee machine dispenser, and press the start button.\nCurrent acting agent: agent_0\nCoordinator for this episode: agent_0\nObservation views attached in order: none\n\nSymbolic initial state:\n{\n  \"agents\": {\n    \"agent_0\": {\n      \"held_object\": null,\n      \"location\": \"cabinet_parent_counter\"\n    },\n    \"agent_1\": {\n      \"held_object\": null,\n      \"location\": \"coffee_machine\"\n    }\n  },\n  \"fixtures\": {\n    \"cab\": {\n      \"controls\": {},\n      \"fixture_type\": \"cabinet\",\n      \"parent_fixture\": \"cabinet_parent_counter\",\n      \"parts\": {\n        \"hinged\": {\n          \"part_type\": \"hinged_part\",\n          \"state\": \"closed\"\n        }\n      }\n    },\n    \"cabinet_parent_counter\": {\n      \"controls\": {},\n      \"fixture_type\": \"counter\",\n      \"parts\": {}\n    },\n    \"coffee_machine\": {\n      \"controls\": {\n        \"start_button\": {\n          \"control_type\": \"button\",\n          \"state\": \"off\"\n        }\n      },\n      \"fixture_type\": \"coffee_machine\",\n      \"parts\": {}\n    }\n  },\n  \"machine_state\": {\n    \"coffee_machine\": {\n      \"turned_on\": false\n    },\n    \"prepare_coffee\": {}\n  },\n  \"objects\": {\n    \"mug\": {\n      \"location\": \"cab\",\n      \"object_type\": \"mug\"\n    }\n  }\n}\n\nConcurrency facts (derived from the same fixture-type policy as the concurrent validator):\n- Exclusive, one agent at a time: coffee_machine.\n- Roomy/shared for simultaneous work on different objects: cab, cabinet_parent_counter.\n\nPrevious executed symbolic action history:\n- none\n\n\nCoordinator handshake:\n- Opening coordination uses two communication ticks; optional ticks containing only get_image do not count.\n- Communication tick 1: the coordinator sends one concrete division using exact symbolic IDs and coordination_phase=propose; the partner sends coordination_phase=await_plan.\n- Communication tick 2: the coordinator sends coordination_phase=await_confirmation; the partner sends coordination_phase=confirm.\n- Physical work may begin only on the following tick.\n- Never claim that the global task is complete; the FSM alone ends the episode. If your own portion finishes first, send exactly one coordination_phase=portion_complete message saying only that your part is done and naming one exact release keyword X, for example `My portion is done. Release \"X\" if you need me again`. On your very next call, call wait_for_signal with about=X. The private wait call is not visible to the partner, so the message must name the same X and say to release it. Stay blocked until the partner sends a later matching release.\nCamera observations:\n- get_image.views must be a non-empty list containing only these exact names: top_view, room_view, map, wrist, agentview_center, agentview_left, agentview_right.\n- Copy these names exactly. Do not invent view names from a direction, task, scene, object, or fixture. For example, use `get_image(views=[\"agentview_center\", \"wrist\"])`. Names such as front, back, overhead, left, right, counter, and fridge_interior are invalid.\n\nPhysical workspace handoffs:\n- give_space(X) frees X only after that tool call finishes. The partner must not enter or use X in the same concurrent tick.\n- An unblocked partner may enter or use X on the following tick without calling wait_for_signal and without receiving a release.\n- Use wait_for_signal only when the agent must actually block before X becomes free. Once waiting, it remains blocked throughout a later matching release tick and resumes only on the following tick. Never wait and receive the matching release in the same tick.\nWorkspace relationships:\n- A cabinet and its parent counter are one shared workspace. Navigate to the parent counter for cabinet work. Cabinet tools may be used from that counter, and different agents may use different objects there without a handover. Do not open or close the cabinet during another agent's access to its contents.\n- If an agent is at an exclusive child appliance on a parent counter, it may use that counter and objects on it without navigating again. This does not move the agent: its location remains the exclusive child appliance.\nThe tool schemas are provided separately as function definitions.\n\nRules:\n- Predict exactly one next tool call.\n- Use symbolic IDs only, never concrete simulator IDs.\n- Symbolic IDs are dictionary keys in the initial state; copy the relevant object, fixture, part, or control key verbatim. Use a site ID only when the state explicitly provides a named site.\n- The acting agent is fixed by the prompt; do not choose actions for the other agent.\n- Before ANY non-communicate action, BOTH agents must each have sent at least one communicate message; task actions are rejected until then.\n- The tool must be one of the provided function schemas.\n- Supply exactly the arguments required by the selected tool.\n- Prefer the most immediate executable next action.\n- Do not emit markdown or narrative after the tool call.",
+      "communication_tool_schemas": [
+        {
+          "type": "function",
+          "function": {
+            "name": "communicate",
+            "description": "Send a short coordination message to the other agent in the scene. args.to must be that agent's exact ID. Set args.releases to the exact symbolic id of a thing you have finished with and are handing over -- that, and only that, wakes a partner who is waiting on it. Omit args.releases from every other message. args.releases must be an object id or a fixture id that appears in initial_state, copied exactly. It names a THING, never an event or a status: 'coffee_machine' and 'mug' are ids; 'mug_placed', 'counter_free' and 'task_done' are not, and an id that does not exist releases nothing at all. args.coordination_phase is required for protocol messages and must be one of propose, await_plan, await_confirmation, confirm, or portion_complete. Omit it from ordinary requests, corrections, handoffs, and informational messages.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string",
+                  "enum": [
+                    "agent_0",
+                    "agent_1"
+                  ],
+                  "description": "Exact ID of the agent receiving the message."
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Short natural-language coordination message for the other agent."
+                },
+                "coordination_phase": {
+                  "type": "string",
+                  "enum": [
+                    "propose",
+                    "await_plan",
+                    "await_confirmation",
+                    "confirm",
+                    "portion_complete"
+                  ],
+                  "description": "Optional opening-protocol phase, or portion_complete when reporting only this agent's assigned work complete. Omit for ordinary messages."
+                },
+                "releases": {
+                  "type": "string",
+                  "description": "Optional exact symbolic object or fixture ID being handed over. Include only for a real handover; omit from all other messages."
+                }
+              },
+              "required": [
+                "to",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "wait_for_signal",
+            "description": "Pause until the other agent hands over what you are waiting for. args.about names that thing by its exact symbolic id -- an object id or a fixture id that appears in initial_state, copied exactly. It is a THING you are waiting FOR, never an event you are waiting ON: wait about='coffee_machine', never about='mug_placed' or 'your_turn'. An id that is not in initial_state can never be released, so the wait blocks forever and the whole plan is thrown away. You stay paused until args.from sends a communicate whose args.releases names the same id -- their other messages do not wake you, so you do not need to wait again after an unrelated one.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "description": "Exact ID of the agent whose matching release will end the wait."
+                },
+                "about": {
+                  "type": "string",
+                  "description": "Exact symbolic object or fixture ID being awaited."
+                }
+              },
+              "required": [
+                "from",
+                "about"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    }
+  }
+}

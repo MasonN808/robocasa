@@ -1,0 +1,52 @@
+{
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Instruct-30traj": {
+    "created": true,
+    "commit": "74b048ddf0d063138ce0fa57a5fba9ff267dac61",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Instruct-60traj": {
+    "created": true,
+    "commit": "c3b24ce061c3600f8ee60b48bba7338a82d6ec6e",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Instruct-90traj": {
+    "created": true,
+    "commit": "2f1996fa36f5ef9fd5be287278fe18319d70239b",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Instruct-120traj": {
+    "created": true,
+    "commit": "8061bfb5d95101aa4f59012ba9d4f029ba772a72",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Instruct-150traj": {
+    "created": true,
+    "commit": "740fd9f17ced8b5145fff8397454cf48d3f86f4f",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-30traj": {
+    "created": true,
+    "commit": "98fe019e5e8f5800af93091e3ad6a9d5435a41bc",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-60traj": {
+    "created": true,
+    "commit": "d0591623a441600ae9c17d92a1599da17b33d95b",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-90traj": {
+    "created": true,
+    "commit": "3749526c7375cdb800b32fe78aeebc3cb25de64c",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-120traj": {
+    "created": true,
+    "commit": "d096823e08522dc28c189b64ef6179d4b2872e59",
+    "verified": true
+  },
+  "DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-150traj": {
+    "created": true,
+    "commit": "6db4c3949379d8bddf1ccfdc8e6bd59b289b907e",
+    "verified": true
+  }
+}

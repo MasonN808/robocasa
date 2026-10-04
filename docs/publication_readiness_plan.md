@@ -1,0 +1,420 @@
+# RoboTalk code release: expectations and cleanup plan
+
+**Date:** 2026-10-03
+**Working branch:** `concurrent-FSM-pipeline-and-comm-ablations` at `af38f5f`, plus uncommitted changes.
+**Paper:** *RoboTalk: Learning Multi-Robot Communication and Coordination from Multimodal Demonstrations*, arXiv:2609.23997.
+**Companion reference:** [`robotalk_project_and_implementation.md`](robotalk_project_and_implementation.md), the internal implementation reference.
+
+This document has two parts:
+
+- **Part A** sets out what a publishable codebase for this paper must provide. It draws on comparable releases and community guidelines.
+- **Part B** is the ordered work plan for getting this repository there. Step 1 freezes the current state so that nothing removed during trimming is lost.
+
+---
+
+## Part A — What a publishable research codebase looks like
+
+### A.1 Reference releases
+
+| Repository | What to borrow |
+|---|---|
+| [robocasa/robocasa](https://github.com/robocasa/robocasa) (our upstream) | Single installable package. Assets are downloaded by a script, never committed. MIT license for code, CC BY 4.0 for assets and data. README order: Install, Usage, License, Citation. |
+| [robocasa/robocasa-gr1-tabletop-tasks](https://github.com/robocasa/robocasa-gr1-tabletop-tasks) | The cleanest published *fork* of RoboCasa. Its README opens with "built upon RoboCasa…". It keeps the upstream layout and LICENSE, and installs robosuite separately rather than vendoring it. |
+| [openvla/openvla](https://github.com/openvla/openvla) | Closest analogue for LoRA SFT of a VLM. It has a "Repository Structure" section, a literal `torchrun …` command per paper experiment, checkpoints on the HF Hub with a `from_pretrained` snippet, and a pinned `flash-attn`. |
+| [Physical-Intelligence/openpi](https://github.com/Physical-Intelligence/openpi) | `uv sync` with a lockfile, `third_party/` as git submodules, named Python training configs, stated hardware requirements, and a separate license file for each upstream model. |
+| [Lifelong-Robot-Learning/LIBERO](https://github.com/Lifelong-Robot-Learning/LIBERO), [octo-models/octo](https://github.com/octo-models/octo) | A dataset download script or HF Hub link, MIT code with CC BY 4.0 data, and short eval examples. |
+| [huggingface/lerobot](https://github.com/huggingface/lerobot) | Dataset format: Parquet plus media on the Hub, and a dataset card. Our HF export already follows this. |
+| [UMass-Foundation-Model/Co-LLM-Agents](https://github.com/UMass-Foundation-Model/Co-LLM-Agents) (CoELA) | Multi-agent LLM coordination in an embodied setting. A useful counter-example: it has no LICENSE and no pinned environment. Do not repeat that. |
+
+Community standards:
+
+- [Papers with Code ML Code Completeness Checklist](https://github.com/paperswithcode/releasing-research-code). It has five items: dependency spec, training code, evaluation code, pretrained models, and a README results table with the commands that produce it.
+- [NeurIPS code submission policy](https://neurips.cc/public/guides/CodeSubmissionPolicy)
+- [HF dataset cards](https://huggingface.co/docs/hub/datasets-cards) and [model cards](https://huggingface.co/docs/hub/model-cards)
+- [Datasheets for Datasets](https://arxiv.org/abs/1803.09010)
+- [GitHub `CITATION.cff`](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-citation-files)
+- ACM artifact badges: *Available*, *Functional*, *Reusable* and *Results Reproduced*. *Functional* plus *Reusable* is a sensible target for us.
+
+### A.2 Expectations checklist
+
+A release is "complete and clean" when every item below holds.
+
+**1. Scope matches the paper.**
+- Everything needed for the paper's claims is present:
+  - task specifications and simulator;
+  - data generation and validation;
+  - SFT;
+  - live-sim evaluation;
+  - metrics and figures.
+- Anything the paper does not report is removed, not merely separated: DAgger, low-level policy backends, RL, work-partition experiments and old tick formats.
+
+**2. One obvious structure.**
+- An installable package with subpackages for each pipeline stage.
+- Separate `configs/`, `scripts/`, `tests/` and `docs/` directories.
+- No experiment launchers at the repository root.
+
+**3. Installation works from a clean machine.**
+- `pyproject.toml` with optional extras: `[sim]`, `[gen]`, `[train]`, `[eval]`.
+- A lockfile or pinned requirements.
+- The Python version is stated, and robosuite is pinned to a commit.
+- One asset-download command.
+- Hardware stated: GPUs for training and vLLM, CPU or EGL for MuJoCo.
+
+**4. Entry points.**
+- One CLI or script per stage: generate → postprocess/render → preprocess → train → evaluate → summarize/plot.
+- Each paper experiment is a named config, not an ad-hoc launcher.
+
+**5. Artifacts are linked, not committed.**
+- The dataset is on the HF Hub, already done as `DorianAtSchool/RoboTalk`.
+- LoRA adapters are on the Hub with model cards: base model, data split, hyperparameters, license.
+- Small evaluation *inputs* ship in the repo: task split, nested scale manifests, fixed cohort, and scene compatibility cache.
+- Evaluation *outputs* (logs, result JSON, figures) are not shipped; they are regenerated by command.
+- The repository holds no large binaries.
+
+**6. Results are reproducible from the README.**
+- A table mirrors each paper table and figure: Table IV, Figure 6 and Figure 7, the sampling-strategy diversity table, and dataset statistics.
+- Each row has the one command that regenerates it.
+- The fast path evaluates the released adapters; the full path also retrains.
+- The figure scripts run on whatever that command writes to `outputs/`.
+
+**7. Portable.**
+- No absolute cluster paths such as `/work/umass/...`, home directories, SLURM accounts, partitions or e-mail addresses in code.
+- Paths come from CLI flags, env vars or a `.env.example`.
+- SLURM files are generic templates under `scripts/slurm/`, marked "adapt to your scheduler".
+
+**8. Safe to publish.**
+- No API keys or tokens in the tree *or in git history*.
+- No personal e-mail addresses.
+- No internal monitoring or notification scripts.
+- If review is double-blind, the review copy contains no author identities: no commit history, no `DorianAtSchool` or `MasonN808` URLs.
+
+**9. Licensed and attributed.**
+- A LICENSE for our code.
+- The upstream RoboCasa (MIT) and robosuite license notices are kept.
+- A fork notice names the upstream commit and lists our modifications.
+- Data license on the dataset card.
+- Base-model (Qwen3-VL, Apache-2.0) and generator terms (Gemini outputs) are noted.
+
+**10. Citable.**
+- A BibTeX block in the README and a `CITATION.cff`.
+- RoboCasa and robosuite are cited as upstreams.
+
+**11. Tested.**
+- A CPU-only unit-test subset passes in CI: FSM, concurrent scheduler, prompts, tool schemas, cohort selection, metrics.
+- Simulator and GPU tests are marked and skippable.
+- pre-commit with ruff/black.
+
+**12. Honest documentation.**
+- The README describes the *current* architecture: separate per-agent contexts, no step indices, FSM success.
+- Limitations from §16 of the implementation reference are stated: FSM vs. native success, scene coverage, single training seed, and so on.
+
+---
+
+## Part B — Plan for this repository
+
+### B.0 Current state (inventory as of 2026-10-03)
+
+| Observation | Evidence |
+|---|---|
+| Uncommitted work | 16 modified tracked files (+520/−36): pipeline phases 2–3, `sim_normalization`, `communication_profiles`, `live_sim_eval`, `main`, `prompting`, and tests. About 50 untracked paths, including the paper-figure scripts and `robotalk_hf/` exporter. |
+| Large untracked outputs | `reports/robotalk_hf_full` (27 GB, 402k files), `reports/robotalk_anonymous_review` (13 GB), `reports/robotalk_model_release` (1.7 GB), `reports/robotalk_hf_smoke` (24 MB), `reports/plate_store_dinner_traj088_overview` (18 MB). **These must not be committed.** |
+| Paper-backing results are gitignored | `training/bc_task_vlm/eval_runs/` (37 GB) is ignored. That includes `fixed_live_sim_43_10_results_artifact/` (811 KB), which backs the paper's numbers. |
+| Root clutter | 259 `.sbatch` files and 27 one-off `.py` files at the repository root. Also 6 planning notes (`HIGH_LEVEL_PLAN.md`, `WAIT_FOR_SIGNAL_PLAN.md`, `GENERATION_SPEEDUP.md`, …), `typescript`, `nvtop-x86_64.AppImage`, `MUJOCO_LOG.TXT`, `scratch/`, and the `slurm_logs/` and `artifacts/` directories. |
+| Non-paper subsystems | `model_evals/` (low-level policy backends), `external/{openpi,rldx-1,Isaac-GR00T}` submodules, `policies/`, `tests/rl`, the RL directories, `data_analysis/vllm_no_flash_attn`, and roughly 40 `probe_*`/`audit_*`/`diagnose_*`/`build_*_artifact.py` scripts in `training/bc_task_vlm`. |
+| Portability | 292 tracked files contain `/work/umass/...` paths, 17 of them `.py`. E-mails appear in `scripts/monitor_*_email.sh` and `scripts/sbatch/by_gpu/*`. |
+| Secrets | A quick scan found no Gemini, HF or OpenAI key patterns in tracked files or history; `client.py` reads keys from the environment. A full `gitleaks` pass is still required. |
+| Packaging | `pyproject.toml` and `setup.py` still describe upstream **RoboCasa365** (name `robocasa`, upstream authors), and `requirements.txt` is just `-e .`. Training and generation dependencies (transformers, peft, vllm, google-genai, …) are not declared. |
+| README | Still the upstream RoboCasa README. `training/bc_task_vlm/README.md` describes an obsolete centralized setup (implementation reference §2). |
+| License | The MIT LICENSE says "Copyright (c) 2026 the RoboCasa Team". There is no RoboTalk notice, and the dataset card's license is unresolved (implementation reference §16, item 12). |
+| Fork lineage | The upstream base is around `1b19563` (2026-03-02). Our changes under `robocasa/` touch 142 files, 118 of them under `models/assets`. robosuite is a submodule pointing at `MasonN808/robosuite@dev`. |
+| History | 332 commits mixing upstream and our work. The remote is the personal fork `MasonN808/robocasa`. |
+| Tooling | `.pre-commit-config.yaml` exists. There is no `.github/` CI. |
+
+### B.1 Decisions (resolved 2026-10-04)
+
+1. **Release vehicle: a fresh public repository under `DorianAtSchool`, e.g. `DorianAtSchool/robotalk`.**
+   - It holds a squashed snapshot of the trimmed tree, with no history imported.
+   - This repository (`MasonN808/robocasa`) stays the private archive and keeps the full history.
+2. **No anonymization.**
+   - Author names and the `DorianAtSchool` HF and GitHub links may appear.
+   - Portability rules still apply: no cluster paths, accounts, partitions or e-mail addresses (Step 5).
+3. **Scope is strictly what the paper reports.** That means:
+   - the multi-agent simulator with its 53 tasks, FSM and coordination mechanisms;
+   - the generation pipeline, including the four sampling strategies and the diversity analysis;
+   - the dataset export;
+   - LoRA SFT: scale 30–150, Instruct/Thinking × rationale;
+   - live-sim evaluation;
+   - the communication-guidance ablation.
+
+   Out of scope and removed from the release:
+   - **DAgger**: `training/bc_task_vlm/dagger`, `tests/test_*dagger*`, and its launchers;
+   - low-level policy backends and RL;
+   - work partitions and old tick formats;
+   - the cross-source and LLM-judge evaluations, unless the paper uses them;
+   - the probe and audit scripts;
+   - the anonymization tooling;
+  - the task-spec generation pipeline (`pipeline/phase1–5`), which is outdated; only its output, the 53 verified specs, ships;
+  - all off-sim (teacher-forced) evaluation, including the LLM communication judge.
+
+4. **Licenses:** see B.1a below. These match RoboCasa365.
+5. **Results are reported, not shipped.**
+   - The README carries the paper's numbers (Table IV, Figures 6–7, the sampling-diversity table, dataset statistics).
+   - No result files, eval logs or figure PNGs go into the public repo.
+   - Each number and figure instead gets a short documented command; see Step 8 and the `reproduce` entry point in Step 4.
+   - Before writing the README table, confirm that it uses the camera-ready numbers. Implementation reference §11.1: the communication-ablation numbers predate the `_waitfix_v3` reruns.
+
+### B.1a Licenses
+
+All sources were checked on 2026-10-04.
+
+| Component | License | Source / notes |
+|---|---|---|
+| Our code (`robotalk/`, scripts) | **MIT** | Matches RoboCasa365 code ([README "License"](https://github.com/robocasa/robocasa): code MIT) and robosuite. Use the copyright line `Copyright (c) 2026 The RoboTalk Authors`. |
+| Forked RoboCasa code (`robocasa/`) | MIT, upstream notice retained | Keep `Copyright (c) 2026 the RoboCasa Team` alongside ours, in `LICENSE` or `NOTICE`. |
+| RoboCasa assets we modified (118 files under `robocasa/models/assets`) | **CC BY 4.0** (upstream asset license) | CC BY requires attribution *and an indication that changes were made*. List them in `NOTICE`/`docs/FORK_CHANGES.md`. |
+| robosuite (dependency, pinned) | MIT, `Copyright (c) 2022 Stanford Vision and Learning Lab and UT Robot Perception and Learning Lab` | It bundles parts of MuJoCo under Apache-2.0. Install it as a dependency and do not vendor it. |
+| RoboTalk dataset (`DorianAtSchool/RoboTalk`) | **CC BY 4.0** | Matches RoboCasa365 assets and datasets. Its images are renders of CC BY 4.0 RoboCasa assets, so CC BY is the consistent choice. Set `license: cc-by-4.0` in the card YAML. |
+| LoRA adapters | **Apache-2.0** | Inherited from the base models [Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) and [Qwen3-VL-8B-Thinking](https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking), both Apache-2.0. Each model card sets `base_model:` and `license: apache-2.0`. |
+
+**Caveat on the Gemini-generated data.**
+- The [Gemini API Additional Terms](https://ai.google.dev/gemini-api/terms) (last modified 2026-03-23) say Google does not claim ownership of generated content, and that the user is responsible for its use.
+- The same terms say: *"You may not use the Services to develop models that compete with the Services."*
+- Training task-specific 8B coordination policies is very unlikely to be "competing with the Gemini API", but this is not legal advice. The dataset card should:
+  - state that trajectories were generated with Gemini 3 Flash/3.1 Pro;
+  - note that downstream users are responsible for complying with the generator's terms.
+- Ask the advisor or UMass tech-transfer whether a review is needed.
+
+### B.2 Steps
+
+#### Step 1 — Commit everything needed, then tag the snapshot (do this first)
+
+Goal: a single recoverable point that contains all code and docs, but no bulk outputs.
+
+1. Add ignore rules for the bulk outputs:
+   ```gitignore
+   training/bc_task_vlm/reports/robotalk_hf_full/
+   training/bc_task_vlm/reports/robotalk_hf_smoke/
+   training/bc_task_vlm/reports/robotalk_anonymous_review/
+   training/bc_task_vlm/reports/robotalk_model_release/
+   ```
+   - Their *contents* already live on the HF Hub. Record the HF revision hashes from each `upload_receipt.json` in the commit message.
+   - Small provenance files are worth force-adding: `robotalk_anonymous_review/{README.md,audit.json,upload_receipt.json}` and `robotalk_model_release/{manifest.json,upload_receipt.json}`.
+2. Force-add the paper-backing evaluation summary despite the `eval_runs/` ignore:
+   ```bash
+   git add -f training/bc_task_vlm/eval_runs/fixed_live_sim_43_10_results_artifact/
+   ```
+   - This is for the **private archive only**; it is the single record of the paper's numbers. Results files are not shipped in the public repo (B.1, item 5).
+   - Do the same for any other small `artifact.json` or `report.html` cited by the paper.
+3. For the figure directory `reports/plate_store_dinner_traj088_overview/` (18 MB), commit only the selected PNG plus its generating metadata, not every camera candidate.
+4. Commit in two logical commits on the current branch:
+   - *a.* code, tests and launchers: the 16 modified files, new `training/bc_task_vlm/*.py`, `robotalk_hf/` (excluding `__pycache__`), new tests, and new `.sbatch` and `scripts/*`;
+   - *b.* docs and small reports: `docs/robotalk_project_and_implementation.md`, this plan, `reports/communication_waitfix_v3/`, `paper_checkpoint_provenance_audit.*`, and `data_analysis/plots/task_phase_distribution/`.
+5. Run the CPU test subset before committing so that the snapshot is known-good, or record which tests fail:
+   ```bash
+   pytest tests/test_concurrent_fsm.py tests/test_task_level_phase2.py tests/test_task_level_phase3.py \
+     tests/test_sim_normalization.py training/bc_task_vlm/tests -q
+   ```
+6. Tag and push:
+   ```bash
+   git tag -a pre-publication-snapshot -m "State used for arXiv:2609.23997"
+   git push origin concurrent-FSM-pipeline-and-comm-ablations --tags
+   ```
+   Pushing from the cluster may need the GitHub credential workaround.
+7. Create the working branch for the cleanup: `git switch -c publication-cleanup`.
+
+
+#### Step 2 — Fix the public scope (paper → code map)
+
+This table is the whitelist. Anything not reachable from it, by import or by a documented command, is removed in Step 3.
+
+| Paper element | Code that ships |
+|---|---|
+| Multi-agent simulator, 53 tasks, FSM | `data_generation/task_level/tasks/specs/verified/*.json`, `tasks/specs/runtime.py`, `tasks/shared/{fsm,concurrent_fsm,scheduling,workspace_semantics,prompting,instances}.py`, `subatomic_tool_{specs,calls}.py`, `grounding_specs.py`, `scene_sampling.py`, and the `robocasa/utils/{sim_tool_executor*,trajectory_runner*,trajectory_adapter,sim_tool_specs}.py` changes plus the kitchen env changes. |
+| Coordination mechanisms (leader–follower, wait–release, exclusive workspaces) | Same as above, plus `communication_profiles.py`. |
+| Generation pipeline and retry cascade | `generation/raw/{production_cascade,cascade_canary}.py`, `sampling/structured_random.py`, `generation/image/processor.py`, render and postprocess entry points, and the scene compatibility cache builder. |
+| Sampling strategies (High Temp, Random, Structured Random, Verbalized) and the diversity table | The four sampling modes in `sampling/`, plus `data_analysis/analyze_sampling_methods.py` and the diversity metric code. Drop the plotting variants the paper does not use. |
+| Dataset release | `training/bc_task_vlm/robotalk_hf/{export_robotalk.py,publish_models.py,static_space}`. **Drop** `anonymize_review.py`. |
+| SFT (LoRA; Instruct/Thinking × rationale; scale 30–150) | `training/bc_task_vlm/{prompting,dataset,preprocess,preprocessed_data,main,peft_compat,metrics}.py`, `build_scale_experiment_manifests.py`, `materialize_scale_artifacts.py`, `accelerate_multigpu.yaml`. |
+| Live-sim evaluation, cohorts and metrics | `live_sim_eval.py`, `live_sim_parallel_eval.py`, `fixed_cohort_selection.py`, `freeze_configuration_cohort.py`, `fixed_live_sim_cohort.py`, `summarize_fixed_live_sim.py`, and the vLLM serving launcher (generalized). |
+| Table IV, Figures 6–7 | `summarize_fixed_live_sim.py`, `export_communication_ablation_png.py`, `export_sft_scale_pngs.py`, `plot_style_utils.py`, `plot_caption_metadata.py`. Reduce `build_43_10_eval_artifact.py` to the table and plot logic only; the HTML artifact is not needed. |
+| Evaluation details | Verify that the paper's "4× reference length" budget equals the shipped default. `--step-budget-factor` is 2.0 and is doubled when `get_image` is trained (`live_sim_eval.py:1578-1581`), so this holds only for image-trained configs. Make 4× explicit in the eval config. |
+| **Excluded (decided 2026-10-04)** | **Task-spec pipeline** (`data_generation/task_level/pipeline/`, phases 1–5, `sim_normalization.py`, and `tests/test_task_level_phase*.py`, `test_task_level_pipeline_cli.py`, `test_sim_normalization.py`): it is outdated, so only the 53 verified JSON specs it produced ship. **Off-sim (teacher-forced) evaluation**: `evaluation.py`, `eval_standalone.py`, `judge_communications.py`, `prediction_io.py`, `divergence_analysis.py`, `export_results_table.py`, the `plot_*_comparison.py` scripts, `eval_*offsim*`/`judge_*` launchers, and the structured-eval paths in `metrics.py`. **Caution:** `main.py`, `dataset.py` and `live_sim_eval.py` import from `evaluation`/`metrics`/`prediction_io`. Move the shared helpers (e.g. tool-call parsing) into `robotalk/evaluation/parsing.py` *before* deleting, and drop the in-training off-sim eval hook in `main.py`. |
+
+#### Step 3 — Trim (on `publication-cleanup`)
+
+- **Repository root.** Delete:
+  - all `*.sbatch`, `*.sh` and one-off `*.py` files (`order_ab.py`, `validity_ab.py`, `tick_*`, `regen_*`, `gate_*`, …);
+  - the planning notes (`HIGH_LEVEL_PLAN.md`, `WAIT_FOR_SIGNAL_PLAN.md`, `GENERATION_SPEEDUP.md`, `FUTURE_AB_POLLING_WAITS.md`, `PIPELINE.md`, `CONCURRENCY_LIMITATIONS.md`; fold the relevant limitations into the docs);
+  - `typescript`, `nvtop-x86_64.AppImage`, `MUJOCO_LOG.TXT`, `scratch/`, `artifacts/`, `eval_task_subsets/`, `test_google_cloud.py`, `preflight_er2.py`.
+- **Out-of-scope subsystems.** Delete:
+  - `training/bc_task_vlm/dagger/` and every DAgger test and launcher (`tests/test_*dagger*`, `launch_dagger_*`);
+  - `model_evals/`, `policies/`, the `external/*` submodules and their `.gitmodules` entries;
+  - `tests/rl` and the RL directories;
+  - work-partition code and tests (`coverage_work_partitions.py`, `weight_work_partitions.py`, `tests/test_work_partitions.py`, …);
+  - old tick and lock-step formats, once confirmed unused by the shipped path.
+- **`scripts/`.** Delete `monitor_*`, `tmp_push_*`, `sbatch/by_gpu/*`, `cleanup_after_push.sh`, `smoke_push_and_clean.sh` and the sweep or HF-staging helpers not used by the shipped path.
+- **`training/bc_task_vlm/`.** Delete:
+  - the `probe_*`, `audit_*`, `diagnose_*`, `verify_*` and one-off `build_*_artifact.py` scripts;
+  - `merge_thinkrat_native43_repairs.py`, `regroup_fixed_live_sim_results.py`, `capture_plate_store_dinner_overview.py` and `render_robotalk_paper_video.py`;
+  - `*.md` trackers and diagnostics, `artifact_results_explorer.html`, `plans/`, `hf_repo_lists/`, `eval_data_subset/`;
+  - all of `reports/` and `eval_runs/`.
+- **`eval_manifests/` (4.5 MB).** Keep only the manifests that define the paper's evaluation population: the 43/10 split, the nested scale manifests, and the fixed configuration cohort. Move them to `configs/eval/`.
+  - Better still, check that `freeze_configuration_cohort.py` and `build_scale_experiment_manifests.py` regenerate them byte-identically from a seed. Then ship only the seed, plus the files as a checksum test.
+- **`data_analysis/`.** Keep the diversity analysis. Drop `vllm_no_flash_attn/`, model-comparison plots and `plots/`.
+- **Dead code paths** flagged in the implementation reference:
+  - the legacy flat-example replay;
+  - the centralized-history and step-index prompt options;
+  - the non-consume-once image modes;
+  - the permissive (non-terminating) rejection modes, if no paper config uses them.
+
+  Confirm with `vulture` or coverage over the shipped commands before deleting.
+- **Upstream RoboCasa.** Drop the upstream Sphinx `docs/` tree and the unrelated upstream scripts (teleop, upstream dataset tooling) not needed by our env. Link upstream docs instead. Keep only the `robocasa/` package code our environment imports.
+
+#### Step 4 — Restructure
+
+Target layout, following OpenVLA and openpi:
+
+```text
+robotalk/                      # github.com/DorianAtSchool/robotalk
+├── README.md  LICENSE  NOTICE  CITATION.cff  pyproject.toml  uv.lock  .env.example
+├── robocasa/                 # trimmed fork of upstream RoboCasa365 @ <sha>; changes listed in NOTICE / docs/FORK_CHANGES.md
+├── robotalk/
+│   ├── tasks/                # specs/verified/*.json, runtime, fsm, concurrent_fsm, scheduling, workspace_semantics
+│   ├── tools/                # tool specs/calls, grounding
+│   ├── generation/           # sampling strategies, prompts, retry cascade, observation insertion, render/postprocess
+│   ├── training/             # dataset, preprocess, prompting, main (LoRA SFT)
+│   ├── evaluation/           # live_sim_eval, parallel eval, cohorts, metrics, summarize
+│   ├── analysis/             # diversity metrics; table + figure builders
+│   └── release/              # HF dataset export, adapter publishing
+├── configs/
+│   ├── generation/           # cascade + 4 sampling strategies
+│   ├── train/                # scale{30..150} × {instruct,thinking} × {rationale,no_rationale}
+│   └── eval/                 # split, cohort, comm_mode ∈ {none,unguided,minimal,intermediate,full}
+├── scripts/
+│   ├── download_assets.sh
+│   ├── reproduce.py          # one entry point per paper result (see below)
+│   └── slurm/                # 4–5 generic templates (generate, preprocess, train, vLLM eval), marked "adapt to your cluster"
+├── tests/                    # unit (CPU) / sim (marked) / gpu (marked)
+└── docs/                     # data format, tool interface, concurrency semantics, evaluation, limitations
+```
+
+- Moving `data_generation/task_level` and `training/bc_task_vlm` into `robotalk/` is a large rename. Do it with `git mv` in one commit, and fix imports with a scripted rewrite before any other edits.
+- Collapse the roughly 40 historical training and eval launchers into the parameterized configs above.
+- **`scripts/reproduce.py` is the minimal-work path.** One subcommand per paper result runs the whole chain and writes the table or figure to `outputs/`:
+
+  ```bash
+  python scripts/reproduce.py table4                       # comm ablation: Gemini 3 Flash × 5 modes (needs GEMINI_API_KEY)
+  python scripts/reproduce.py fig6 --from-adapters          # SFT scale: eval released adapters, then plot
+  python scripts/reproduce.py fig6 --train                  # same, but retrain all 10 adapters first
+  python scripts/reproduce.py fig7 --from-adapters          # rationale ablation (4 arms @ 30/task)
+  python scripts/reproduce.py diversity                     # sampling-strategy diversity table
+  python scripts/reproduce.py dataset-stats                 # Section stats from the HF dataset (CPU, minutes)
+  ```
+
+  - Each subcommand prints the expected numbers from the paper next to the reproduced ones.
+  - It also accepts `--tasks`/`--episodes-per-task` for a quick smoke-scale run.
+  - Cluster users get a `--slurm` flag that submits through the generic templates; everyone else runs locally.
+
+#### Step 5 — Portability and hygiene
+
+- Replace every `/work/umass/...` path (292 tracked files today) with CLI flags or env vars: `ROBOTALK_DATA_ROOT`, `ROBOTALK_OUTPUT_ROOT`, `HF_HOME`, `ROBOCASA_ASSETS`, `VLLM_IMAGE`. Document them in `.env.example`.
+- Add a CI guard: `git grep -nE '/work/umass|/scratch|@umass\.edu|gmail\.com|--account=|--partition='` must return nothing outside `scripts/slurm/` placeholders.
+- Remove from defaults: the wandb entity and project names, SLURM account, partition and QoS names, and the container paths.
+- Make the dataset path default to the HF download (`snapshot_download("DorianAtSchool/RoboTalk")`), not cluster roots.
+- Run `gitleaks detect --no-git` on the exported tree. The public repo starts with fresh history, so the old history never ships.
+
+#### Step 6 — Dependencies and installation
+
+- Replace the upstream `setup.py` and `pyproject.toml` metadata with a single `pyproject.toml`:
+  - name `robotalk`, our authors, MIT;
+  - upstream credit in `NOTICE`;
+  - remove upstream-only dependencies we don't import (`tianshou`, `lerobot`, `pynput`, `hidapi`, …).
+- Declare the extras:
+  - `[gen]`: google-genai, …
+  - `[train]`: torch, transformers, peft, accelerate, qwen-vl-utils, flash-attn (pinned)
+  - `[eval]`: vllm 0.27.1 (or the container tag)
+  - `[analysis]`: matplotlib, sentence-transformers, …
+- Regenerate `uv.lock`.
+- Pin robosuite to a commit. Prefer an upstream ARISE commit if our `MasonN808/robosuite@dev` changes are not needed. Otherwise either:
+  - fold the needed changes into `robocasa/` as a patch; or
+  - mirror the fork under `DorianAtSchool` and pin it there. The `MasonN808` fork may not stay public.
+- Test the install from scratch:
+  1. a fresh `uv sync`;
+  2. the asset download;
+  3. replaying one HF trajectory in the sim;
+  4. one training step on 2 trajectories;
+  5. one eval episode against a released adapter.
+
+#### Step 7 — Hugging Face artifacts
+
+These are inputs for others to build on. Results files are not shipped.
+
+- **Dataset `DorianAtSchool/RoboTalk`:**
+  - `license: cc-by-4.0`;
+  - a datasheet-style card covering motivation, composition, the generation process (Gemini cascade, FSM validation, acceptance stats from implementation reference §5.5), intended use, limitations, and the Gemini-terms note (B.1a);
+  - the arXiv link and a link to the code repo;
+  - a revision tag `v1.0` that the code pins.
+- **Adapters:** publish the checkpoints behind Figures 6–7, so that `reproduce.py --from-adapters` needs no training.
+  - **Already uploaded and verified (2026-09-15, `robotalk_model_release/upload_receipt.json`):** the 5 Instruct and 5 Thinking+rationale scale adapters, `DorianAtSchool/RoboTalk-Qwen3-VL-8B-{Instruct,Thinking-Rationale}-{30,60,90,120,150}traj`.
+  - **Still to publish:** the 2 remaining Figure 7 arms at 30 per task (Instruct+rationale and Thinking without rationale), and the license and arXiv fields on all model cards.
+  - Group them in one HF collection.
+  - Each card needs `base_model`, `license: apache-2.0`, the split, hyperparameters (implementation reference §9.2) and parser flags (the Thinking-without-rationale parser recovery).
+  - Reuse `robotalk_model_release/manifest.json` and verify it with `audit_paper_checkpoint_provenance.py` in the archive, before that script is trimmed.
+- The DAgger adapters and any non-paper checkpoints are not published, or are removed if already uploaded.
+
+#### Step 8 — Documentation
+
+- **New top-level README**, in this order:
+  1. title, authors, paper, dataset and model links, teaser figure (one image, under 1 MB);
+  2. Installation;
+  3. Quickstart (load the dataset, replay a trajectory, run one eval episode);
+  4. **Results**: the paper's numbers for Table IV, Figures 6–7 and the diversity table, as markdown tables, each followed by its `reproduce.py` command with expected compute (GPU-hours, API cost) and the fast versus full path;
+  5. Repository structure;
+  6. Generating new data (needs a Gemini API key);
+  7. Limitations;
+  8. License (the B.1a table, condensed);
+  9. Citation;
+  10. Acknowledgements (RoboCasa365, robosuite).
+- Turn the internal implementation reference into concise public docs (`docs/concurrency_semantics.md`, `docs/data_format.md`, `docs/tool_interface.md`, `docs/evaluation.md`), removing cluster paths, history notes and "do not claim" language.
+- Delete the obsolete `training/bc_task_vlm/README.md`, `LIVE_SIM_EVAL.md`, `FIXED_LIVE_SIM.md` and `EXPERIMENT.md`.
+- Add `NOTICE` and `docs/FORK_CHANGES.md` covering the upstream RoboCasa365 commit, our changes to `robocasa/` code, and the modified CC BY 4.0 assets.
+- Add `CITATION.cff` (`preferred-citation` → arXiv:2609.23997), a BibTeX block, and upstream citations for RoboCasa365 (ICLR 2026), RoboCasa (RSS 2024) and robosuite.
+
+#### Step 9 — Tests and CI
+
+- Split the tests into `tests/unit` (CPU, fast), `tests/sim` (`@pytest.mark.sim`) and `tests/gpu`.
+- Delete tests for removed subsystems (DAgger, RL, work partitions, sweeps, HF staging).
+- Add `.github/workflows/ci.yml` running ruff, `pytest tests/unit` on Python 3.11, and the path and e-mail guard from Step 5.
+- Add one smoke test that loads 2 trajectories from a tiny bundled fixture and builds SFT examples, using no network.
+- Add one test that `reproduce.py <x> --dry-run` resolves every config and path.
+
+#### Step 10 — Reproduction verification (acceptance gate)
+
+- From a fresh clone and a fresh environment on a machine *other than* this cluster's usual setup:
+  - `reproduce.py dataset-stats` and `diversity` match the paper exactly;
+  - `fig7 --from-adapters` (smallest GPU cost) matches the paper within Wilson CI on each cell.
+- Spot-check one `table4` mode and one `fig6` scale point. The full sweeps are optional.
+- Have a co-author who was not involved in the cleanup follow the README unaided, and record their friction points.
+
+#### Step 11 — Release
+
+- Create `github.com/DorianAtSchool/robotalk` (empty).
+- Export the cleaned tree with no history:
+  ```bash
+  git archive publication-cleanup | tar -x -C ../robotalk-release
+  ```
+  Then run `git init` there and make a single initial commit, attributed to the authors.
+- Make a final scan of the exported tree: `gitleaks`, the path and e-mail guard, and `du` to confirm no large files.
+- Push, tag `v1.0`, and create a GitHub release with no result attachments. Optionally connect Zenodo for a DOI.
+- Link the code from the HF dataset and model cards, the arXiv comments field, and the project page.
+
+### B.3 Definition of done
+
+- [ ] Pre-publication snapshot committed, tagged and pushed to the private archive (Step 1).
+- [ ] Every file in the release tree is reachable from the paper-to-code map (Step 2). DAgger and other unreported work are gone.
+- [ ] Zero cluster paths, e-mails or secrets (CI-enforced).
+- [ ] A fresh install and the quickstart work on a clean machine.
+- [ ] Every paper number appears in the README with a single `reproduce.py` command, and the Step 10 checks pass.
+- [ ] Dataset (CC BY 4.0) and adapters (Apache-2.0) are on the HF Hub with complete cards.
+- [ ] LICENSE (MIT), NOTICE (RoboCasa365 and robosuite attribution, modified-asset list) and CITATION.cff are present, and CI is green.
+- [ ] Public repo `DorianAtSchool/robotalk` is created from a history-free export and tagged `v1.0`.
