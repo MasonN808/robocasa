@@ -621,6 +621,22 @@ class WaitTests(unittest.TestCase):
 
 
 class ContentionTests(unittest.TestCase):
+    def test_entering_while_the_occupant_navigates_away_is_a_reported_conflict(self):
+        # Regression: the occupant leaves by navigating (not give_space); the
+        # conflict used to crash with StopIteration instead of being reported.
+        validator = build()
+        candidate = validator.canonicalize(tick_plan(
+            {"agent_0": action("communicate", to="agent_1", message="a b c d"),
+             "agent_1": action("communicate", to="agent_0", message="a b c d")},
+            {"agent_0": action("navigate_to_fixture", fixture_id="counter"),
+             "agent_1": action("navigate_to_fixture", fixture_id="sink")},
+            {"agent_0": action("navigate_to_fixture", fixture_id="sink"),
+             "agent_1": action("navigate_to_fixture", fixture_id="counter")},
+        ))
+        run = validator.replay(candidate, model=LOCK_STEP)
+        self.assertEqual(len(run.conflicts), 1)
+        self.assertIn("agent_1 navigates away", run.conflicts[0])
+
     def test_cabinet_door_transition_conflicts_with_content_access(self):
         opening = step(
             "agent_0", "open_hinged_part", target_id="cab", part_id="door"

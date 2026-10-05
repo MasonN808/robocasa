@@ -538,18 +538,38 @@ class ConcurrentTaskValidator:
                     if key in seen_conflicts:
                         continue
                     seen_conflicts.add(key)
-                    occupant = next(
-                        call["agent"]
-                        for call in instant_calls
-                        if call["agent"] != entrant
-                        and call.get("tool") in GIVE_SPACE_TOOL_NAMES
-                        and (call.get("args") or {}).get("fixture_id") == resource
+                    # The occupant is whoever stood at the resource's
+                    # workspace at the start of the tick; it may be leaving
+                    # with give_space, navigating away, or staying put.
+                    target = canonical_agent_workspace(
+                        validator.initial_state, resource
                     )
+                    occupant = next(
+                        (
+                            agent_id
+                            for agent_id, agent_state in state.agents.items()
+                            if agent_id != entrant
+                            and canonical_agent_workspace(
+                                validator.initial_state,
+                                getattr(agent_state, "location", None),
+                            ) == target
+                        ),
+                        "another agent",
+                    )
+                    occupant_call = next(
+                        (c for c in instant_calls if c["agent"] == occupant), {}
+                    )
+                    if occupant_call.get("tool") in GIVE_SPACE_TOOL_NAMES:
+                        action = "calls give_space"
+                    elif occupant_call.get("tool") in NAVIGATION_TOOL_NAMES:
+                        action = "navigates away"
+                    else:
+                        action = "remains there"
                     result.conflicts.append(
                         f"  t={clock:g}: {entrant} enters or uses {resource!r} "
-                        f"while its beginning-of-tick occupant {occupant} calls "
-                        "give_space. The departure takes effect after this "
-                        "atomic tick; enter on the following tick."
+                        f"while its beginning-of-tick occupant {occupant} "
+                        f"{action}. A departure takes effect after this atomic "
+                        "tick; enter on the following tick."
                     )
             self._check_simultaneous_use(steps, instant, clock, seen_conflicts, result)
 
