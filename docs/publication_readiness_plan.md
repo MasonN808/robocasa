@@ -140,7 +140,7 @@ A release is "complete and clean" when every item below holds.
    - Portability rules still apply: no cluster paths, accounts, partitions or e-mail addresses (Step 5).
 3. **Scope is strictly what the paper reports.** That means:
    - the multi-agent simulator with its 53 tasks, FSM and coordination mechanisms;
-   - the generation pipeline with the production Structured Random sampling (the other sampling strategies and the Table III / Fig. 4 diversity analysis are deferred to Step 12);
+   - the generation pipeline with the production Structured Random sampling (the other sampling strategies and the Table III / Fig. 4 diversity analysis are deferred to Step 13);
    - the dataset export;
    - LoRA SFT: scale 30–150, Instruct/Thinking × rationale;
    - live-sim evaluation;
@@ -258,7 +258,7 @@ This table is the whitelist. Anything not reachable from it, by import or by a d
 - **Held-out cohort.** Thinking+rationale 60/90/120 held-out numbers come from `_native43matched` reruns on the native 43/10 cohort. The reproduction path, which always uses the native cohort, therefore targets the same episodes as the paper.
 - **The Thinking-without-rationale arm** was evaluated with parser recovery (`_recovery_v1`). Its released config must enable that flag, and its model card must say so.
 - **Task specifications.** The README and docs refer to the 53 verified task specifications as they are. They do not mention how the specs were produced, and the task-spec generation pipeline is not released.
-- **Table III / Fig. 4 (diversity) are deferred** to the post-release Step 12. The raw sampling-comparison trajectories are not on Unity: Mason computed the numbers on NCSA Delta from `sampling_methods_data_52Tasks_30Trajectories`, and the archived summary `data_analysis/plots/model_sampling_comparison/model_method_diversity_summary.csv` covers 51 tasks.
+- **Table III / Fig. 4 (diversity) are deferred** to the post-release Step 13. The raw sampling-comparison trajectories are not on Unity: Mason computed the numbers on NCSA Delta from `sampling_methods_data_52Tasks_30Trajectories`, and the archived summary `data_analysis/plots/model_sampling_comparison/model_method_diversity_summary.csv` covers 51 tasks.
 
 #### Step 3 — Trim (on `publication-cleanup`)
 
@@ -280,7 +280,7 @@ This table is the whitelist. Anything not reachable from it, by import or by a d
   - all of `reports/` and `eval_runs/`.
 - **`eval_manifests/` (4.5 MB).** Keep only the manifests that define the paper's evaluation population: the 43/10 split, the nested scale manifests, and the fixed configuration cohort. Move them to `configs/eval/`.
   - Better still, check that `freeze_configuration_cohort.py` and `build_scale_experiment_manifests.py` regenerate them byte-identically from a seed. Then ship only the seed, plus the files as a checksum test.
-- **`data_analysis/`.** Delete all of it from the release, including the diversity analysis (deferred to Step 12) and `select_held_out_tasks.py`. The 43/10 split ships as a config file. Also delete the non-production sampling modes (High Temp, Random, Verbalized) from `sampling/` and the generation prompts.
+- **`data_analysis/`.** Delete all of it from the release, including the diversity analysis (deferred to Step 13) and `select_held_out_tasks.py`. The 43/10 split ships as a config file. Also delete the non-production sampling modes (High Temp, Random, Verbalized) from `sampling/` and the generation prompts.
 - **Dead code paths** flagged in the implementation reference:
   - the legacy flat-example replay;
   - the centralized-history and step-index prompt options;
@@ -428,7 +428,23 @@ These are inputs for others to build on. Results files are not shipped.
 - Push, tag `v1.0`, and create a GitHub release with no result attachments. Optionally connect Zenodo for a DOI.
 - Link the code from the HF dataset and model cards, the arXiv comments field, and the project page.
 
-#### Step 12 — After release: diversity analysis (Table III / Fig. 4)
+#### Step 12 — After release: retrain and evaluate on dataset v1.1 (Figs. 6–7)
+
+Dataset v1.1 replaces 95 of the 7,950 trajectories (see the dataset card), and the released adapters were trained on v1.0. This step measures how the paper's SFT results hold up on v1.1, using the public repository exactly as an outside user would.
+
+1. From a fresh clone of the public repo, run `scripts/reproduce.py fig6 --train` and `scripts/reproduce.py fig7 --train`. These:
+   - download dataset revision `v1.1` and rebuild the training layout;
+   - retrain all 12 adapters (5 Instruct and 5 Thinking+rationale scales, plus Instruct+rationale and Thinking-no-rationale at 30 per task);
+   - evaluate them on the native 43/10 cohort and regenerate both figures.
+2. Compare against the paper per cell, on both error-free and final FSM success with Wilson intervals. Expect agreement within CI rather than identity: 95 trajectories differ, GPU training is not bit-deterministic, and the Thinking models are evaluated with sampling.
+3. Report the comparison, for example as a `v1.1` results table in the README.
+   - If any cell moves outside its interval, investigate before publishing new numbers.
+   - Decide whether to release the v1.1 adapters alongside the paper's v1.0 adapters, under distinct repo names.
+4. Fig. 5 (communication ablation) uses untuned models and is unaffected by the dataset version. It needs no rerun for v1.1.
+
+Compute: 12 trainings (one epoch each, on 4 GPUs) plus 12 × 530 live-sim episodes.
+
+#### Step 13 — After release: diversity analysis (Table III / Fig. 4)
 
 Run this from this archive repo, not the public one, once `DorianAtSchool/robotalk` is published.
 
