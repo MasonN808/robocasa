@@ -455,3 +455,21 @@ All golden checks are unchanged after the move.
 - `configs/experiments.yaml` now has `vllm.profile_serve_args`, `lora_serve_args` and `env`.
 - `tests/unit/test_reproduce_dry_run.py` pins each cell's parsers.
 - The client arguments of every recorded cell match the paper. The only differences are flags whose values are now built in (private history, no step indices, consume-once observations, trained `get_image`) and the default `--communication-mode full`.
+
+## 15. Step 10: acceptance run on a clean export
+
+The acceptance run uses `git archive HEAD` with a fresh `uv sync --frozen --all-extras` and a fresh asset download.
+
+**Assets.**
+- All 6 RoboCasa asset packages download and extract: 23 GB on disk; the README now says so.
+- None of the 384 tracked files under `robocasa/models/assets` is changed by the extraction.
+
+**Tests.** 768 passed, unit plus sim. The 7 skips need a local dataset.
+
+**Fig. 3.** It failed on a fresh clone, and two fixes were needed:
+- The exporter now creates its output folder; `tests/unit/test_fig3.py` covers this.
+- `matplotlib` resolved to 3.10.8 instead of the paper environment's 3.11.1, and the figure-styling code depends on 3.11.
+  - All direct dependencies are now pinned to the paper environment's versions.
+  - That also corrected `opencv-python` (4.13 → 5.0.0.93), which the live-sim image pipeline uses, plus `pyarrow`, `safetensors`, `tqdm`, `lxml` and `imageio`.
+  - The 31 remaining lock-versus-paper-env differences are patch-level utility packages (HTTP clients, certificates, fonts, pydantic).
+- After both fixes, Fig. 3 rebuilds byte-identical to the paper-equivalent render.

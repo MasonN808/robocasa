@@ -81,6 +81,7 @@ def _save(fig, filename: str) -> None:
     from robotalk.analysis.plot_style_utils import style_paper_figure
     style_paper_figure(fig)
     fig.tight_layout()
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     path = ARTIFACT_DIR / filename
     fig.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
     plt.close(fig)

@@ -18,8 +18,9 @@ authors = [
     { name = "Kyle H. Wray" },
     { name = "Shlomo Zilberstein" },
 ]
-# Simulator, symbolic validator and live-sim evaluation client. Versions are
-# the ones the paper's results were produced with; uv.lock pins the rest.
+# Simulator, symbolic validator and live-sim evaluation client. Every direct
+# dependency is pinned to the version the paper's results were produced with;
+# uv.lock pins the rest.
 dependencies = [
     # robosuite exactly as the experiments ran it: upstream ARISE aaa8b9b plus
     # one commit that gives each robot's manipulator_mount body a unique name,
@@ -29,31 +30,31 @@ dependencies = [
     "numpy==2.2.5",
     "numba==0.61.2",
     "scipy==1.15.3",
-    "av",
-    "gymnasium",
-    "h5py",
-    "imageio",
-    "imageio-ffmpeg",  # MP4 writer for live-sim episode recordings
-    "lxml",
-    "matplotlib",
-    "opencv-python",
-    "Pillow",
-    "pyyaml",
-    "rich",
-    "termcolor",
-    "tqdm",
-    "huggingface_hub",
-    "pyarrow",
+    "av==18.0.0",
+    "gymnasium==0.29.1",
+    "h5py==3.16.0",
+    "imageio==2.37.4",
+    "imageio-ffmpeg==0.6.0",  # MP4 writer for live-sim episode recordings
+    "lxml==6.1.1",
+    "matplotlib==3.11.1",
+    "opencv-python==5.0.0.93",
+    "Pillow==12.2.0",
+    "pyyaml==6.0.3",
+    "rich==15.0.0",
+    "termcolor==3.3.0",
+    "tqdm==4.69.0",
+    "huggingface_hub==0.36.2",
+    "pyarrow==25.0.0",
 ]
 
 [project.optional-dependencies]
 # Trajectory generation and the Gemini evaluation cells.
 gen = [
-    "google-genai>=2.15",
-    "google-auth",
-    "datasets",
+    "google-genai==2.15.0",
+    "google-auth==2.56.2",
+    "datasets==3.6.0",
 ]
-# LoRA fine-tuning of Qwen3-VL (flash-attn is installed separately; see README).
+# LoRA fine-tuning of Qwen3-VL (FlashAttention-2 is the separate `flash` extra).
 train = [
     "torch==2.7.1",
     "torchvision==0.22.1",
@@ -61,9 +62,9 @@ train = [
     "peft==0.19.1",
     "accelerate==1.14.0",
     "datasets==3.6.0",
-    "safetensors",
-    "zstandard",
-    "wandb",
+    "safetensors==0.8.0",
+    "zstandard==0.25.0",
+    "wandb==0.25.0",
 ]
 # FlashAttention-2, as used for the paper's training runs: the prebuilt wheel
 # for CUDA 12 / torch 2.7 / Python 3.11 (building from source needs nvcc).
@@ -72,7 +73,7 @@ flash = [
     "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3.post1/flash_attn-2.8.3.post1+cu12torch2.7cxx11abiTRUE-cp311-cp311-linux_x86_64.whl ; sys_platform == 'linux' and python_version == '3.11' and platform_machine == 'x86_64'",
 ]
 dev = [
-    "pytest",
+    "pytest==9.1.1",
 ]
 
 [project.urls]

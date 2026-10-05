@@ -40,7 +40,7 @@ uv sync --all-extras          # or pick extras: --extra train --extra gen --extr
 source .venv/bin/activate
 
 python -m robocasa.scripts.setup_macros
-python -m robocasa.scripts.download_kitchen_assets   # RoboCasa365 assets, about 10 GB
+python -m robocasa.scripts.download_kitchen_assets   # RoboCasa365 assets: ~10 GB download, 23 GB on disk
 cp .env.example .env          # optional: data/output roots, Gemini credentials, vLLM launcher
 ```
 
