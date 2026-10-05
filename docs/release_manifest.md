@@ -473,3 +473,23 @@ The acceptance run uses `git archive HEAD` with a fresh `uv sync --frozen --all-
   - That also corrected `opencv-python` (4.13 → 5.0.0.93), which the live-sim image pipeline uses, plus `pyarrow`, `safetensors`, `tqdm`, `lxml` and `imageio`.
   - The 31 remaining lock-versus-paper-env differences are patch-level utility packages (HTTP clients, certificates, fonts, pydantic).
 - After both fixes, Fig. 3 rebuilds byte-identical to the paper-equivalent render.
+
+**Fig. 7 from the released adapters** (clean export, `reproduce.py fig7`, 1× RTX PRO 6000, 4 h 45 min). Every cell falls inside the reproduced 95% Wilson interval of the paper value:
+
+| Cell | Reproduced | Paper |
+|---|---|---|
+| Instruct, train | 349/430 | 352/430 |
+| Instruct, held-out | 45/100 | 45/100 |
+| Instruct + rationale, train | 361/430 | 355/430 |
+| Instruct + rationale, held-out | 59/100 | 58/100 |
+| Thinking, train | 316/430 | 308/430 |
+| Thinking, held-out | 50/100 | 50/100 |
+| Thinking + rationale, train | 351/430 | 345/430 |
+| Thinking + rationale, held-out | 68/100 | 71/100 |
+
+The vLLM server logs confirm the paper's parsers for each profile.
+
+**Plotting bug found.**
+- `reproduce.py fig7` crashed when plotting: the shared Fig. 6/7 exporter drew every panel and failed on the missing Fig. 6 cells. Under `set -e` that also ended the job before the spot-checks.
+- The exporter now draws only panels whose cells are all evaluated; `tests/unit/test_partial_figures.py` covers this.
+- The spot-checks were resubmitted as job 1199098.

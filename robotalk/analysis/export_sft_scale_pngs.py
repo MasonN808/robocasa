@@ -129,12 +129,7 @@ def _combined_scale_plot(indexed: dict) -> None:
 
 
 def _thinking_ablation_plot(indexed: dict) -> None:
-    models = [
-        "SFT 30/task",
-        "Instruct + rationale SFT 30/task",
-        "Thinking + no rationale SFT 30/task",
-        "Thinking + rationale SFT 30/task",
-    ]
+    models = ABLATION_MODELS
     labels = ["Qwen-Inst", "Qwen-Inst\n+ rationale", "Qwen-Think", "Qwen-Think\n+ rationale"]
     colors = (BLUE, "#8e79b8", "#d6a03a", ORANGE)
     fig, axis = plt.subplots(figsize=(3.5, 2.55))
@@ -170,25 +165,42 @@ def _thinking_ablation_plot(indexed: dict) -> None:
     _save(fig, "thinking_rationale_30task_ablations.png")
 
 
+ABLATION_MODELS = [
+    "SFT 30/task",
+    "Instruct + rationale SFT 30/task",
+    "Thinking + no rationale SFT 30/task",
+    "Thinking + rationale SFT 30/task",
+]
+
+
+def _complete(indexed: dict, models: list[str]) -> bool:
+    return all((model, split) in indexed for model in models for split in SPLITS)
+
+
 def main() -> None:
+    """Draw every Fig. 6 and Fig. 7 panel whose cells have all been evaluated."""
+
     artifact = json.loads(ARTIFACT.read_text(encoding="utf-8"))
     datasets = artifact["snapshot"]["datasets"]
     scale = _index(datasets["scale_results"])
     thirty = _index(datasets["thirty_results"])
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 7.3})
 
-    _split_scale_plot(
-        scale, [f"SFT {value}/task" for value in SCALES],
-        "sft_scaling_instruct.png", BLUE,
-    )
-    _split_scale_plot(
-        scale, [f"Thinking + rationale SFT {value}/task" for value in SCALES],
-        "sft_scaling_thinking_rationale.png", ORANGE,
-    )
-    _combined_scale_plot(scale)
-    _thinking_ablation_plot(thirty)
+    instruct = [f"SFT {value}/task" for value in SCALES]
+    thinking = [f"Thinking + rationale SFT {value}/task" for value in SCALES]
+    if _complete(scale, instruct):
+        _split_scale_plot(scale, instruct, "sft_scaling_instruct.png", BLUE)
+    if _complete(scale, thinking):
+        _split_scale_plot(scale, thinking, "sft_scaling_thinking_rationale.png", ORANGE)
+    if _complete(scale, instruct + thinking):
+        _combined_scale_plot(scale)
+    else:
+        print("Fig. 6: skipped, not every scale has been evaluated")
+    if _complete(thirty, ABLATION_MODELS):
+        _thinking_ablation_plot(thirty)
+    else:
+        print("Fig. 7: skipped, not every 30/task cell has been evaluated")
     print(write_caption_csv(ARTIFACT_DIR))
-
 
 if __name__ == "__main__":
     main()
