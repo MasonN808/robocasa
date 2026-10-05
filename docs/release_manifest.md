@@ -265,3 +265,34 @@ All golden checks are unchanged after the move.
 - The HF export has the images (identical files) and the raw generation records, but not those three JSON files.
 - Proposed: publish them as an extra HF config (well under 1.8 GB) and add a converter that rebuilds `data/robotalk_rendered/` from the Hub.
 - Evaluation from released adapters does not need the dataset; the cohort is configuration-native.
+
+## 9. Dataset v1.1 (published 2026-10-05)
+
+`DorianAtSchool/RoboTalk` now has two tags:
+- `v1.0` = `b20be4f`: the paper's data, unchanged.
+- `v1.1` = `89a7771` = `main`.
+
+**What changed in v1.1.** 95 trajectories (1.2%) were replaced:
+- **66 re-rendered.** These were stove pickup or navigation steps that failed in the August render. The current executor renders them with every step succeeding, and their plans are unchanged.
+- **29 regenerated** with the production cascade, for the same task, run index, initial state and coordinator:
+  - 24 PlateStoreDinner and 2 PrepareSoupServing plans entered an exclusive fixture in the tick its occupant left. That breaks the paper's rule, and the validator used at generation time missed it.
+  - 3 more still failed in simulation after re-rendering.
+
+**Replaced share by split.**
+- 43 trained tasks: 65 / 6,450 (1.0%).
+- 10 held-out tasks: 30 / 1,500 (2.0%).
+- Nested 30–150/task training subsets: about 1% each.
+
+**Upload.**
+- One commit: 29 raw records, 95 media archives, both tables, `dataset_info.json`, and an Apache-2.0 card with a short Versions note. `preview.html` was deleted.
+- All 128 uploaded files were hash-verified.
+- The export diff confirmed that nothing outside the 95 changed.
+
+**Checks.**
+- The 29 regenerated trajectories pass strict revalidation, and all 95 render with every step succeeding.
+- `robotalk.release.materialize_training_layout` rebuilds the training layout from the published files alone. It gives identical training examples on 835 unchanged trajectories (63,242 examples) and on all 95 repaired ones (7,998 examples).
+- The validator crash behind the 26 failures (an occupant lookup that assumed `give_space`) is fixed in `2154ca0`.
+
+**Paper-era archive.**
+- The repair working folder is `robotalk_v1_1_repair/`, holding the repair sets, logs, the card source and the receipt.
+- The v1.1 roots are symlink overlays: `tick53x150_state_grounded_cascade_v1_1_{raw,rendered}`.
