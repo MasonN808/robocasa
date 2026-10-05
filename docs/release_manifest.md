@@ -296,3 +296,10 @@ All golden checks are unchanged after the move.
 **Paper-era archive.**
 - The repair working folder is `robotalk_v1_1_repair/`, holding the repair sets, logs, the card source and the receipt.
 - The v1.1 roots are symlink overlays: `tick53x150_state_grounded_cascade_v1_1_{raw,rendered}`.
+
+**Explorer Space.**
+- `DorianAtSchool/RoboTalk-Explorer` now serves the v1.1 bundle (Space commit `a7a243e`).
+- The catalog and episode files of the 29 regenerated trajectories were updated, and episodes now carry `media_archive`.
+- Media is fetched from the dataset's `v1.1` tag, not from `main` (`e0db464`).
+- The unused leftovers `media/`, `data/ticks.json` and `style.css` were removed.
+- All 7,954 files were hash-verified.
