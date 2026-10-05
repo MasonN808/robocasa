@@ -38,3 +38,20 @@ def test_fig7_plots_without_the_fig6_cells(tmp_path):
     assert (figures / "thinking_rationale_30task_ablations.png").exists()
     assert not (figures / "sft_scaling_combined.png").exists()
     assert "Fig. 6: skipped" in result.stdout
+
+
+def test_a_single_model_run_skips_the_plot_of_an_incomplete_figure(tmp_path):
+    """`reproduce.py fig5 --models X` evaluates X but must not plot Fig. 5
+    until every Fig. 5 cell exists (it used to crash in the plotter)."""
+
+    _fake_cell(tmp_path, "qwen_base_minimal")
+    for split in ("train_task_types", "heldout_task_types"):
+        (tmp_path / "eval" / "qwen_base_minimal" / split / "aggregate" / "live_sim_metrics.json").write_text("{}")
+    env = {**os.environ, "ROBOTALK_OUTPUT_ROOT": str(tmp_path), "MPLBACKEND": "Agg"}
+    result = subprocess.run(
+        [sys.executable, "scripts/reproduce.py", "fig5", "--models", "qwen_base_minimal"],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=300,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "qwen_base_minimal: already evaluated" in result.stdout
+    assert "fig5: skipping plot, missing evaluations" in result.stdout

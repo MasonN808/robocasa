@@ -82,12 +82,13 @@ class Reproducer:
         )
 
     # -- selection ---------------------------------------------------------
-    def models_for(self, figure: str) -> list[str]:
+    def models_for(self, figure: str, *, selected_only: bool = True) -> list[str]:
+        """Model cells of a figure; with selected_only, restricted to --models."""
         models = [
             model_id for model_id, model in self.config["models"].items()
             if figure in model["figures"]
         ]
-        if self.args.models:
+        if selected_only and self.args.models:
             wanted = set(self.args.models.split(","))
             models = [m for m in models if m in wanted]
         return models
@@ -290,7 +291,9 @@ class Reproducer:
         for name in figures:
             missing = [] if name == "fig3" else [
                 f"{model_id}/{split}"
-                for model_id in self.models_for(name)
+                # A figure is plotted only once all of its cells exist, not just
+                # the ones selected with --models.
+                for model_id in self.models_for(name, selected_only=False)
                 for split in self.config["evaluation"]["cohort_splits"]
                 if not self.cell_done(model_id, split)
             ]

@@ -493,3 +493,36 @@ The vLLM server logs confirm the paper's parsers for each profile.
 - `reproduce.py fig7` crashed when plotting: the shared Fig. 6/7 exporter drew every panel and failed on the missing Fig. 6 cells. Under `set -e` that also ended the job before the spot-checks.
 - The exporter now draws only panels whose cells are all evaluated; `tests/unit/test_partial_figures.py` covers this.
 - The spot-checks were resubmitted as job 1199098.
+
+**Spot-checks** (job 1199098):
+
+| Cell | Reproduced | Paper | Reproduced 95% interval |
+|---|---|---|---|
+| Fig. 6, Thinking + rationale 120/task, train | 391/430 | 388/430 | 87.8–93.3% |
+| Fig. 6, Thinking + rationale 120/task, held-out | 73/100 | 77/100 | 63.6–80.7% |
+| Fig. 5, base Qwen Minimal, train | 5/430 | 5/430 | exact |
+| Fig. 5, base Qwen Minimal, held-out | 0/100 | 0/100 | exact |
+
+**Second plotting bug found.** The job again failed at plotting. `reproduce.py` decided whether a figure was complete from the `--models` subset only, so a one-model run plotted an incomplete figure.
+- Completeness is now checked against every cell of the figure.
+- `test_partial_figures.py::test_a_single_model_run_skips_the_plot_of_an_incomplete_figure` covers it.
+- In the export, `fig5 --models …`, `fig6 --models …` and `fig7` all exit 0: evaluated cells are skipped and incomplete figures are not plotted.
+
+### Step 10 status
+
+**Done** (clean export of `HEAD`, fresh env and assets, this cluster):
+- tests: 768 passed;
+- Fig. 3 byte-identical;
+- Fig. 7 from the released adapters: all 8 cells within the 95% intervals;
+- the Fig. 6 and Fig. 5 spot-checks above.
+
+**Not done:**
+- `dataset-stats`: there is no such command; the dataset counts are covered by the dataset card and the loader.
+- A non-cluster machine: not available to me.
+- The co-author README walkthrough: for the authors.
+- Gemini Fig. 5 cells: skipped to avoid API cost.
+
+**Fixed along the way:**
+- vLLM parsers (`cef8e03`);
+- dependency pins and the Fig. 3 output directory (`7a827d0`);
+- partial-figure plotting (`916acca` and this commit).
