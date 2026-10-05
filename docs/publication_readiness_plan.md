@@ -386,7 +386,7 @@ These are inputs for others to build on. Results files are not shipped.
 
 - **New top-level README**, in this order:
   1. title, authors, paper, dataset and model links, teaser figure (one image, under 1 MB);
-  2. Installation;
+  2. Installation, with a clearly marked **GPU requirements** note: torch comes from the CUDA 12.8 index (needed on Blackwell); it supports compute capability 7.5–12.0 and drivers that support CUDA 12.8 (≥ 570), not Volta or older. Also cover vLLM via a container or separate env (`VLLM_LAUNCHER`) and installing flash-attn separately;
   3. Quickstart (load the dataset, replay a trajectory, run one eval episode);
   4. **Results**: the paper's numbers for Figs. 5–7 and the Fig. 3 phase counts (values in the Step 2 cross-check), as markdown tables, each followed by its `reproduce.py` command with expected compute (GPU-hours, API cost) and the fast versus full path;
   5. Repository structure;

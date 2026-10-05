@@ -336,3 +336,40 @@ All golden checks are unchanged after the move.
 - Suite: 574 passed on a compute node, with a 72-trajectory corpus materialized from v1.1.
 
 **Credentials.** A regex scan found no keys or tokens. `gitleaks` is not installed on the cluster, so it moves to Step 11 on the exported tree.
+
+## 11. Step 6 (dependencies and installation)
+
+**Packaging.**
+- A single `pyproject.toml` (`robotalk` 1.0.0, Apache-2.0, the paper's authors) packages `robotalk` and the vendored `robocasa`.
+- Core dependencies are the simulator stack pinned to the paper's versions (`mujoco` 3.3.1, `numpy` 2.2.5, `numba` 0.61.2, `scipy` 1.15.3) plus what `robotalk` imports.
+- Extras:
+
+  | Extra | Contents |
+  |---|---|
+  | `gen` | `google-genai`, `google-auth`, `datasets` |
+  | `train` | `torch` 2.7.1, `transformers` 4.57.6, `peft` 0.19.1, `accelerate` 1.14.0, … (the paper environment's versions) |
+  | `flash` | prebuilt flash-attn 2.8.3.post1 wheel (Linux, Python 3.11) |
+  | `dev` | `pytest` |
+
+- Packages that nothing in the release imports were dropped: `tianshou`, `lerobot`, `pynput`, `hidapi`, `tensorboard`, …
+- vLLM is not an extra. The paper ran vLLM 0.27.1 in a container, and `VLLM_LAUNCHER` selects it.
+- `uv.lock` was regenerated.
+
+**GPU assumption.**
+- `torch` and `torchvision` come from the PyTorch CUDA 12.8 index, as in the paper environment.
+- Those wheels cover compute capability 7.5–12.0 (Turing through Blackwell) and need a driver that supports CUDA 12.8 (≥ 570). They do not support Volta or older GPUs.
+- The default PyPI wheel (CUDA 12.6) fails on Blackwell with "no kernel image is available".
+- This is stated in `pyproject.toml`, and the README must state it too (Step 8).
+
+**robosuite.**
+- The `MasonN808/robosuite@dev` submodule was removed.
+- The fork is upstream ARISE `aaa8b9b` plus one change that prefixes the `manipulator_mount` body name per robot, which two mobile manipulators need. Upstream master still lacks it.
+- We now pin upstream `aaa8b9b`, and `robocasa/utils/robosuite_compat.py`, installed on `import robocasa`, renames the body after `add_mobile_base`.
+- `tests/test_robosuite_compat.py` shows that the result is byte-identical to the fork's robot MJCF.
+- Licenses: the root `LICENSE` is now Apache-2.0, RoboCasa's MIT text moved to `robocasa/LICENSE`, and a `NOTICE` was added. It points at `docs/FORK_CHANGES.md` (Step 8).
+
+**From-scratch install** (`uv sync --frozen --all-extras` into a fresh venv):
+- Tracked tests: 576 passed.
+- Oracle live-sim replay (8 trajectories): identical to the cleaned code under the fork, apart from timing fields.
+- One LoRA training step on Qwen3-VL-8B-Instruct, on an RTX PRO 6000 (Blackwell), passed with both `sdpa` and `flash_attention_2`.
+- Still to check (Step 10, on the exported tree): the RoboCasa asset download, and `pip`-only installation.

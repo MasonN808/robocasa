@@ -3,61 +3,105 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "robocasa"
+name = "robotalk"
 version = "1.0.0"
-description = "RoboCasa365: A Large-Scale Simulation Framework for Training and Benchmarking Generalist Robots"
+description = "RoboTalk: Learning Multi-Robot Communication and Coordination from Multimodal Demonstrations"
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "robocasa/LICENSE"]
+requires-python = ">=3.11,<3.13"
 authors = [
-    { name = "Soroush Nasiriany" },
-    { name = "Sepehr Nasiriany" },
-    { name = "Abhiram Maddukuri" },
-    { name = "Yuke Zhu" },
+    { name = "Dorian Benhamou Goldfajn" },
+    { name = "Mason Nakamura" },
+    { name = "Saaduddin Mahmud" },
+    { name = "Justin Svegliato" },
+    { name = "Kyle H. Wray" },
+    { name = "Shlomo Zilberstein" },
 ]
-maintainers = [
-    { name = "Soroush Nasiriany", email = "soroush@cs.utexas.edu" },
-]
+# Simulator, symbolic validator and live-sim evaluation client. Versions are
+# the ones the paper's results were produced with; uv.lock pins the rest.
 dependencies = [
+    # Upstream robosuite at the commit the experiments used; the one multi-robot
+    # fix the experiments needed is applied by robocasa.utils.robosuite_compat.
+    "robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@aaa8b9b214ce8e77e82926d677b4d61d55e577ab",
+    "mujoco==3.3.1",
     "numpy==2.2.5",
     "numba==0.61.2",
     "scipy==1.15.3",
-    "mujoco==3.3.1",
-    "pygame",
-    "rich",
-    "tqdm",
-    "Pillow",
+    "av",
+    "gymnasium",
+    "h5py",
+    "imageio",
+    "lxml",
     "matplotlib",
     "opencv-python",
+    "Pillow",
     "pyyaml",
-    "pynput",
+    "rich",
     "termcolor",
-    "imageio",
-    "h5py",
-    "lxml",
-    "hidapi",
-    "tianshou==0.4.10",
-    "lerobot==0.3.3",
-    "gymnasium",
+    "tqdm",
+    "huggingface_hub",
+    "pyarrow",
+]
+
+[project.optional-dependencies]
+# Trajectory generation and the Gemini evaluation cells.
+gen = [
+    "google-genai>=2.15",
+    "google-auth",
+    "datasets",
+]
+# LoRA fine-tuning of Qwen3-VL (flash-attn is installed separately; see README).
+train = [
+    "torch==2.7.1",
+    "torchvision==0.22.1",
+    "transformers==4.57.6",
+    "peft==0.19.1",
+    "accelerate==1.14.0",
+    "datasets==3.6.0",
+    "safetensors",
+    "zstandard",
+    "wandb",
+]
+# FlashAttention-2, as used for the paper's training runs: the prebuilt wheel
+# for CUDA 12 / torch 2.7 / Python 3.11 (building from source needs nvcc).
+# Elsewhere, train with --attn-implementation sdpa.
+flash = [
+    "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3.post1/flash_attn-2.8.3.post1+cu12torch2.7cxx11abiTRUE-cp311-cp311-linux_x86_64.whl ; sys_platform == 'linux' and python_version == '3.11' and platform_machine == 'x86_64'",
+]
+dev = [
+    "pytest",
 ]
 
 [project.urls]
-Homepage = "https://github.com/robocasa/robocasa"
-Repository = "https://github.com/robocasa/robocasa"
-
-[dependency-groups]
-local = [
-    "robosuite",
-    "torch",
-]
+Paper = "https://arxiv.org/abs/2609.23997"
+Dataset = "https://huggingface.co/datasets/DorianAtSchool/RoboTalk"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["robocasa*"]
+include = ["robotalk*", "robocasa*"]
 
-[tool.uv]
-default-groups = ["local"]
+[tool.setuptools.package-data]
+robotalk = ["**/*.json", "**/*.md", "**/*.txt", "**/*.html"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# GPU ASSUMPTION: torch comes from the CUDA 12.8 index, matching the paper's
+# environment. These wheels have kernels for compute capability 7.5-12.0
+# (Turing, Ampere, Hopper, Blackwell) and need an NVIDIA driver that supports
+# CUDA 12.8 (>= 570). Blackwell GPUs (e.g. RTX PRO 6000, B200) require them:
+# the default PyPI torch 2.7.1 wheel (CUDA 12.6) fails there with "no kernel
+# image is available". Volta (V100) and older GPUs are not supported by these
+# wheels; on such machines point torch/torchvision at another index, e.g.
+# https://download.pytorch.org/whl/cu126.
 [tool.uv.sources]
-robosuite = { path = "robosuite", editable = true }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

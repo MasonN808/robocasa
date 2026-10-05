@@ -1,4 +1,0 @@
-[submodule "robosuite"]
-	path = robosuite
-	url = https://github.com/MasonN808/robosuite.git
-	branch = dev
