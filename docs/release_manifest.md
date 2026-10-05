@@ -252,6 +252,14 @@ All golden checks are unchanged after the move.
 
 **Fig. 5 caveat.** The paper's communication ablation was run on the 47/6 manifest and regrouped to 43/10. Configuration lists are identical per task, but episode sampling seeds include the split name. A native 43/10 rerun therefore draws different episodes for the 4 tasks that moved to held-out (40 of 100 held-out episodes). Expect agreement within CI, not identical held-out episodes. Gemini is also not bit-reproducible through the API.
 
+**Fig. 7 adapters published (2026-10-05).** `DorianAtSchool/RoboTalk-Qwen3-VL-8B-Instruct-Rationale-30traj` and `DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-30traj` are public and hash-verified. Both are the epoch-1.0 checkpoint (`checkpoint-648`). Their cards carry the paper's numbers, and the Thinking card documents the parser-recovery flag used in evaluation. All 12 Fig. 6–7 adapters are now on the Hub.
+
+**Training data on the Hub: what the published dataset contains (checked 2026-10-05).** Training reads three files per rendered trajectory: `original_trajectory.json`, `plan.json` and `metadata.json`.
+- `original_trajectory.json` is fully derivable from the published `raw/` records. Re-running `robotalk.generation.image.processor.post_process_trajectory` on all 7,950 raw records reproduces the steps (inserted observation calls with their templated rationale and image paths) and the tick rows identically.
+- Image files in the published media archives are the same files under the same names.
+- Not in the published dataset: per-step simulator execution status. 85 steps in 80 trajectories (72 pickups, 13 navigations) failed in the render, and training skips them. This lives only in `metadata.json`. `plan.json` adds only image paths and alignment bookkeeping, both derivable.
+- Pre-existing bug found: strict revalidation of 26 re-derived PlateStoreDinner trajectories crashes with `StopIteration` in `ConcurrentTaskValidator.replay` (an occupant lookup via `next()` without a default). The identical failure occurs on `pre-publication-snapshot`. Training is unaffected because it reads the stored verdict. Track it for Step 9.
+
 **Open item: training data on the Hub.**
 - `--train` needs the rendered per-trajectory layout: `original_trajectory.json`, `plan.json`, `metadata.json` and the images.
 - The HF export has the images (identical files) and the raw generation records, but not those three JSON files.

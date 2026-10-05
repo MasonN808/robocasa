@@ -124,9 +124,8 @@ models:
   thinking_rationale_s90:  {label: "Thinking + rationale SFT 90/task",  base: Qwen/Qwen3-VL-8B-Thinking, scale: 90,  train_reasoning: true, profile: thinking, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-90traj,  figures: [fig6]}
   thinking_rationale_s120: {label: "Thinking + rationale SFT 120/task", base: Qwen/Qwen3-VL-8B-Thinking, scale: 120, train_reasoning: true, profile: thinking, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-120traj, figures: [fig6]}
   thinking_rationale_s150: {label: "Thinking + rationale SFT 150/task", base: Qwen/Qwen3-VL-8B-Thinking, scale: 150, train_reasoning: true, profile: thinking, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-150traj, figures: [fig6]}
-  # Not yet published on the Hub: use --train, or set the adapter repo once released.
-  instruct_rationale_s30:  {label: "Instruct + rationale SFT 30/task",   base: Qwen/Qwen3-VL-8B-Instruct, scale: 30, train_reasoning: true,  profile: instruct, adapter: null, figures: [fig7]}
-  thinking_noreason_s30:   {label: "Thinking + no rationale SFT 30/task", base: Qwen/Qwen3-VL-8B-Thinking, scale: 30, train_reasoning: false, profile: thinking_parser_recovery, adapter: null, figures: [fig7]}
+  instruct_rationale_s30:  {label: "Instruct + rationale SFT 30/task",   base: Qwen/Qwen3-VL-8B-Instruct, scale: 30, train_reasoning: true,  profile: instruct, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Instruct-Rationale-30traj, figures: [fig7]}
+  thinking_noreason_s30:   {label: "Thinking + no rationale SFT 30/task", base: Qwen/Qwen3-VL-8B-Thinking, scale: 30, train_reasoning: false, profile: thinking_parser_recovery, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-30traj, figures: [fig7]}
 
   # --- Fig. 5 (communication ablation, untuned models) ---------------------
   qwen_base_none:          {label: "Base Qwen3-VL-8B", base: Qwen/Qwen3-VL-8B-Instruct, profile: instruct, communication_mode: none,         figures: [fig5]}
