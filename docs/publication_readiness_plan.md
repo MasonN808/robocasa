@@ -428,21 +428,27 @@ These are inputs for others to build on. Results files are not shipped.
 - Push, tag `v1.0`, and create a GitHub release with no result attachments. Optionally connect Zenodo for a DOI.
 - Link the code from the HF dataset and model cards, the arXiv comments field, and the project page.
 
-#### Step 12 — After release: retrain and evaluate on dataset v1.1 (Figs. 6–7)
+#### Step 12 — After release: retrain and evaluate on dataset v1.1 (Fig. 6)
 
-Dataset v1.1 replaces 95 of the 7,950 trajectories (see the dataset card), and the released adapters were trained on v1.0. This step measures how the paper's SFT results hold up on v1.1, using the public repository exactly as an outside user would.
+Dataset v1.1 replaces 95 of the 7,950 trajectories (see the dataset card), and the released adapters were trained on v1.0.
+- 30 of the 95 belong to held-out tasks and were never trained on.
+- The other 65 are about 1% of the training trajectories at every scale: 14/1,290 at 30 per task, 25/2,580 at 60, 37/3,870 at 90, 50/5,160 at 120 and 65/6,450 at 150.
 
-1. From a fresh clone of the public repo, run `scripts/reproduce.py fig6 --train` and `scripts/reproduce.py fig7 --train`. These:
-   - download dataset revision `v1.1` and rebuild the training layout;
-   - retrain all 12 adapters (5 Instruct and 5 Thinking+rationale scales, plus Instruct+rationale and Thinking-no-rationale at 30 per task);
-   - evaluate them on the native 43/10 cohort and regenerate both figures.
-2. Compare against the paper per cell, on both error-free and final FSM success with Wilson intervals. Expect agreement within CI rather than identity: 95 trajectories differ, GPU training is not bit-deterministic, and the Thinking models are evaluated with sampling.
+This step measures how the SFT scaling results hold up on v1.1, using the public repository exactly as an outside user would.
+
+1. From a fresh clone of the public repo, run `scripts/reproduce.py fig6 --train`. It:
+   - downloads dataset revision `v1.1` and rebuilds the training layout;
+   - retrains the 10 scaling adapters (Instruct and Thinking+rationale at 30, 60, 90, 120 and 150 trajectories per task);
+   - evaluates them on the native 43/10 cohort and regenerates Fig. 6.
+2. Compare against the paper per cell, on both error-free and final FSM success with Wilson intervals. Expect agreement within CI rather than identity: about 1% of training trajectories differ, GPU training is not bit-deterministic, and the Thinking models are evaluated with sampling.
 3. Report the comparison, for example as a `v1.1` results table in the README.
    - If any cell moves outside its interval, investigate before publishing new numbers.
    - Decide whether to release the v1.1 adapters alongside the paper's v1.0 adapters, under distinct repo names.
-4. Fig. 5 (communication ablation) uses untuned models and is unaffected by the dataset version. It needs no rerun for v1.1.
+4. Not rerun:
+   - Fig. 5 uses untuned models and is unaffected by the dataset version.
+   - Fig. 7's two remaining arms (Instruct+rationale, Thinking without rationale at 30 per task) are kept at their paper values (author decision, 2026-10-05).
 
-Compute: 12 trainings (one epoch each, on 4 GPUs) plus 12 × 530 live-sim episodes.
+Compute: 10 trainings (one epoch each, on 4 GPUs) plus 10 × 530 live-sim episodes.
 
 #### Step 13 — After release: diversity analysis (Table III / Fig. 4)
 
