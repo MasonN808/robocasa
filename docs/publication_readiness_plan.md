@@ -171,7 +171,7 @@ A release is "complete and clean" when every item below holds.
 |---|---|---|
 | Our code (`robotalk/`, scripts) | **Apache-2.0** | Use the copyright line `Copyright (c) 2026 The RoboTalk Authors`. |
 | Forked RoboCasa code (`robocasa/`) | MIT (upstream), kept with its notice | MIT code may be included in an Apache-2.0 project. Keep `Copyright (c) 2026 the RoboCasa Team` and the MIT text in `NOTICE` / `robocasa/LICENSE`. |
-| RoboCasa assets we modified (118 files under `robocasa/models/assets`) | **CC BY 4.0** (upstream asset license) | CC BY requires attribution *and an indication that changes were made*. List them in `NOTICE`/`docs/FORK_CHANGES.md`. |
+| RoboCasa assets | **CC BY 4.0** (upstream asset license), not redistributed | Correction (2026-10-05): the "118 modified assets" were 117 machine-local symlinks into a downloaded asset folder plus that folder's README, committed by accident. No asset is modified; they are now untracked and git-ignored. |
 | robosuite (dependency, pinned) | MIT | Installed as a dependency, not vendored. |
 | RoboTalk dataset (`DorianAtSchool/RoboTalk`) | **Apache-2.0** | The images are renders of CC BY 4.0 RoboCasa assets. CC BY has no share-alike clause, so Apache-2.0 is allowed with attribution, and the card credits RoboCasa365. |
 | LoRA adapters | **Apache-2.0** | Inherited from Qwen3-VL-8B-Instruct/Thinking (both Apache-2.0). |

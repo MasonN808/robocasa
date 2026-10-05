@@ -33,6 +33,7 @@ dependencies = [
     "gymnasium",
     "h5py",
     "imageio",
+    "imageio-ffmpeg",  # MP4 writer for live-sim episode recordings
     "lxml",
     "matplotlib",
     "opencv-python",

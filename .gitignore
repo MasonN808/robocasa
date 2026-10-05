@@ -278,3 +278,23 @@ training/bc_task_vlm/reports/communication_waitfix_v3/email_monitor.log
 # Reproduction outputs (evaluations, figures, checkpoints)
 /outputs/
 /data/
+
+# Kitchen assets installed by `python -m robocasa.scripts.download_kitchen_assets`
+robocasa/models/assets/README.md
+robocasa/models/assets/fixtures/cabinets/cabinet_panels/CabinetDoorPanel*
+robocasa/models/assets/fixtures/handles/CabinetHandle*
+robocasa/models/assets/fixtures/blenders
+robocasa/models/assets/fixtures/coffee_machines
+robocasa/models/assets/fixtures/dishwashers
+robocasa/models/assets/fixtures/electric_kettles
+robocasa/models/assets/fixtures/fridges
+robocasa/models/assets/fixtures/hoods
+robocasa/models/assets/fixtures/microwaves
+robocasa/models/assets/fixtures/ovens
+robocasa/models/assets/fixtures/sinks
+robocasa/models/assets/fixtures/stand_mixers
+robocasa/models/assets/fixtures/stoves
+robocasa/models/assets/fixtures/stovetops
+robocasa/models/assets/fixtures/toaster_ovens
+robocasa/models/assets/fixtures/toasters
+robocasa/models/assets/fixtures/windows

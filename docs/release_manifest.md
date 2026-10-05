@@ -373,3 +373,37 @@ All golden checks are unchanged after the move.
 - Oracle live-sim replay (8 trajectories): identical to the cleaned code in the research env, apart from timing fields, under both the interim wrapper and the mirror.
 - One LoRA training step on Qwen3-VL-8B-Instruct, on an RTX PRO 6000 (Blackwell), passed with both `sdpa` and `flash_attention_2`.
 - Still to check (Step 10, on the exported tree): the RoboCasa asset download, and `pip`-only installation.
+
+## 12. Step 8 (documentation)
+
+**New docs.**
+- `README.md` replaces the upstream RoboCasa README. Its sections:
+  - installation, with a marked **GPU requirements** box;
+  - a Quickstart;
+  - results tables for Figs. 3 and 5–7, each with its `reproduce.py` command and measured compute;
+  - repository structure, generating new data, limitations, license, citations (RoboTalk, RoboCasa365, RoboCasa, robosuite) and acknowledgements (the paper's funding text).
+- Also added: `docs/{concurrency_semantics,tool_interface,data_format,evaluation}.md`, `docs/FORK_CHANGES.md` (against upstream `1b19563`) and `CITATION.cff`.
+
+**Checks on the README.**
+- Every number was recomputed from `paper_results`.
+- The Fig. 3 counts come from `export_task_phase_pngs._load_counts`: 12/12/19 training, 2/2/6 held-out.
+- Tool names and arguments in `tool_interface.md` were checked against `build_model_tool_specs`.
+- The budget (2 × factor 2 = 4× the reference length) and termination rules were checked against `live_sim_eval`.
+
+**Compute figures.**
+- Training: `train_runtime` of the released runs on 4× B200 ranges from 1.96 h (30/task) to 9.7 h (150/task); all ten Fig. 6 adapters took 58.6 h, or 235 GPU-hours.
+- Evaluation: about 3 episode-hours per Instruct model and about 4 per Thinking model (sum of `elapsed_s`), so about 1 h of wall time with 4 workers on one RTX PRO 6000.
+- No Gemini token usage was recorded, so the README states no API cost.
+
+**Quickstart verified from scratch** in the fresh env:
+- `hf download --revision v1.1` of one task;
+- `materialize_training_layout` (150/150);
+- oracle replay with `configs/eval/oracle_smoke.json`: 2/2 reached the goal with 0 rejections, and videos were written.
+
+**Fixes found while doing this.**
+- `imageio-ffmpeg` was missing from the dependencies. Without it, episode videos crash on the PyAV plugin (`expected bytes, NoneType`). It is now added and locked.
+- The "118 modified CC BY assets" were 117 absolute symlinks into another checkout's downloaded assets, plus the download's README, committed by accident in `2f1a64c`.
+  - They are now untracked (kept on disk) and git-ignored.
+  - `tests/test_portability.py` now fails on absolute symlinks, and it flags them on the previous commit.
+  - `NOTICE`, `FORK_CHANGES.md` and the plan's license table are corrected: no asset is modified or redistributed.
+- The README has no teaser image yet: there is no exported figure file. Add one from the paper sources if wanted (Step 10).

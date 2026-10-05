@@ -1,5 +1,6 @@
 """The repository must not depend on the machine it was developed on."""
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -38,6 +39,12 @@ def test_no_cluster_paths_accounts_or_personal_addresses():
     hits = []
     for name in _tracked_files():
         path = REPO_ROOT / name
+        if path.is_symlink():
+            # Absolute links point into the machine they were made on.
+            target = os.readlink(path)
+            if os.path.isabs(target) or FORBIDDEN.search(target):
+                hits.append(f"{name}: symlink to {target}")
+            continue
         if not path.is_file():
             continue
         try:
