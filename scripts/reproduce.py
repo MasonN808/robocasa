@@ -106,8 +106,30 @@ class Reproducer:
                 snapshot_download(repo, local_dir=target)
         return target
 
+    def ensure_dataset(self) -> None:
+        """Download the dataset and rebuild the training layout if needed."""
+
+        if self.data_root.is_dir() and any(self.data_root.iterdir()):
+            return
+        dataset = self.config["dataset"]
+        hf_dir = self.out / "hf_dataset"
+        print(f"Downloading {dataset['hf_repo']}@{dataset['revision']} -> {hf_dir}", flush=True)
+        if not self.args.dry_run:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(
+                dataset["hf_repo"], repo_type="dataset",
+                revision=dataset["revision"], local_dir=hf_dir,
+            )
+        _run([
+            self.python, "-m", "robotalk.release.materialize_training_layout",
+            "--hf-dir", str(hf_dir), "--output", str(self.data_root),
+            "--workers", str(self.args.cpu_workers),
+        ], dry_run=self.args.dry_run)
+
     def train(self, model_id: str) -> Path:
         model = self.config["models"][model_id]
+        self.ensure_dataset()
         kind = "rationale" if model["train_reasoning"] else "tool_call"
         reasoning = ["--train-reasoning"] if model["train_reasoning"] else []
         master = self.out / "preprocessed" / f"master_{kind}"

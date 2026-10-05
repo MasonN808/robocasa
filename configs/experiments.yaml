@@ -4,6 +4,9 @@
 
 dataset:
   hf_repo: DorianAtSchool/RoboTalk
+  # v1.1 replaces 95 trajectories of the paper's v1.0 (see the dataset card);
+  # retraining therefore matches the paper within confidence intervals.
+  revision: v1.1
   # Directory holding <task>/traj_XXXXXX/{original_trajectory,plan,metadata}.json
   # plus images, i.e. the rendered dataset. Override with ROBOTALK_DATA_ROOT.
   default_root: data/robotalk_rendered
