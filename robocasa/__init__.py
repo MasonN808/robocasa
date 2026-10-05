@@ -1,5 +1,4 @@
 from robosuite.environments.base import make
-import robocasa.utils.robosuite_compat  # noqa: F401  (multi-robot naming fix; see module)
 import os
 import re
 

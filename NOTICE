@@ -12,5 +12,6 @@ in robocasa/:
     are listed in docs/FORK_CHANGES.md.
 
 It depends on robosuite (https://github.com/ARISE-Initiative/robosuite, MIT
-License); robocasa/utils/robosuite_compat.py adapts one robosuite method for
+License), installed from https://github.com/DorianAtSchool/robosuite: upstream
+plus one change that names each robot's manipulator_mount body uniquely, for
 scenes with two mobile manipulators.

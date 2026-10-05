@@ -21,9 +21,10 @@ authors = [
 # Simulator, symbolic validator and live-sim evaluation client. Versions are
 # the ones the paper's results were produced with; uv.lock pins the rest.
 dependencies = [
-    # Upstream robosuite at the commit the experiments used; the one multi-robot
-    # fix the experiments needed is applied by robocasa.utils.robosuite_compat.
-    "robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@aaa8b9b214ce8e77e82926d677b4d61d55e577ab",
+    # robosuite exactly as the experiments ran it: upstream ARISE aaa8b9b plus
+    # one commit that gives each robot's manipulator_mount body a unique name,
+    # which scenes with two mobile manipulators need.
+    "robosuite @ git+https://github.com/DorianAtSchool/robosuite.git@94f9aa2ffe83b4938bf686712c2e878f63d1fb4f",
     "mujoco==3.3.1",
     "numpy==2.2.5",
     "numba==0.61.2",

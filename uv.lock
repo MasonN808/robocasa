@@ -1907,7 +1907,7 @@ wheels = [
 [[package]]
 name = "robosuite"
 version = "1.5.2"
-source = { git = "https://github.com/ARISE-Initiative/robosuite.git?rev=aaa8b9b214ce8e77e82926d677b4d61d55e577ab#aaa8b9b214ce8e77e82926d677b4d61d55e577ab" }
+source = { git = "https://github.com/DorianAtSchool/robosuite.git?rev=94f9aa2ffe83b4938bf686712c2e878f63d1fb4f#94f9aa2ffe83b4938bf686712c2e878f63d1fb4f" }
 dependencies = [
     { name = "mujoco" },
     { name = "numba" },
@@ -1998,7 +1998,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pyyaml" },
     { name = "rich" },
-    { name = "robosuite", git = "https://github.com/ARISE-Initiative/robosuite.git?rev=aaa8b9b214ce8e77e82926d677b4d61d55e577ab" },
+    { name = "robosuite", git = "https://github.com/DorianAtSchool/robosuite.git?rev=94f9aa2ffe83b4938bf686712c2e878f63d1fb4f" },
     { name = "safetensors", marker = "extra == 'train'" },
     { name = "scipy", specifier = "==1.15.3" },
     { name = "termcolor" },

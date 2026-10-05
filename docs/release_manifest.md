@@ -364,12 +364,12 @@ All golden checks are unchanged after the move.
 **robosuite.**
 - The `MasonN808/robosuite@dev` submodule was removed.
 - The fork is upstream ARISE `aaa8b9b` plus one change that prefixes the `manipulator_mount` body name per robot, which two mobile manipulators need. Upstream master still lacks it.
-- We now pin upstream `aaa8b9b`, and `robocasa/utils/robosuite_compat.py`, installed on `import robocasa`, renames the body after `add_mobile_base`.
-- `tests/test_robosuite_compat.py` shows that the result is byte-identical to the fork's robot MJCF.
+- Decision (2026-10-05): mirror the fork under `DorianAtSchool/robosuite` and pin the exact commit the experiments used (`94f9aa2`, the fork's `dev`).
+- A wrapper replacing the fork (`robosuite_compat`) was tried first and tested byte-identical, then dropped in favour of the exact paper code.
 - Licenses: the root `LICENSE` is now Apache-2.0, RoboCasa's MIT text moved to `robocasa/LICENSE`, and a `NOTICE` was added. It points at `docs/FORK_CHANGES.md` (Step 8).
 
 **From-scratch install** (`uv sync --frozen --all-extras` into a fresh venv):
-- Tracked tests: 576 passed.
-- Oracle live-sim replay (8 trajectories): identical to the cleaned code under the fork, apart from timing fields.
+- Tracked tests: 574 passed with the mirror pin (576 under the interim wrapper, which had 2 extra tests).
+- Oracle live-sim replay (8 trajectories): identical to the cleaned code in the research env, apart from timing fields, under both the interim wrapper and the mirror.
 - One LoRA training step on Qwen3-VL-8B-Instruct, on an RTX PRO 6000 (Blackwell), passed with both `sdpa` and `flash_attention_2`.
 - Still to check (Step 10, on the exported tree): the RoboCasa asset download, and `pip`-only installation.
