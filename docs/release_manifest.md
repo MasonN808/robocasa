@@ -436,3 +436,22 @@ All golden checks are unchanged after the move.
 **CI.**
 - `.github/workflows/ci.yml` runs `uv sync --frozen --extra dev`, ruff and `pytest tests/unit` on Python 3.11.
 - The pre-commit hook is now ruff instead of upstream's black.
+
+## 14. Step 10: vLLM server parity fix
+
+**Finding.** `reproduce.py` served every model with `--tool-call-parser hermes` and no reasoning parser. The paper's servers, as their startup logs record, differed by model type:
+
+| Cells | Tool-call parser | Reasoning parser |
+|---|---|---|
+| Instruct cells, incl. Instruct + rationale, and the Fig. 5 base model | `hermes` | none |
+| Thinking + rationale (s30–s150) | `qwen3_xml` | `qwen3` |
+| Thinking, no rationale | `qwen3_xml` | none |
+
+- The cells were matched to their logs by exact adapter path; the Thinking-no-rationale cell was matched by its recorded port.
+- The paper's servers also ran with `VLLM_USE_FLASHINFER_SAMPLER=0`, and passed `--max-lora-rank` only with an adapter.
+- The earlier vLLM smoke test used an Instruct model, so it could not catch this.
+
+**Fix.**
+- `configs/experiments.yaml` now has `vllm.profile_serve_args`, `lora_serve_args` and `env`.
+- `tests/unit/test_reproduce_dry_run.py` pins each cell's parsers.
+- The client arguments of every recorded cell match the paper. The only differences are flags whose values are now built in (private history, no step indices, consume-once observations, trained `get_image`) and the default `--communication-mode full`.

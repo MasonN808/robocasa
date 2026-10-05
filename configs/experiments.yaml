@@ -79,10 +79,17 @@ evaluation:
       - --mm-processor-cache-gb
       - "2"
       - --enable-auto-tool-choice
-      - --tool-call-parser
-      - hermes
-      - --max-lora-rank
-      - "64"
+    # Added only when a LoRA adapter is served.
+    lora_serve_args: [--max-lora-rank, "64"]
+    # Output parsers per decoding profile, as served for the paper (read from
+    # the evaluation servers' logs).
+    profile_serve_args:
+      instruct: [--tool-call-parser, hermes]
+      thinking: [--tool-call-parser, qwen3_xml, --reasoning-parser, qwen3]
+      thinking_parser_recovery: [--tool-call-parser, qwen3_xml]
+    # Environment of the paper's vLLM server process.
+    env:
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
 
 # Training hyperparameters shared by every SFT cell (robotalk.training.main flags).
 training:

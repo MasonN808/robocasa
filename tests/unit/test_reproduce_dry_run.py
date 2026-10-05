@@ -52,3 +52,27 @@ def test_dry_run_resolves_every_cell(tmp_path, args):
     if "--train" in args:
         assert "robotalk.training.main" in text
         assert "robotalk.release.materialize_training_layout" in text
+
+
+# Output parsers of the paper's vLLM servers, read from their startup logs.
+PAPER_PARSERS = {
+    "instruct": ["--tool-call-parser", "hermes"],
+    "thinking": ["--tool-call-parser", "qwen3_xml", "--reasoning-parser", "qwen3"],
+    "thinking_parser_recovery": ["--tool-call-parser", "qwen3_xml"],
+}
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [m for m, cfg in CONFIG["models"].items() if cfg.get("backend", "vllm") == "vllm"],
+)
+def test_vllm_server_uses_the_paper_parsers(tmp_path, model_id):
+    model = CONFIG["models"][model_id]
+    commands = _dry_run(tmp_path, model["figures"][0], "--models", model_id)
+    serve = next(c for c in commands if "serve" in c and "vllm" in c)
+    parser_args = [
+        token for i, token in enumerate(serve)
+        if token in ("--tool-call-parser", "--reasoning-parser")
+        or (i and serve[i - 1] in ("--tool-call-parser", "--reasoning-parser"))
+    ]
+    assert parser_args == PAPER_PARSERS[model["profile"]]

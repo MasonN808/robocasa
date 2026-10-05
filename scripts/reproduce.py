@@ -235,15 +235,22 @@ class Reproducer:
                 *shlex.split(os.environ.get("VLLM_LAUNCHER", "")), "vllm", "serve", model["base"],
                 "--host", "127.0.0.1", "--port", str(port), "--served-model-name", served,
                 *self.config["evaluation"]["vllm"]["serve_args"],
+                *self.config["evaluation"]["vllm"]["profile_serve_args"][model["profile"]],
             ]
             if adapter:
-                cmd += ["--enable-lora", "--lora-modules", f"{served}={adapter}"]
+                cmd += [
+                    "--enable-lora", *self.config["evaluation"]["vllm"]["lora_serve_args"],
+                    "--lora-modules", f"{served}={adapter}",
+                ]
                 extra += ["--adapter-path", str(adapter)]
             extra += ["--vllm-model", served, "--vllm-base-url", f"http://127.0.0.1:{port}/v1"]
             print("+", shlex.join(cmd), flush=True)
             if not self.args.dry_run:
                 log = open(self.out / f"vllm_{model_id}.log", "w")
-                server = subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+                server_env = {**os.environ, **self.config["evaluation"]["vllm"].get("env", {})}
+                server = subprocess.Popen(
+                    cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, env=server_env
+                )
                 self._wait_for_server(port, server)
         try:
             for split in splits:
