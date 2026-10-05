@@ -1,56 +1,24 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
-from unittest import mock
 
-from robotalk.training import preprocessed_data
-from robotalk.training.dataset import (
-    LazyVisionSFTCollator,
-    build_centralized_examples,
-    build_split_manifest,
-    serialize_pretokenized_tensors,
-)
 from robotalk.training.preprocessed_data import (
-    PreprocessedFeatureDataset,
     build_or_load_cached_pretokenization_metadata,
-    build_preprocessed_dataset_dict,
     build_pretokenization_metadata,
-    existing_artifact_image_relpaths_for_examples,
-    load_pretokenized_shard,
-    load_preprocessed_artifact_from_disk,
     pretokenization_compatibility_reason,
     resolve_hf_dataset_reference,
-    save_pretokenized_shard,
-    save_preprocessed_artifact,
-    stage_artifact_images_for_examples,
 )
 
 
 HAS_DATASETS = importlib.util.find_spec("datasets") is not None
 HAS_PILLOW = importlib.util.find_spec("PIL") is not None
 
-DATASET_ROOT = (
-    Path(__file__).resolve().parents[1]
-    / "data_generation/task_level/data/image/20260404T191734Z"
-)
-SOURCE_TRAJECTORY_DIR = DATASET_ROOT / "hot_dog_setup" / "traj_000028"
-
 
 
 class PretokenizationCompatibilityTests(unittest.TestCase):
-    def _build_single_trajectory_dataset_root(self) -> Path:
-        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        trajectory_dir = temp_root / "hot_dog_setup" / "traj_000028"
-        trajectory_dir.mkdir(parents=True, exist_ok=True)
-        for file_name in ("original_trajectory.json", "plan.json", "metadata.json"):
-            shutil.copy2(SOURCE_TRAJECTORY_DIR / file_name, trajectory_dir / file_name)
-        return temp_root
-
     def test_returns_none_when_artifact_matches_run_config(self):
         reason = pretokenization_compatibility_reason(
             runtime_pretokenization={

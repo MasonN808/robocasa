@@ -1,4 +1,3 @@
-import json
 import os
 from pathlib import Path
 import sys
@@ -11,18 +10,9 @@ import numpy as np
 import robosuite.utils.transform_utils as T
 
 import robocasa.utils.object_utils as OU
-from robocasa.utils.placement import (  # noqa: E402
-    MAX_FRONT_WORKING_LATERAL_OFFSET,
-    get_face_center,
-    get_face_order,
-    get_front_alignment_metrics,
-    get_fixture_aabb,
-)
 import robocasa.utils.trajectory_runner as trajectory_runner_module
 from robocasa.utils.trajectory_runner import TrajectoryRunner  # noqa: E402
 from robocasa.utils.sim_tool_executor import SimToolExecutor  # noqa: E402
-from robocasa.utils.sim_tool_executor import _is_approach_center  # noqa: E402
-from robocasa.utils.sim_tool_specs import SIM_TOOL_SPEC_BY_NAME  # noqa: E402
 
 
 def _objects_intersect(executor: SimToolExecutor, object_a: str, object_b: str) -> bool:

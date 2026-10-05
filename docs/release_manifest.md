@@ -407,3 +407,32 @@ All golden checks are unchanged after the move.
   - `tests/test_portability.py` now fails on absolute symlinks, and it flags them on the previous commit.
   - `NOTICE`, `FORK_CHANGES.md` and the plan's license table are corrected: no asset is modified or redistributed.
 - The README has no teaser image yet: there is no exported figure file. Add one from the paper sources if wanted (Step 10).
+
+## 13. Step 9 (tests and CI)
+
+**Layout.**
+- `tests/unit` holds 34 files plus 2 new ones. They run on any CPU with core + `dev` dependencies only: no torch and no RoboCasa assets. About 580 tests run in about 2 s.
+- `tests/sim` holds 7 files (172 tests). They build MuJoCo scenes, are auto-marked `sim` by `tests/conftest.py`, and need the downloaded assets.
+- The `bc_task_vlm_` name prefix and the `sys.path` hacks were removed.
+- Two upstream RoboCasa scripts posing as tests were deleted:
+  - `test_datasets.py`, an HDF5 demo-dataset checker that collects no tests;
+  - `test_tasks_validity.py`, random rollouts over all 365 upstream tasks.
+
+**New tests.**
+- `test_prompt_snapshot.py` replaces `verify_generation_training_eval_prompts.py`, whose SFT-vs-eval check called the same function twice.
+  - It checks 212 generation and policy prompt hashes (53 tasks × 4 configurations) against the snapshot recorded from the paper-era code (`golden_before`).
+  - A prompt change that would break the released adapters' contract now fails CI.
+- `test_reproduce_dry_run.py`: every figure, with and without `--train`, must resolve offline. Every config path must exist, and every model cell must be evaluated; for example, `fig6 --train` resolves 72 commands. The existing fixture-based SFT example test (`test_dataset.py`) covers the no-network smoke item.
+
+**Lint.**
+- `ruff` 0.16.10 runs with `E9` + `F` on `robotalk/`, `scripts/` and `tests/`; the vendored `robocasa/` is excluded. It reports 0 findings.
+- Fixes:
+  - 121 unused imports removed;
+  - 5 unused variables removed; `_require_dependency` kept as a check;
+  - a `TYPE_CHECKING` import added for the sweep's `datasets` annotations;
+  - the dead `robotalk/tasks/base.py` re-export facade deleted (4 names used by 3 files, which now import from the defining modules).
+- Behaviour-neutral: golden snapshots g1, g2 and g3 (prompts, verdicts and mutants; cascade; 10,284 SFT examples) are byte-identical, every module imports, and unit and sim tests pass.
+
+**CI.**
+- `.github/workflows/ci.yml` runs `uv sync --frozen --extra dev`, ruff and `pytest tests/unit` on Python 3.11.
+- The pre-commit hook is now ruff instead of upstream's black.

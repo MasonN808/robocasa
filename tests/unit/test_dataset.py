@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import shutil
@@ -9,17 +8,9 @@ import unittest
 import unittest.mock
 from types import SimpleNamespace
 
-from robotalk.training import dataset as dataset_module
 from robotalk.training.dataset import (
     build_same_task_trajectory_split,
-    build_example_cache_fingerprint,
-    build_example_cache_path,
-    build_centralized_examples,
     estimate_centralized_example_length,
-    list_available_task_names,
-    list_task_trajectory_ids,
-    load_examples_from_cache,
-    save_examples_to_cache,
 )
 
 
@@ -54,7 +45,7 @@ class SameTaskTrajectorySplitTests(unittest.TestCase):
 #
 # It is a --step-order concurrent render, so plan.json is a genuine permutation
 # of the trajectory's steps and these tests exercise the reordered path.
-FIXTURE_ROOT = Path(__file__).resolve().parent / "data" / "render_fixture"
+FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "data" / "render_fixture"
 FIXTURE_TASK = "add_lemon_to_fish"
 FIXTURE_TRAJECTORY_ID = "traj_000000"
 SOURCE_TRAJECTORY_DIR = FIXTURE_ROOT / FIXTURE_TASK / FIXTURE_TRAJECTORY_ID

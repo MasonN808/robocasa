@@ -11,11 +11,8 @@ contiguous block of output ticks that all agents enter and leave together.
 
 from __future__ import annotations
 
-from pathlib import Path
-import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from robotalk.generation.image.processor import (  # noqa: E402
     GET_IMAGE_TOOL_NAME,

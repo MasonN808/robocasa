@@ -6,12 +6,10 @@ import glob
 import json
 import os
 import random
-import sys
 import unittest
 from copy import deepcopy
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import robotalk.generation.insert_waits as insert_waits
 import robotalk.generation.tick_format as tick_format

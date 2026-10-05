@@ -122,7 +122,6 @@ def opening_protocol_error(
         return None
     if call.get("tool") in set(observation_tools):
         return None
-    follower = next(a for a in ordered if a != coordinator_id)
     role_index = 0 if agent_id == coordinator_id else 1
     expected = OPENING_PHASES[phase][role_index]
     actual = (call.get("args") or {}).get("coordination_phase")

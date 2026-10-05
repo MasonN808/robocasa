@@ -55,7 +55,10 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    import datasets
 
 # Make repo-root imports work when this file is executed as a script.
 REPO_ROOT = Path(__file__).resolve().parents[2]

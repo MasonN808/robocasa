@@ -1978,7 +1978,7 @@ class LazyVisionSFTCollator:
             )
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        torch_module = _require_dependency(torch, "torch")
+        _require_dependency(torch, "torch")
         processor = self._get_processor()
         features = [self._trim_feature_to_image_budget(feature) for feature in features]
         features = [

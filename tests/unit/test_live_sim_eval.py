@@ -9,9 +9,6 @@ from robotalk.evaluation import live_sim_eval
 from robotalk.evaluation.live_sim_eval import (
     FsmMirror,
     OVERHEAD_VIEWS,
-    ROUTER_VIEWS,
-    SCOUT_VIEWS,
-    WRIST_VIEWS,
     _canonical_symbolic_initial_state,
     _completed_trajectory_keys,
     _finalize_first_recording,

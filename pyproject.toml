@@ -89,7 +89,10 @@ include = ["robotalk*", "robocasa*"]
 robotalk = ["**/*.json", "**/*.md", "**/*.txt", "**/*.html"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit", "tests/sim"]
+markers = [
+    "sim: builds MuJoCo scenes; needs the RoboCasa kitchen assets (tests/sim)",
+]
 
 # GPU ASSUMPTION: torch comes from the CUDA 12.8 index, matching the paper's
 # environment. These wheels have kernels for compute capability 7.5-12.0
@@ -107,3 +110,12 @@ torchvision = { index = "pytorch-cu128" }
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[tool.ruff]
+target-version = "py311"
+include = ["robotalk/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+# Correctness only: syntax errors and pyflakes (undefined names, unused
+# imports and variables, redefinitions).
+select = ["E9", "F"]

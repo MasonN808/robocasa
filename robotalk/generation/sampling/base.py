@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from robotalk.tasks import TaskDefinition
-from robotalk.tasks.base import PreflightTokenEstimate
+from robotalk.tasks.shared.types import PreflightTokenEstimate
 
 if TYPE_CHECKING:
     from robotalk.generation.raw.config import RuntimeConfig
-    from robotalk.tasks.base import TaskInstance
+    from robotalk.tasks.shared.types import TaskInstance
 
 
 @dataclass(frozen=True)

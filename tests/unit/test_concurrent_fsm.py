@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from robotalk.tasks.shared import concurrent_fsm  # noqa: E402
 from robotalk.tasks.shared.concurrent_fsm import (  # noqa: E402

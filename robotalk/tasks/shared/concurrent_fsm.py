@@ -1112,7 +1112,6 @@ class ConcurrentTaskValidator:
             releases: list[tuple[str, str]] = []
             for agent in present:
                 call = row.get(agent) or {}
-                args = call.get("args") or {}
                 key = wait_key({**call, "agent": agent})
                 if key is not None:
                     new_waits[agent] = key

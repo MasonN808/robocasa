@@ -1,25 +1,14 @@
-from concurrent.futures import Future
 from copy import deepcopy
 import json
-import runpy
-import sys
-import threading
 import unittest
-import uuid
 from unittest import mock
-from datetime import datetime, timezone
-from io import StringIO
 from pathlib import Path
 import tempfile
 import types
 
 from robotalk.generation.runtime.client import (
-    GenerationResult,
-    GenerationUsage,
     GoogleGenAIClient,
-    SUPPORTED_GENERATION_SDKS,
     TrajectoryGenerationError,
-    _generation_error_status_code,
     build_generation_usage_metadata,
     load_dotenv_file,
     validate_google_auth,
@@ -30,20 +19,14 @@ from robotalk.generation.sampling.structured_random import (
     _structured_random_seed_and_configuration,
 )
 from robotalk.tools.subatomic_tool_specs import build_allowed_tool_specs
-from robotalk.tasks.base import (
-    FiniteStateTaskValidator,
-    TaskInstance,
-    build_task_response_schema,
-)
+from robotalk.tasks.shared.fsm import FiniteStateTaskValidator
+from robotalk.tasks.shared.schema import build_task_response_schema
+from robotalk.tasks.shared.types import TaskInstance
 from robotalk.tasks import (
     HeldObjectSemanticValidationError,
-    InsufficientValidUniqueTrajectoriesDuplicateError,
-    InsufficientValidUniqueTrajectoriesInvalidError,
-    InsufficientValidUniqueTrajectoriesMixedError,
     MissingInitialCommunicationSemanticValidationError,
     NavigationSemanticValidationError,
     ObservationSequenceSemanticValidationError,
-    DuplicateTrajectoryValidationError,
     ResponseFormatValidationError,
     TaskSemanticValidationError,
     TaskPreconditionSemanticValidationError,
@@ -51,22 +34,17 @@ from robotalk.tasks import (
     TrajectoryValidationError,
     ToolArgumentSemanticValidationError,
     get_task_definition,
-    supported_task_names,
 )
 from robotalk.tasks.specs import (
     TaskSpec,
     load_task_spec,
-    supported_verified_task_names,
 )
 from robotalk.tasks.specs.runtime import SpecDrivenTaskValidator
 from robotalk.tools.subatomic_tool_calls import discover_subatomic_tools
 from robotalk.generation.raw.config import (
-    INTERRUPTED_EXIT_CODE,
-    INTERRUPTED_MESSAGE,
     RuntimeConfig,
 )
 from robotalk.generation.raw.progress import (
-    PROGRESS_BAR_WIDTH,
     RichTaskProgressAdapter,
 )
 from robotalk.generation.raw.runtime_support import (

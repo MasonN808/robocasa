@@ -1,0 +1,54 @@
+"""`scripts/reproduce.py --dry-run` must resolve every paper cell offline."""
+
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CONFIG = yaml.safe_load((REPO_ROOT / "configs/experiments.yaml").read_text())
+
+
+def _dry_run(tmp_path, *args):
+    env = {
+        **os.environ,
+        "ROBOTALK_OUTPUT_ROOT": str(tmp_path / "outputs"),
+        # Missing on purpose, so the dataset download + rebuild path is resolved too.
+        "ROBOTALK_DATA_ROOT": str(tmp_path / "data"),
+        "HF_HUB_OFFLINE": "1",
+    }
+    result = subprocess.run(
+        [sys.executable, "scripts/reproduce.py", *args, "--dry-run"],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=300,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return [
+        shlex.split(line[2:]) for line in result.stdout.splitlines() if line.startswith("+ ")
+    ]
+
+
+@pytest.mark.parametrize(
+    "args", [("fig3",), ("fig5",), ("fig6",), ("fig6", "--train"), ("fig7",), ("fig7", "--train")]
+)
+def test_dry_run_resolves_every_cell(tmp_path, args):
+    commands = _dry_run(tmp_path, *args)
+    assert commands
+    # Every repository file a command refers to exists.
+    for command in commands:
+        for token in command:
+            if token.startswith(("configs/", str(REPO_ROOT / "configs"))):
+                assert (REPO_ROOT / token).exists(), token
+    figure = args[0]
+    if figure == "fig3":
+        return
+    text = "\n".join(shlex.join(command) for command in commands)
+    for model_id, model in CONFIG["models"].items():
+        if figure in model["figures"]:
+            assert f"/eval/{model_id}/" in text, f"{model_id} is not evaluated"
+    if "--train" in args:
+        assert "robotalk.training.main" in text
+        assert "robotalk.release.materialize_training_layout" in text

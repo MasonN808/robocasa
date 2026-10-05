@@ -15,7 +15,7 @@ from robotalk.utils import stable_json_sha256
 if TYPE_CHECKING:
     from robotalk.generation.raw.config import RuntimeConfig
     from robotalk.tasks import TaskDefinition
-    from robotalk.tasks.base import TaskInstance
+    from robotalk.tasks.shared.types import TaskInstance
 
 
 STRUCTURED_RANDOM_RANKS = ("low", "medium", "high")

@@ -1052,7 +1052,6 @@ class GeminiPolicy:
         import os
 
         from robotalk.generation.runtime.client import (
-            build_raw_google_genai_client,
             load_dotenv_file,
         )
 

@@ -100,7 +100,6 @@ def _contested(step, fixtures, objects):
 
 from robotalk.tasks.shared.scheduling import (  # noqa: E402
     schedule,
-    usage_spans,
 )
 
 

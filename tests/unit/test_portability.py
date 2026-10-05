@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Cluster paths, accounts and personal addresses.
 FORBIDDEN = re.compile(
@@ -20,7 +20,7 @@ INTERNAL = {
     "docs/publication_readiness_plan.md",
     "docs/release_manifest.md",
     "docs/robotalk_project_and_implementation.md",
-    "tests/test_portability.py",
+    "tests/unit/test_portability.py",
 }
 
 

@@ -103,7 +103,6 @@ def export_episode(raw_root: Path, rendered_root: Path, output: Path, task_slug:
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
     task_instruction = _task_goals().get(raw["composite_task"], raw.get("task", ""))
     ticks = raw["tick_rows"]
-    raw_steps = raw.get("steps", [])
     observations, trailing_observations = _observations_by_raw_step(rendered_dir)
     episode_key = f"{task_slug}__{trajectory_id}"
 

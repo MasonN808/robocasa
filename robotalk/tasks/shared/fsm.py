@@ -17,10 +17,7 @@ from .constants import (
     INTERACTION_TOOL_NAMES,
     NAVIGATION_TOOL_NAMES,
     OBSERVATION_TOOL_NAMES,
-    DEPENDENCY_ARG_NAMES,
     EXCLUSIVE_FIXTURE_TYPES,
-    FIXTURE_ARG_NAMES,
-    MIN_SIGNAL_MESSAGE_WORDS,
     SOCIAL_TOOL_NAMES,
     WAIT_TOOL_NAMES,
     OPEN_PART_TOOL_NAMES,
@@ -486,7 +483,6 @@ class FiniteStateTaskValidator:
         # classifier in concurrent replay.
         from .concurrent_fsm import contention_resources
 
-        fixtures = self.initial_state.get("fixtures") or {}
         objects = set(self.initial_state.get("objects") or {})
 
         def _resources(step: dict[str, Any]) -> list[str]:

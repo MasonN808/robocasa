@@ -25,7 +25,6 @@ The scenarios, in plain terms:
 
 from __future__ import annotations
 
-import json
 import unittest
 
 from robotalk.tasks.shared.errors import (
