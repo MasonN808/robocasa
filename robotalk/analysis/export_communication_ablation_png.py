@@ -12,12 +12,10 @@ import json
 
 from robotalk.analysis.plot_caption_metadata import write_caption_csv
 from robotalk.analysis.plot_style_utils import label_bars_above_whiskers, style_paper_figure
+from robotalk.utils import output_root
 
 
-OUTPUT = Path(
-    "outputs/figures/43_10/"
-    "communication_ablation_error_free.png"
-)
+OUTPUT = output_root() / "figures/43_10/communication_ablation_error_free.png"
 SPLIT_OUTPUT = OUTPUT.with_name("communication_ablation_error_free_by_split.png")
 SPLIT_SUBSET_OUTPUT = OUTPUT.with_name(
     "communication_ablation_error_free_by_split_single_agent.png"

@@ -1,26 +1,22 @@
 """Closed-loop (live-sim) evaluation of tool-calling VLMs.
 
-Implements training/bc_task_vlm/plans/live_sim_eval_plan.md: the model controls
-both agents live in the MuJoCo sim under the v2 self-scheduled contract (the
-model emits the acting agent and may call task_complete), success is judged by
+The model controls both agents live in the MuJoCo sim. Success is judged by
 the task env's own ``_check_success`` plus the symbolic FSM goal checker, and
-visuals are rendered from current sim state according to the selected
-observation contract.
+visuals are rendered from current sim state.
 
 Backends:
   oracle      replay the expert trajectory's own steps (verification gate:
               expect ~100% success; no model involved)
-  degenerate  emit garbage every turn (verification gate: expect 0% success,
-              termination by rejections/budget, no crashes)
-  hf          a local HF VLM (base weights or base+LoRA adapter)
   vllm        a localhost vLLM OpenAI-compatible server
   gemini      Vertex Gemini with native function calling
 
-Example (oracle smoke):
+Most runs go through ``robotalk.evaluation.live_sim_parallel_eval`` (or
+``scripts/reproduce.py``). Example (oracle smoke on two trajectories):
   python -m robotalk.evaluation.live_sim_eval --backend oracle \
-    --manifest training/bc_task_vlm/eval_manifests/exp52/eval_manifest_heldout_tasks.json \
-    --dataset-root training/bc_task_vlm/eval_data_subset \
-    --output-dir training/bc_task_vlm/eval_runs/live_sim_oracle__heldout_tasks \
+    --manifest configs/eval/fixed_live_sim_cohort.json \
+    --cohort-split heldout_task_types \
+    --dataset-root data/robotalk_rendered \
+    --output-dir outputs/eval/oracle_smoke \
     --max-trajectories 2
 """
 

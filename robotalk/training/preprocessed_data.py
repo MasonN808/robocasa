@@ -58,9 +58,7 @@ class Dataset:
 def _missing_dependency_error(module_name: str) -> ImportError:
     return ImportError(
         f"Missing optional dependency {module_name!r}. "
-        "Install training/bc_task_vlm/requirements-preprocess.txt for "
-        "preprocessing-only usage, or training/bc_task_vlm/requirements.txt "
-        "for full training."
+        "Install the training dependencies first: pip install -e '.[train]'."
     )
 
 

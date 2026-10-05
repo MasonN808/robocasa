@@ -7,61 +7,23 @@ outputs: adapted trajectory, execution metadata, and images rendered by
 get_image tool calls to their specified paths.
 
 Usage:
-    # Single combo (default):
-    python scripts/sweep_trajectories.py \
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \
-        --output-dir tmp/sweep_output
+    # Render every trajectory once, in concurrent order:
+    python -m robotalk.generation.sweep_trajectories \
+        --input-dir data/robotalk_image \
+        --output-dir data/robotalk_rendered \
+        --step-order concurrent
 
-    # Sweep across multiple layouts, styles, and seeds:
-    python scripts/sweep_trajectories.py \
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \
-        --output-dir tmp/sweep_output \
-        --layouts 11 56 \
-        --styles 34 42 \
-        --seeds 42 99
+    # Limit to specific tasks or trajectory indices; --dry-run lists the jobs:
+    python -m robotalk.generation.sweep_trajectories \
+        --input-dir data/robotalk_image \
+        --output-dir data/robotalk_rendered \
+        --tasks hot_dog_setup prepare_coffee --indices 0 1 2 --dry-run
 
-    # Limit to specific task dirs:
-    python scripts/sweep_trajectories.py \
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \
-        --output-dir tmp/sweep_output \
-        --tasks hot_dog_setup prepare_coffee
-
-    # Limit to specific trajectory indices:
-    python scripts/sweep_trajectories.py \
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \
-        --output-dir tmp/sweep_output \
-        --indices 0 1 2
-
-    # Dry run — show what would be executed without running anything:
-    python scripts/sweep_trajectories.py \
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \
-        --output-dir tmp/sweep_output \
-        --layouts 11 56 --styles 34 42 --seeds 42 99 \
-        --dry-run
-
-    # Balanced ~1k trajectory sweep from 24 base trajectories:
-    python scripts/sweep_trajectories.py \
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \
-        --output-dir tmp/sweep_output_1k \
-        --workers 4 \
-        --layouts 11 42 56 \
-        --styles 34 42 \
-        --seeds 1 2 3 4 5 6 7
-
-    # Sweep and push the flattened dataset to Hugging Face Hub:
-    python scripts/sweep_trajectories.py \
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \
-        --output-dir tmp/sweep_output \
-        --layouts 11 42 56 \
-        --styles 34 42 \
-        --seeds 1 2 3 4 5 6 7 \
-        --push-to-hub DorianAtSchool/robocasa-trajectories-single
-
-    # Write one row per trajectory instead of one row per step:
-    python scripts/sweep_trajectories.py \
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \
-        --output-dir tmp/sweep_output_traj \
-        --row-granularity trajectory
+    # Sweep across several layouts, styles and seeds:
+    python -m robotalk.generation.sweep_trajectories \
+        --input-dir data/robotalk_image \
+        --output-dir data/robotalk_sweep \
+        --workers 4 --layouts 11 56 --styles 34 42 --seeds 42 99
 """
 
 from __future__ import annotations
@@ -135,31 +97,19 @@ TextColumn = raw_progress.TextColumn
 CLI_EPILOG = textwrap.dedent(
     """\
     Examples:
-      python scripts/sweep_trajectories.py \\
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \\
-        --output-dir tmp/sweep_output
+      python -m robotalk.generation.sweep_trajectories \\
+        --input-dir data/robotalk_image \\
+        --output-dir data/robotalk_rendered \\
+        --step-order concurrent
 
-      python scripts/sweep_trajectories.py \\
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \\
-        --output-dir tmp/sweep_output \\
+      python -m robotalk.generation.sweep_trajectories \\
+        --input-dir data/robotalk_image \\
+        --output-dir data/robotalk_sweep \\
         --workers 4 \\
         --tasks hot_dog_setup prepare_coffee \\
         --layouts 11 42 56 \\
         --styles 34 42 \\
         --seeds 1 2 3 4 5 6 7
-
-      python scripts/sweep_trajectories.py \\
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \\
-        --output-dir tmp/sweep_output_1k \\
-        --layouts 11 42 56 \\
-        --styles 34 42 \\
-        --seeds 1 2 3 4 5 6 7 \\
-        --push-to-hub DorianAtSchool/robocasa-trajectories-single
-
-      python scripts/sweep_trajectories.py \\
-        --input-dir data_generation/task_level/data/image/20260324T031125Z \\
-        --output-dir tmp/sweep_output_traj \\
-        --row-granularity trajectory
     """
 )
 

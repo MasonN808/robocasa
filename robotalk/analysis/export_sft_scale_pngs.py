@@ -11,12 +11,11 @@ import numpy as np
 from matplotlib.patches import Patch
 
 from robotalk.analysis.plot_caption_metadata import write_caption_csv
+from robotalk.utils import output_root
 from robotalk.analysis.plot_style_utils import label_bars_above_whiskers, style_paper_figure
 
 
-ARTIFACT_DIR = Path(
-    "outputs/figures/43_10"
-)
+ARTIFACT_DIR = output_root() / "figures/43_10"
 ARTIFACT = ARTIFACT_DIR / "artifact.json"
 SPLITS = ("Trained tasks (43)", "Held-out tasks (10)")
 SPLIT_LABELS = ("In-training tasks", "Held-out tasks")

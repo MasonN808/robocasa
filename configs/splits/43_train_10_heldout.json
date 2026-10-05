@@ -58,7 +58,7 @@
     "prepare_sandwich_station",
     "serve_meal_juice"
   ],
-  "source": "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration/training/bc_task_vlm/scale_experiments/tick150_v1/default_47_train_6_heldout.json",
+  "source": "training/bc_task_vlm/scale_experiments/tick150_v1/default_47_train_6_heldout.json",
   "selection_seed": 20260821,
   "moved_from_training_to_held_out": [
     "arrange_bread_bowl",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import resource
 import sys
 import time
@@ -50,7 +51,7 @@ from robotalk.tasks.shared.validation_contract import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_DATASET_ROOT = Path("data_generation/task_level/data/image/20260404T191734Z")
+_DEFAULT_DATASET_ROOT = Path(os.environ.get("ROBOTALK_DATA_ROOT", "data/robotalk_rendered"))
 _DEFAULT_IMAGE_RESOLUTION = 512
 _PRETOKENIZATION_PROGRESS_INTERVAL = 1000
 _EXAMPLE_CACHE_LOCK_TIMEOUT_SECONDS = 1800.0
@@ -92,7 +93,7 @@ def _resolve_training_samples_cache_dir(
 ) -> Path:
     if training_samples_cache_dir is not None:
         return training_samples_cache_dir
-    return _REPO_ROOT / ".cache" / "bc_task_vlm" / "examples"
+    return _REPO_ROOT / ".cache" / "robotalk" / "examples"
 
 
 def parse_args() -> argparse.Namespace:
@@ -401,9 +402,7 @@ def _load_processor(
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise ImportError(
             "Missing optional dependency 'transformers'. Install "
-            "training/bc_task_vlm/requirements-preprocess.txt for "
-            "preprocessing-only usage, or training/bc_task_vlm/requirements.txt "
-            "for full training."
+            "the training dependencies: pip install -e '.[train]'."
         ) from exc
 
     auto_processor_cls = getattr(transformers_module, "AutoProcessor", None)
@@ -421,9 +420,7 @@ def _load_processor(
         if "Torchvision" in str(exc):
             raise ImportError(
                 "Pretokenization processor loading requires torchvision. Install "
-                "training/bc_task_vlm/requirements-preprocess.txt for "
-                "preprocessing-only usage, or training/bc_task_vlm/requirements.txt "
-                "for full training."
+                "the training dependencies: pip install -e '.[train]'."
             ) from exc
         raise
     tokenizer = getattr(processor, "tokenizer", None)

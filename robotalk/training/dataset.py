@@ -109,7 +109,7 @@ _FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 def _missing_dependency_error(module_name: str) -> ImportError:
     return ImportError(
         f"Missing optional dependency {module_name!r}. "
-        f"Install training/bc_task_vlm/requirements.txt first."
+        "Install the training dependencies first: pip install -e '.[train]'."
     )
 
 

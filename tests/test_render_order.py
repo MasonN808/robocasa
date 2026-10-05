@@ -1,6 +1,7 @@
 """Rendering must walk the steps the way the concurrent executor will."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -10,13 +11,15 @@ from robotalk.tasks.shared.render_order import (
     reorder_for_concurrent_render,
 )
 
-CORPUS = Path("/work/umass/shlomo_umass/dbenhamougol_umass/tick_scale30_image")
+# The training layout built by robotalk.release.materialize_training_layout.
+CORPUS = Path(os.environ.get("ROBOTALK_DATA_ROOT", "data/robotalk_rendered"))
 
 
 def _sample(count: int = 12) -> list[Path]:
-    paths = sorted(CORPUS.glob("*/trajectories/traj_*.json"))
+    # An empty sample makes pytest skip the parametrized tests.
+    paths = sorted(CORPUS.glob("*/traj_*/original_trajectory.json"))
     if not paths:
-        pytest.skip(f"corpus not present at {CORPUS}")
+        return []
     stride = max(len(paths) // count, 1)
     return paths[::stride][:count]
 
@@ -37,7 +40,7 @@ def test_an_unloadable_task_falls_back_to_file_order_with_a_reason():
     assert reason
 
 
-@pytest.mark.parametrize("path", _sample(), ids=lambda p: p.parent.parent.name)
+@pytest.mark.parametrize("path", _sample(), ids=lambda p: f"{p.parent.parent.name}/{p.parent.name}")
 def test_the_order_is_a_permutation_that_loses_no_step(path):
     trajectory = json.loads(path.read_text())
     order, reason = concurrent_step_order(trajectory)
@@ -45,7 +48,7 @@ def test_the_order_is_a_permutation_that_loses_no_step(path):
     assert sorted(order) == list(range(len(trajectory["steps"])))
 
 
-@pytest.mark.parametrize("path", _sample(), ids=lambda p: p.parent.parent.name)
+@pytest.mark.parametrize("path", _sample(), ids=lambda p: f"{p.parent.parent.name}/{p.parent.name}")
 def test_reordering_preserves_every_step_object_and_its_step_field(path):
     trajectory = json.loads(path.read_text())
     reordered, order, _ = reorder_for_concurrent_render(trajectory)
@@ -58,7 +61,7 @@ def test_reordering_preserves_every_step_object_and_its_step_field(path):
         assert reordered["steps"][position] is original[index]
 
 
-@pytest.mark.parametrize("path", _sample(), ids=lambda p: p.parent.parent.name)
+@pytest.mark.parametrize("path", _sample(), ids=lambda p: f"{p.parent.parent.name}/{p.parent.name}")
 def test_each_agents_own_steps_keep_their_relative_order(path):
     """Reordering interleaves the agents; it never reshuffles one agent's plan."""
 
@@ -71,12 +74,16 @@ def test_each_agents_own_steps_keep_their_relative_order(path):
         assert before == after
 
 
-def test_the_corpus_really_does_reorder():
-    """If nothing moved, the whole flag would be pointless -- guard that."""
+def test_published_trajectories_are_already_in_concurrent_order():
+    """Tick-format trajectories are written tick by tick, so the concurrent
+    executor walks them in file order; reordering only matters for
+    trajectories written agent by agent."""
 
-    moved = 0
-    for path in _sample(24):
+    paths = _sample(24)
+    if not paths:
+        pytest.skip(f"corpus not present at {CORPUS}")
+    for path in paths:
         trajectory = json.loads(path.read_text())
-        order, _ = concurrent_step_order(trajectory)
-        moved += any(position != index for position, index in enumerate(order))
-    assert moved > 0
+        order, reason = concurrent_step_order(trajectory)
+        assert reason is None, reason
+        assert order == list(range(len(trajectory["steps"])))

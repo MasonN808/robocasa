@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import random
 import sys
 import unittest
@@ -48,7 +49,7 @@ class FlattenTests(unittest.TestCase):
 
 class RoundTripTests(unittest.TestCase):
     def test_real_trajectories_survive_steps_to_rows_and_back(self):
-        root = "/work/umass/shlomo_umass/dbenhamougol_umass/data/robocasa_agentsft_subset"
+        root = os.environ.get("ROBOTALK_DATA_ROOT", "data/robotalk_rendered")
         paths = sorted(glob.glob(root + "/*/traj_000000/original_trajectory.json"))
         if not paths:
             self.skipTest("trajectory subset not present")

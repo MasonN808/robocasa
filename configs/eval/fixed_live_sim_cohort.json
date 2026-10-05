@@ -13,7 +13,7 @@
     "sampled": "Uniform shuffled passes over all unique configurations.",
     "full_config": "Every configuration once by default, with optional repetitions or a configuration cap."
   },
-  "source_manifest": "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration/training/bc_task_vlm/reports/new_access_state_generation_preflight/initial_config_manifest_150_canonical_workspace.json",
+  "source_manifest": "training/bc_task_vlm/reports/new_access_state_generation_preflight/initial_config_manifest_150_canonical_workspace.json",
   "source_manifest_sha256": "f092a67605a3148ab63551d380e0dd66f9d041f3556b8ba50573d6edcac4bd57",
   "prompt_contract_version": "state_grounded_global_tools_no_index_v4_canonical_cabinet_workspace",
   "contract": {
@@ -13981,16 +13981,16 @@
   "freeze_contract": "configuration_native_fixed_live_sim_v1",
   "provenance": {
     "targets_sha256_before_freeze": "12ad09a6f128b7533e1be84ae2e2055ee2eb768ee7174f8bdd557138ccd15853",
-    "scene_cache": "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration/training/bc_task_vlm/reports/new_access_state_generation_preflight/scene_compatibility_cache_v2.json",
-    "scene_cache_sha256": "2d88451ad2cd4447806335bb0eb62d98a0d910db54ea60a524c089b1904bf8bc",
-    "scene_contract": "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration/training/bc_task_vlm/reports/new_access_state_generation_preflight/fixed_live_sim_scene_contract_v2.json",
+    "scene_cache": "configs/eval/scene_compatibility_cache_v2.json",
+    "scene_cache_sha256": "7df826f35067eb5489fe78cd8f74a5e99bc34a1b40e60b566dc3673eecc838ea",
+    "scene_contract": "training/bc_task_vlm/reports/new_access_state_generation_preflight/fixed_live_sim_scene_contract_v2.json",
     "scene_contract_sha256": "f1ecf175143b323ed1f2ec4b11f409eff23f341fa9dc8bea35d7ef0e39080229",
-    "physical_canary_verification": "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration/training/bc_task_vlm/reports/new_access_state_generation_preflight/physical_configuration_canary_v1_verification.json",
+    "physical_canary_verification": "training/bc_task_vlm/reports/new_access_state_generation_preflight/physical_configuration_canary_v1_verification.json",
     "physical_canary_verification_sha256": "71071ea33edb67e468e674a188a97351dc6efb9e9bdcc0729907455e51abed13",
-    "exact_replay_metrics": "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration/training/bc_task_vlm/eval_runs/exact_canary_replay_smoke_v3/live_sim_metrics.json",
+    "exact_replay_metrics": "training/bc_task_vlm/eval_runs/exact_canary_replay_smoke_v3/live_sim_metrics.json",
     "exact_replay_metrics_sha256": "fe6f1ddbed31f587ff4577da4fe2a1f3373c78cf82b581252e50171bd90a4fbd"
   },
-  "content_hash": "781f37242ab1efd785f858922b720674e930da5ffa772730e1dcc4c0ecb139e0",
-  "source_task_split": "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration/training/bc_task_vlm/scale_experiments/tick150_reasoning_43train_10held_seed20260821/43_train_10_heldout.json",
+  "content_hash": "41b3f8c3da14bab33f46d0e823d1a890d4dd095195f29cde4c435d0f82ccab38",
+  "source_task_split": "configs/splits/43_train_10_heldout.json",
   "task_split_seed": 20260821
 }

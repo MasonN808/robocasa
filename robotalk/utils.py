@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 import math
 import re
 import shlex
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def output_root() -> Path:
+    """Where runs, evaluations and figures are written (``ROBOTALK_OUTPUT_ROOT``)."""
+
+    return Path(os.environ.get("ROBOTALK_OUTPUT_ROOT", REPO_ROOT / "outputs"))
 
 
 def usage_field(metadata: Any, *names: str) -> Any:

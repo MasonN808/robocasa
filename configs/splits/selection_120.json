@@ -3,8 +3,8 @@
   "name": "nested_120_per_task_43train_seed_20260821",
   "seed": 42,
   "trajectories_per_task": 120,
-  "task_split_manifest": "/work/umass/shlomo_umass/dbenhamougol_umass/robocasa-integration/training/bc_task_vlm/scale_experiments/tick150_reasoning_43train_10held_seed20260821/43_train_10_heldout.json",
-  "task_split_sha256": "e098a688841ac3901b71daa2952cf211aa8cc834ea6cd58254848ff989c16fb6",
+  "task_split_manifest": "configs/splits/43_train_10_heldout.json",
+  "task_split_sha256": "df47cce0806e537fe39811256082f0370c4e267adce526202c584af648872c16",
   "train_trajectory_ids_by_task": {
     "add_lemon_to_fish": [
       "traj_000121",

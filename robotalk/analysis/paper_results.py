@@ -15,6 +15,8 @@ from pathlib import Path
 
 import yaml
 
+from robotalk.utils import output_root
+
 ROOT = Path(__file__).resolve().parents[2]
 SPLIT_LABELS = {
     "train_task_types": "Trained tasks (43)",
@@ -186,8 +188,8 @@ def collect(config: dict, eval_root: Path) -> tuple[dict[str, list[dict]], list[
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=ROOT / "configs/experiments.yaml")
-    parser.add_argument("--eval-root", type=Path, default=ROOT / "outputs/eval")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs/figures/43_10")
+    parser.add_argument("--eval-root", type=Path, default=output_root() / "eval")
+    parser.add_argument("--output-dir", type=Path, default=output_root() / "figures/43_10")
     args = parser.parse_args()
 
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))

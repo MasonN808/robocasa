@@ -1,10 +1,9 @@
-"""Build a small, browser-ready RoboTalk publication smoke export."""
+"""Export RoboTalk to its Hugging Face layout (an eight-episode smoke set, or --all)."""
 
 from __future__ import annotations
 
 import argparse
 from functools import cache
-import html
 import json
 import shutil
 import tarfile
@@ -13,11 +12,12 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from robotalk.utils import output_root
 
-DEFAULT_RAW = Path("/work/umass/shlomo_umass/dbenhamougol_umass/tick53x150_state_grounded_cascade_v1_raw")
-DEFAULT_RENDERED = Path("/work/umass/shlomo_umass/dbenhamougol_umass/tick53x150_state_grounded_cascade_v1_rendered")
-DEFAULT_OUTPUT = Path("outputs/hf_export")
+
+DEFAULT_OUTPUT = output_root() / "hf_export"
 VERIFIED_SPECS = Path(__file__).resolve().parents[1] / "tasks/specs/verified"
+DATASET_CARD = Path(__file__).with_name("dataset_card.md")
 SMOKE_EPISODES = (
     ("arrange_bread_bowl", "traj_000000"),
     ("prepare_coffee", "traj_000000"),
@@ -228,35 +228,6 @@ def export_episode(raw_root: Path, rendered_root: Path, output: Path, task_slug:
     return catalog, tick_rows
 
 
-def _write_preview(output: Path, catalog: list[dict], ticks: list[dict]) -> None:
-    by_episode: dict[str, list[dict]] = {}
-    for row in ticks:
-        by_episode.setdefault(row["episode_key"], []).append(row)
-    sections = []
-    for episode in catalog:
-        rows = []
-        for row in by_episode[episode["episode_key"]]:
-            images0 = json.loads(row["agent_0_images"])
-            images1 = json.loads(row["agent_1_images"])
-            image0 = images0.get("agentview_center") or images0.get("room_view") or images0.get("top_view") or images0.get("map")
-            image1 = images1.get("agentview_center") or images1.get("room_view") or images1.get("top_view") or images1.get("map")
-            obs0 = html.escape(row["agent_0_observation_calls"])
-            obs1 = html.escape(row["agent_1_observation_calls"])
-            a0 = f"<small>Observations: <code>{obs0}</code></small><br><b>{html.escape(row['agent_0_tool'])}</b><br><code>{html.escape(row['agent_0_args'])}</code><details><summary>Reasoning</summary>{html.escape(row['agent_0_reasoning'])}</details>"
-            a1 = f"<small>Observations: <code>{obs1}</code></small><br><b>{html.escape(row['agent_1_tool'])}</b><br><code>{html.escape(row['agent_1_args'])}</code><details><summary>Reasoning</summary>{html.escape(row['agent_1_reasoning'])}</details>"
-            i0 = f"<img src='{html.escape(image0)}'>" if image0 else "No image"
-            i1 = f"<img src='{html.escape(image1)}'>" if image1 else "No image"
-            rows.append(f"<tr><td>{row['tick']}</td><td>{i0}{a0}</td><td>{i1}{a1}</td></tr>")
-        sections.append(
-            f"<details><summary><b>{html.escape(episode['task'])}</b> · {episode['trajectory_id']} · {episode['num_ticks']} ticks · work share {episode['max_agent_work_share']:.0%}</summary>"
-            f"<p>{html.escape(episode['task_instruction'])}</p><table><thead><tr><th>Tick</th><th>Agent 0</th><th>Agent 1</th></tr></thead><tbody>{''.join(rows)}</tbody></table></details>"
-        )
-    document = f"""<!doctype html><meta charset='utf-8'><title>RoboTalk smoke explorer</title>
-<style>body{{font:15px system-ui;margin:24px;max-width:1400px;color:#202631}}details{{margin:12px 0}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ccd3dc;padding:8px;vertical-align:top}}th{{background:#f3f5f8}}img{{width:280px;max-height:190px;object-fit:contain;display:block;margin-bottom:6px;background:#111}}code{{white-space:pre-wrap;word-break:break-word;font-size:11px}}</style>
-<h1>RoboTalk publication smoke</h1><p>Eight canonical concurrent trajectories. Expand an episode to inspect synchronized agent calls and latest available visual observations.</p>{''.join(sections)}"""
-    (output / "preview.html").write_text(document, encoding="utf-8")
-
-
 def _write_media_archives(output: Path, catalog: list[dict]) -> None:
     archives = output / "media_archives"
     archives.mkdir(parents=True, exist_ok=True)
@@ -291,8 +262,8 @@ def _write_static_space(output: Path, catalog: list[dict], ticks: list[dict]) ->
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--raw-root", type=Path, default=DEFAULT_RAW)
-    parser.add_argument("--rendered-root", type=Path, default=DEFAULT_RENDERED)
+    parser.add_argument("--raw-root", type=Path, required=True, help="<task>/trajectories/traj_*.json as generated")
+    parser.add_argument("--rendered-root", type=Path, required=True, help="<task>/<traj>/ as written by the render sweep")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--all", action="store_true", help="Export all trajectories instead of the eight-episode smoke set")
     args = parser.parse_args()
@@ -327,52 +298,8 @@ def main() -> None:
         "grain": {"trajectories.parquet": "one trajectory", "ticks.parquet": "one concurrent tick"},
     }
     (args.output / "dataset_info.json").write_text(_json(manifest) + "\n", encoding="utf-8")
-    release_description = (
-        "This release contains all 7,950 episodes across 53 tasks."
-        if args.all else
-        "This private smoke release contains eight episodes used to validate the publication schema and explorer."
-    )
-    dataset_card = f"""---
-configs:
-- config_name: trajectories
-  data_files: data/trajectories.parquet
-- config_name: ticks
-  data_files: data/ticks.parquet
-license: other
-language:
-- en
-tags:
-- robotics
-- multi-agent
-- vision-language-model
-- tool-use
----
-
-# RoboTalk
-
-RoboTalk contains concurrent, partially observable household-manipulation
-trajectories for two vision-language-model agents. {release_description}
-
-The `trajectories` configuration has one row per episode. The `ticks`
-configuration has one row per concurrent tick and links both agents' calls,
-rationales, messages, invocation state, and latest available visual observation.
-Each row names its trajectory-level `media_archive`; the JSON image maps contain
-the corresponding member paths inside that tar archive.
-
-```python
-from datasets import load_dataset
-
-trajectories = load_dataset("DorianAtSchool/RoboTalk", "trajectories", split="train")
-ticks = load_dataset("DorianAtSchool/RoboTalk", "ticks", split="train")
-```
-
-The source dataset contains 7,950 FSM-validated trajectories across 53 tasks.
-Licensing must be completed before making the repository public.
-"""
-    (args.output / "README.md").write_text(dataset_card, encoding="utf-8")
+    shutil.copyfile(DATASET_CARD, args.output / "README.md")
     _write_media_archives(args.output, catalog)
-    if not args.all:
-        _write_preview(args.output, catalog, ticks)
     _write_static_space(args.output, catalog, ticks)
     print(json.dumps(manifest, indent=2))
 

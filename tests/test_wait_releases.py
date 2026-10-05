@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -62,7 +63,7 @@ class InsertWaitsTests(unittest.TestCase):
 
         import robotalk.generation.insert_waits as insert_waits
 
-        root = "/work/umass/shlomo_umass/dbenhamougol_umass/data/robocasa_agentsft_subset"
+        root = os.environ.get("ROBOTALK_DATA_ROOT", "data/robotalk_rendered")
         paths = sorted(glob.glob(root + "/*/traj_000000/original_trajectory.json"))
         if not paths:
             self.skipTest("trajectory subset not present")

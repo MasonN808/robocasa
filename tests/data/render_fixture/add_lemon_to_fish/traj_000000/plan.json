@@ -9,9 +9,9 @@
         "map"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/0_top_view_agent_0.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/0_room_view_agent_0.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/0_map_agent_0.png"
+        "images/traj_000000/0_top_view_agent_0.jpg",
+        "images/traj_000000/0_room_view_agent_0.jpg",
+        "images/traj_000000/0_map_agent_0.png"
       ]
     },
     "metadata": {
@@ -36,9 +36,9 @@
         "map"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/1_top_view_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/1_room_view_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/1_map_agent_1.png"
+        "images/traj_000000/1_top_view_agent_1.jpg",
+        "images/traj_000000/1_room_view_agent_1.jpg",
+        "images/traj_000000/1_map_agent_1.png"
       ]
     },
     "metadata": {
@@ -92,8 +92,8 @@
         "agentview_center"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/4_wrist_agent_0.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/4_agentview_center_agent_0.jpg"
+        "images/traj_000000/4_wrist_agent_0.jpg",
+        "images/traj_000000/4_agentview_center_agent_0.jpg"
       ]
     },
     "metadata": {
@@ -149,8 +149,8 @@
         "agentview_center"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/7_wrist_agent_0.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/7_agentview_center_agent_0.jpg"
+        "images/traj_000000/7_wrist_agent_0.jpg",
+        "images/traj_000000/7_agentview_center_agent_0.jpg"
       ]
     },
     "metadata": {
@@ -203,8 +203,8 @@
         "agentview_center"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/10_wrist_agent_0.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/10_agentview_center_agent_0.jpg"
+        "images/traj_000000/10_wrist_agent_0.jpg",
+        "images/traj_000000/10_agentview_center_agent_0.jpg"
       ]
     },
     "metadata": {
@@ -244,8 +244,8 @@
         "agentview_center"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/12_wrist_agent_0.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/12_agentview_center_agent_0.jpg"
+        "images/traj_000000/12_wrist_agent_0.jpg",
+        "images/traj_000000/12_agentview_center_agent_0.jpg"
       ]
     },
     "metadata": {
@@ -300,9 +300,9 @@
         "agentview_right"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/14_agentview_center_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/14_agentview_left_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/14_agentview_right_agent_1.jpg"
+        "images/traj_000000/14_agentview_center_agent_1.jpg",
+        "images/traj_000000/14_agentview_left_agent_1.jpg",
+        "images/traj_000000/14_agentview_right_agent_1.jpg"
       ]
     },
     "metadata": {
@@ -344,9 +344,9 @@
         "agentview_right"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/17_agentview_center_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/17_agentview_left_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/17_agentview_right_agent_1.jpg"
+        "images/traj_000000/17_agentview_center_agent_1.jpg",
+        "images/traj_000000/17_agentview_left_agent_1.jpg",
+        "images/traj_000000/17_agentview_right_agent_1.jpg"
       ]
     },
     "metadata": {
@@ -370,8 +370,8 @@
         "agentview_center"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/18_wrist_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/18_agentview_center_agent_1.jpg"
+        "images/traj_000000/18_wrist_agent_1.jpg",
+        "images/traj_000000/18_agentview_center_agent_1.jpg"
       ]
     },
     "metadata": {
@@ -412,8 +412,8 @@
         "agentview_center"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/20_wrist_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/20_agentview_center_agent_1.jpg"
+        "images/traj_000000/20_wrist_agent_1.jpg",
+        "images/traj_000000/20_agentview_center_agent_1.jpg"
       ]
     },
     "metadata": {
@@ -437,9 +437,9 @@
         "agentview_right"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/21_agentview_center_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/21_agentview_left_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/21_agentview_right_agent_1.jpg"
+        "images/traj_000000/21_agentview_center_agent_1.jpg",
+        "images/traj_000000/21_agentview_left_agent_1.jpg",
+        "images/traj_000000/21_agentview_right_agent_1.jpg"
       ]
     },
     "metadata": {
@@ -481,9 +481,9 @@
         "agentview_right"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/23_agentview_center_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/23_agentview_left_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/23_agentview_right_agent_1.jpg"
+        "images/traj_000000/23_agentview_center_agent_1.jpg",
+        "images/traj_000000/23_agentview_left_agent_1.jpg",
+        "images/traj_000000/23_agentview_right_agent_1.jpg"
       ]
     },
     "metadata": {
@@ -507,8 +507,8 @@
         "agentview_center"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/24_wrist_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/24_agentview_center_agent_1.jpg"
+        "images/traj_000000/24_wrist_agent_1.jpg",
+        "images/traj_000000/24_agentview_center_agent_1.jpg"
       ]
     },
     "metadata": {
@@ -550,8 +550,8 @@
         "agentview_center"
       ],
       "image_paths": [
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/26_wrist_agent_1.jpg",
-        "/work/umass/shlomo_umass/dbenhamougol_umass/tick_render30_concurrent/add_lemon_to_fish/traj_000000/images/traj_000000/26_agentview_center_agent_1.jpg"
+        "images/traj_000000/26_wrist_agent_1.jpg",
+        "images/traj_000000/26_agentview_center_agent_1.jpg"
       ]
     },
     "metadata": {

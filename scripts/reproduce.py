@@ -41,6 +41,17 @@ FIGURE_EXPORTERS = {
 }
 
 
+def _load_dotenv(path: Path = ROOT / ".env") -> None:
+    """Export KEY=VALUE lines of .env (see .env.example) without overriding the shell."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip().removeprefix("export ").strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
 def _flags(mapping: dict) -> list[str]:
     args: list[str] = []
     for key, value in mapping.items():
@@ -61,7 +72,7 @@ class Reproducer:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.config = yaml.safe_load((ROOT / args.config).read_text(encoding="utf-8"))
-        self.out = ROOT / "outputs"
+        self.out = Path(os.environ.get("ROBOTALK_OUTPUT_ROOT", ROOT / "outputs"))
         # Partial (smoke) runs never count as finished paper cells.
         self.smoke = bool(args.tasks or args.episodes_per_task)
         self.eval_root = self.out / ("eval_smoke" if self.smoke else "eval")
@@ -294,6 +305,7 @@ class Reproducer:
 
 
 def main() -> None:
+    _load_dotenv()
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

@@ -303,3 +303,36 @@ All golden checks are unchanged after the move.
 - Media is fetched from the dataset's `v1.1` tag, not from `main` (`e0db464`).
 - The unused leftovers `media/`, `data/ticks.json` and `style.css` were removed.
 - All 7,954 files were hash-verified.
+
+## 10. Step 5 (portability and hygiene)
+
+**Paths.**
+- No tracked file outside the internal planning docs mentions a cluster path, account, partition or personal address.
+- `tests/test_portability.py` enforces this.
+
+**Defaults.**
+- The dataset root comes from `ROBOTALK_DATA_ROOT`, default `data/robotalk_rendered`.
+- Every output goes under `ROBOTALK_OUTPUT_ROOT`, default `outputs/`, via `robotalk.utils.output_root()`. This covers training runs, `reproduce.py`, the aggregator, the figure exporters and the HF export.
+- The wandb project defaults to `robotalk`, with no entity.
+- `.env.example` documents every variable, and `reproduce.py` now loads `.env` too.
+- Dependency messages point at the `[train]` extra (Step 6).
+- The figure pipeline under a moved output root reproduces the archived `artifact.json`; only the recorded source paths differ.
+
+**Configs.**
+- Provenance paths in `configs/` were rewritten. The split and scene cache now point at their repo copies, whose hashes matched the recorded ones. Everything else is relative to the paper-era workspace and keeps its recorded SHA-256.
+- The dependent hashes were updated: `selection_*.task_split_sha256` and the cohort's `scene_cache_sha256`.
+- The cohort `content_hash` did not reproduce under any formula even before this step, so it was stale at commit time. It is now recomputed over the whole file.
+- The evaluation content of the cohort and the scene cache is unchanged, and scene sampling does not depend on file contents.
+
+**Release tooling.**
+- `export_robotalk` requires `--raw-root` and `--rendered-root` and writes the published card (`robotalk/release/dataset_card.md`). It no longer writes `preview.html`.
+- `publish_models.py` was removed. It was hard-wired to the archived run layout, and all 12 adapters are published.
+- `tasks/TASKS.md`, an obsolete list of task candidates, was removed. The specs README now describes what ships, without pipeline provenance.
+
+**Tests.**
+- Corpus-backed tests read `ROBOTALK_DATA_ROOT` and skip cleanly without it. `test_render_order` previously errored at collection.
+- The render fixture's image paths are relative.
+- Finding: published (tick-format) trajectories are already in concurrent order (300/300 sampled), so `concurrent_step_order` is the identity on them. The old guard "the corpus really reorders" became the invariant "published trajectories are already in concurrent order".
+- Suite: 574 passed on a compute node, with a 72-trajectory corpus materialized from v1.1.
+
+**Credentials.** A regex scan found no keys or tokens. `gitleaks` is not installed on the cluster, so it moves to Step 11 on the exported tree.

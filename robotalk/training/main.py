@@ -49,9 +49,10 @@ from robotalk.training.preprocessed_data import (
     load_preprocessed_artifact_from_disk,
 )
 from robotalk.training.task_registry import resolve_task_name, supported_task_names
+from robotalk.utils import output_root
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_WANDB_PROJECT = "robocasa-bc-task-vlm"
+_DEFAULT_WANDB_PROJECT = "robotalk"
 
 
 @dataclass(frozen=True)
@@ -124,8 +125,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        default=Path("data_generation/task_level/data/image/20260404T191734Z"),
-        help="Root directory of the rendered trajectory dataset.",
+        default=Path(os.environ.get("ROBOTALK_DATA_ROOT", "data/robotalk_rendered")),
+        help=(
+            "Root directory of the rendered trajectory dataset (see "
+            "robotalk.release.materialize_training_layout)."
+        ),
     )
     parser.add_argument(
         "--preprocessed-data-dir",
@@ -246,7 +250,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Directory for cached serialized training samples. Defaults to "
-            "<repo>/.cache/bc_task_vlm/examples."
+            "<repo>/.cache/robotalk/examples."
         ),
     )
     parser.add_argument(
@@ -413,7 +417,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--wandb-entity", default=None)
     parser.add_argument("--wandb-run-name", default=None)
-    parser.add_argument("--wandb-tags", default="bc_task_vlm,qwen3.5,sft")
+    parser.add_argument("--wandb-tags", default="robotalk,sft")
     parser.add_argument(
         "--wandb-mode",
         choices=("online", "offline", "disabled"),
@@ -481,7 +485,7 @@ def _resolve_output_dir(output_dir: Path | None) -> Path:
     if output_dir is not None:
         return output_dir
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return Path("training/bc_task_vlm/runs") / timestamp
+    return output_root() / "train" / timestamp
 
 
 def _resolve_training_samples_cache_dir(
@@ -489,7 +493,7 @@ def _resolve_training_samples_cache_dir(
 ) -> Path:
     if training_samples_cache_dir is not None:
         return training_samples_cache_dir
-    return _REPO_ROOT / ".cache" / "bc_task_vlm" / "examples"
+    return _REPO_ROOT / ".cache" / "robotalk" / "examples"
 
 
 def _resolve_report_targets(raw_value: str) -> list[str]:
@@ -503,7 +507,7 @@ def _ensure_optional_dependency(module_name: str) -> None:
     if importlib.util.find_spec(module_name) is None:
         raise ImportError(
             f"Missing optional dependency {module_name!r}. "
-            f"Install training/bc_task_vlm/requirements.txt first."
+            "Install the training dependencies first: pip install -e '.[train]'."
         )
 
 
