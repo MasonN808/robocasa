@@ -165,16 +165,16 @@ A release is "complete and clean" when every item below holds.
 
 ### B.1a Licenses
 
-All sources were checked on 2026-10-04.
+**Decision (2026-10-05): Apache-2.0 for code, dataset and adapters.** All candidate licenses were checked on 2026-10-04.
 
-| Component | License | Source / notes |
+| Component | License | Notes |
 |---|---|---|
-| Our code (`robotalk/`, scripts) | **MIT** | Matches RoboCasa365 code ([README "License"](https://github.com/robocasa/robocasa): code MIT) and robosuite. Use the copyright line `Copyright (c) 2026 The RoboTalk Authors`. |
-| Forked RoboCasa code (`robocasa/`) | MIT, upstream notice retained | Keep `Copyright (c) 2026 the RoboCasa Team` alongside ours, in `LICENSE` or `NOTICE`. |
+| Our code (`robotalk/`, scripts) | **Apache-2.0** | Use the copyright line `Copyright (c) 2026 The RoboTalk Authors`. |
+| Forked RoboCasa code (`robocasa/`) | MIT (upstream), kept with its notice | MIT code may be included in an Apache-2.0 project. Keep `Copyright (c) 2026 the RoboCasa Team` and the MIT text in `NOTICE` / `robocasa/LICENSE`. |
 | RoboCasa assets we modified (118 files under `robocasa/models/assets`) | **CC BY 4.0** (upstream asset license) | CC BY requires attribution *and an indication that changes were made*. List them in `NOTICE`/`docs/FORK_CHANGES.md`. |
-| robosuite (dependency, pinned) | MIT, `Copyright (c) 2022 Stanford Vision and Learning Lab and UT Robot Perception and Learning Lab` | It bundles parts of MuJoCo under Apache-2.0. Install it as a dependency and do not vendor it. |
-| RoboTalk dataset (`DorianAtSchool/RoboTalk`) | **CC BY 4.0** | Matches RoboCasa365 assets and datasets. Its images are renders of CC BY 4.0 RoboCasa assets, so CC BY is the consistent choice. Set `license: cc-by-4.0` in the card YAML. |
-| LoRA adapters | **Apache-2.0** | Inherited from the base models [Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) and [Qwen3-VL-8B-Thinking](https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking), both Apache-2.0. Each model card sets `base_model:` and `license: apache-2.0`. |
+| robosuite (dependency, pinned) | MIT | Installed as a dependency, not vendored. |
+| RoboTalk dataset (`DorianAtSchool/RoboTalk`) | **Apache-2.0** | The images are renders of CC BY 4.0 RoboCasa assets. CC BY has no share-alike clause, so Apache-2.0 is allowed with attribution, and the card credits RoboCasa365. |
+| LoRA adapters | **Apache-2.0** | Inherited from Qwen3-VL-8B-Instruct/Thinking (both Apache-2.0). |
 
 **Caveat on the Gemini-generated data.**
 - The [Gemini API Additional Terms](https://ai.google.dev/gemini-api/terms) (last modified 2026-03-23) say Google does not claim ownership of generated content, and that the user is responsible for its use.
