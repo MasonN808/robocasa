@@ -855,7 +855,7 @@ class VllmPolicy:
             in {"1", "true", "yes", "on"}
         )
         self.recover_missing_open_tool_tag = bool(
-            getattr(args, "recover_missing_open_tool_tag", False)
+            getattr(args, "recover_missing_open_tool_tag", True)
         )
         self.last_usage: dict[str, Any] = {}
 
@@ -2448,10 +2448,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--recover-missing-open-tool-tag",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
-            "Opt-in compatibility recovery for exactly one JSON tool call "
-            "followed by </tool_call> but missing <tool_call>."
+            "Accept exactly one JSON tool call followed by </tool_call> whose "
+            "opening <tool_call> tag is missing (Qwen3-VL-Thinking without a "
+            "reasoning parser emits these)."
         ),
     )
     parser.add_argument("--image-resolution", type=int, default=512)

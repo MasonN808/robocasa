@@ -538,3 +538,40 @@ The vLLM server logs confirm the paper's parsers for each profile.
   - `add_lemon_to_fish`: success, then success in a new scene.
   - `garnish_cake`: mutual-wait deadlock, then success in a new scene with 0 rejections.
   - Episode 2 starts from a clean state: a fresh handshake under the other coordinator, and no waits left over from the deadlocked episode.
+
+## 16. README review fixes (2026-10-06)
+
+Changes made in response to the manual review.
+
+**README.**
+- Reordered: installation → quickstart → structure → results → generating data → training → evaluating, with a table of contents.
+- Explains the `trajectories` and `ticks` tables.
+- The Quickstart is split into download, unpack and replay, with every argument explained.
+- Removed the `uv.lock` remark, the Fig. 5 caveats and two limitations, as requested.
+
+**vLLM** (checked, not assumed).
+- The paper's server is the official `vllm/vllm-openai:v0.27.1` image (`apptainer inspect`), which contains transformers 5.15.0 and torch built for CUDA 13.0.
+- A plain `pip install vllm==0.27.1` resolves transformers 5.18.0 instead. Transformers supplies the Qwen chat template and image processor, so the README documents only the container route: `apptainer pull`, `VLLM_LAUNCHER`, and a note on bind mounts.
+- The container needs a driver of version 580 or newer; the eval nodes run 595.
+
+**FlashAttention.** `uv sync --all-extras` installs it and training now uses it by default, so there is nothing extra to do.
+
+**Parser recovery is now the default.**
+- `--recover-missing-open-tool-tag` is on by default; profile `thinking_parser_recovery` was renamed `thinking_no_rationale`.
+- It can only turn a parse failure into a call. Of the other paper cells' ~1,600 rejected calls, 9 were parse failures, and 8 of those already had the opening tag. At most 1 call, in Instruct + rationale 30/task, could be affected.
+
+**Training defaults are now the paper's.** `robotalk.training.main` and `preprocess` default to:
+- the 43 training tasks and no validation split;
+- lr 1e-4, weight decay 0.01, 1 epoch, batch 8 × accumulation 2;
+- max length 8192, 4 images, FlashAttention-2, last-turn supervision, 2 checkpoints per epoch, no DDP find-unused-parameters.
+
+13 settings and the task defaults differed before (`hot_dog_setup,prepare_sandwich_station` / `prepare_coffee`); `tests/unit/test_training_defaults.py` pins all 26. The README's two-command training recipe was tested on 1 GPU:
+- batch 8 per GPU runs out of memory on a 96 GB RTX PRO 6000 (the paper used 180 GB B200s);
+- `--per-device-batch-size 4 --grad-accum 4` trains, and the README says so.
+
+**New: `reproduce.py evaluate`.**
+- It evaluates any adapter (a local folder or a Hub repo), base model, or Gemini model on the paper's cohort, with the paper's settings and parsers, and prints error-free counts.
+- Tests check that on a released adapter it generates exactly that paper cell's commands.
+- The output root is now created with `parents=True`.
+
+**Generation chain checked without API calls.** Observation insertion (`image.cli --revalidate`) on real cascade output, then a render sweep of one trajectory, produced the training layout with all 34 steps succeeding. The sweep docstring and README use the production render arguments (`--scene-compatibility-cache`, `--scene-sampling-seed 20260819`).

@@ -14,6 +14,13 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def paper_train_tasks() -> str:
+    """The 43 training tasks of the paper's task split, comma-separated."""
+
+    split = json.loads((REPO_ROOT / "configs/splits/43_train_10_heldout.json").read_text())
+    return ",".join(split["train_tasks"])
+
+
 def output_root() -> Path:
     """Where runs, evaluations and figures are written (``ROBOTALK_OUTPUT_ROOT``)."""
 

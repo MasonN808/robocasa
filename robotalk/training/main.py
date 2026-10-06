@@ -49,7 +49,7 @@ from robotalk.training.preprocessed_data import (
     load_preprocessed_artifact_from_disk,
 )
 from robotalk.training.task_registry import resolve_task_name, supported_task_names
-from robotalk.utils import output_root
+from robotalk.utils import output_root, paper_train_tasks
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_WANDB_PROJECT = "robotalk"
@@ -118,6 +118,7 @@ class RunConfiguration:
 
 
 def parse_args() -> argparse.Namespace:
+    # Defaults are the paper's training settings (configs/experiments.yaml).
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -156,7 +157,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--train-tasks",
-        default="hot_dog_setup,prepare_sandwich_station",
+        default=paper_train_tasks(),
         help=(
             "Comma-separated task names for the training split. Use 'all' for "
             "every task present in the dataset root."
@@ -164,7 +165,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--val-tasks",
-        default="prepare_coffee",
+        default="",
         help=(
             "Comma-separated task names for the validation split. Pass an empty "
             "string to disable validation. Use 'all' for every task present in "
@@ -259,7 +260,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help=argparse.SUPPRESS,
     )
-    parser.add_argument("--per-device-batch-size", type=int, default=1)
+    parser.add_argument("--per-device-batch-size", type=int, default=8)
     parser.add_argument(
         "--per-device-eval-batch-size",
         type=int,
@@ -269,19 +270,19 @@ def parse_args() -> argparse.Namespace:
             "--per-device-batch-size when unset."
         ),
     )
-    parser.add_argument("--grad-accum", type=int, default=8)
-    parser.add_argument("--num-epochs", type=float, default=3.0)
-    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--grad-accum", type=int, default=2)
+    parser.add_argument("--num-epochs", type=float, default=1.0)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument(
         "--weight-decay",
         type=float,
-        default=0.0,
+        default=0.01,
         help="AdamW decoupled weight decay applied to trainable parameters.",
     )
     parser.add_argument(
         "--max-length",
         type=int,
-        default=16384,
+        default=8192,
         help=(
             "Maximum tokenized sequence length, also logged as max_tokens. "
             "Non-positive values disable token truncation."
@@ -290,7 +291,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--image-resolution",
         type=int,
-        default=None,
+        default=512,
         help=(
             "Square pixel budget (N*N) applied to the processor's "
             "min/max_pixels for live (non-pretokenized) training, matching "
@@ -301,7 +302,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-images-per-sample",
         type=int,
-        default=None,
+        default=4,
         help=(
             "Optional cap on recent image observations kept per multimodal SFT "
             "sample before tokenization. Non-positive values disable the cap."
@@ -310,14 +311,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--supervise-last-assistant-turn-only",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
             "For multi-turn conversation samples, keep only the final "
             "user/assistant turn for loss computation. This avoids unstable "
             "multi-assistant label masks in processor chat templates."
         ),
     )
-    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument(
         "--train-sampling-strategy",
         choices=("random", "group_by_length"),
@@ -356,15 +357,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ddp-find-unused-parameters",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
-            "DDP find_unused_parameters. True (default) is needed when some "
-            "batches leave LoRA params ungradiented, but it breaks gradient "
-            "checkpointing (double-marked params -> crash or silent hang). "
-            "Pass --no-ddp-find-unused-parameters to keep checkpointing."
+            "DDP find_unused_parameters. Off by default (as for the paper): "
+            "turning it on breaks gradient checkpointing (double-marked "
+            "params -> crash or silent hang). Only needed when some batches "
+            "leave LoRA params without gradients."
         ),
     )
-    parser.add_argument("--attn-implementation", default="sdpa")
+    parser.add_argument("--attn-implementation", default="flash_attention_2")
     parser.add_argument(
         "--trust-remote-code",
         action=argparse.BooleanOptionalAction,
@@ -382,7 +383,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoints-per-epoch",
         type=int,
-        default=0,
+        default=2,
         help=(
             "When positive, save whenever training crosses each 1/N epoch "
             "boundary. This supersedes --save-steps and supports half-epoch saves."

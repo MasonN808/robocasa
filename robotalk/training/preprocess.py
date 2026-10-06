@@ -48,6 +48,7 @@ from robotalk.training.prompting import (
 from robotalk.tasks.shared.validation_contract import (
     VALIDATOR_CONTRACT_VERSION,
 )
+from robotalk.utils import paper_train_tasks
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DATASET_ROOT = Path(os.environ.get("ROBOTALK_DATA_ROOT", "data/robotalk_rendered"))
@@ -108,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--train-tasks",
-        default="hot_dog_setup,prepare_sandwich_station",
+        default=paper_train_tasks(),
         help="Comma-separated task names for the training split.",
     )
     parser.add_argument(
@@ -131,7 +132,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--validation-split-mode",
         choices=("none", "same-task", "task-holdout"),
-        default="same-task",
+        default="none",
         help=(
             "Disable validation, use held-out trajectories from training tasks, "
             "or use the legacy leave-task-out validation mode."
@@ -140,13 +141,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--validation-trajectory-fraction",
         type=float,
-        default=0.1,
+        default=0.0,
         help="Fraction of trajectories per validation task held out in same-task mode.",
     )
     parser.add_argument(
         "--validation-min-trajectories-per-task",
         type=int,
-        default=1,
+        default=0,
         help="Minimum validation trajectories per task in same-task mode.",
     )
     parser.add_argument(

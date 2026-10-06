@@ -7,11 +7,12 @@ outputs: adapted trajectory, execution metadata, and images rendered by
 get_image tool calls to their specified paths.
 
 Usage:
-    # Render every trajectory once, in concurrent order:
+    # Render every trajectory once in a certified scene, as for the dataset:
     python -m robotalk.generation.sweep_trajectories \
         --input-dir data/robotalk_image \
         --output-dir data/robotalk_rendered \
-        --step-order concurrent
+        --scene-compatibility-cache configs/eval/scene_compatibility_cache_v2.json \
+        --scene-sampling-seed 20260819 --gl-backend egl
 
     # Limit to specific tasks or trajectory indices; --dry-run lists the jobs:
     python -m robotalk.generation.sweep_trajectories \

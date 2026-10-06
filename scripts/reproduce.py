@@ -6,6 +6,7 @@
     python scripts/reproduce.py fig6 [--train]           # SFT scaling
     python scripts/reproduce.py fig7 [--train]           # rationale ablation
     python scripts/reproduce.py figures                  # rebuild plots from outputs/eval
+    python scripts/reproduce.py evaluate --adapter DIR   # any model, paper cohort and settings
 
 Evaluation cells run the live-sim evaluator on both cohort splits and write
 ``outputs/eval/<model>/<split>/``. Fine-tuned cells evaluate the released
@@ -100,7 +101,9 @@ class Reproducer:
     # -- adapters ------------------------------------------------------------
     def adapter_for(self, model_id: str) -> Path | None:
         model = self.config["models"][model_id]
-        if "scale" not in model:
+        if "local_adapter" in model:
+            return model["local_adapter"]
+        if "scale" not in model and "adapter" not in model:
             return None  # untuned model
         if self.args.train:
             return self.train(model_id)
@@ -284,7 +287,7 @@ class Reproducer:
 
     # -- figures ---------------------------------------------------------------
     def figures(self, figure: str | None) -> None:
-        self.out.mkdir(exist_ok=True)
+        self.out.mkdir(parents=True, exist_ok=True)
         if self.smoke:
             print(f"Smoke run finished; outputs are under {self.eval_root} (not plotted).")
             return
@@ -309,9 +312,39 @@ class Reproducer:
                     _run([self.python, "-m", module], dry_run=self.args.dry_run)
                     done_modules.add(module)
 
+    def register_model(self) -> str:
+        """Add the model given by `evaluate --base/--adapter/--profile` as a cell."""
+        args = self.args
+        name = args.name or (Path(args.adapter).name if args.adapter else Path(args.base).name)
+        model = {
+            "label": name, "base": args.base, "profile": args.profile,
+            "backend": "gemini" if args.profile == "gemini" else "vllm",
+            "communication_mode": args.communication_mode, "figures": [],
+        }
+        if args.adapter and Path(args.adapter).is_dir():
+            model["local_adapter"] = Path(args.adapter).resolve()
+        elif args.adapter:
+            model["adapter"] = args.adapter  # a Hugging Face model repo
+        self.config["models"][name] = model
+        return name
+
+    def report(self, model_id: str) -> None:
+        for split in self.config["evaluation"]["cohort_splits"]:
+            metrics = self.eval_root / model_id / split / "aggregate" / "live_sim_metrics.json"
+            if metrics.exists():
+                m = json.loads(metrics.read_text())
+                k, n = m["num_fsm_error_free_successes"], m["num_jsonl_records"]
+                print(f"{model_id} {split}: {k}/{n} error-free FSM successes ({k / n:.1%})")
+
     def run(self) -> None:
         figure = self.args.figure
-        self.out.mkdir(exist_ok=True)
+        self.out.mkdir(parents=True, exist_ok=True)
+        if figure == "evaluate":
+            model_id = self.register_model()
+            self.evaluate(model_id)
+            if not self.args.dry_run:
+                self.report(model_id)
+            return
         if figure in ("fig5", "fig6", "fig7"):
             for model_id in self.models_for(figure):
                 self.evaluate(model_id)
@@ -323,7 +356,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("figure", choices=("fig3", "fig5", "fig6", "fig7", "figures"))
+    parser.add_argument("figure", choices=("fig3", "fig5", "fig6", "fig7", "figures", "evaluate"))
     parser.add_argument("--train", action="store_true", help="retrain adapters instead of downloading them")
     parser.add_argument("--models", help="comma-separated model ids from configs/experiments.yaml")
     parser.add_argument("--tasks", help="comma-separated task subset (smoke runs)")
@@ -333,6 +366,17 @@ def main() -> None:
     parser.add_argument("--wandb-mode", default="disabled", choices=("online", "offline", "disabled"))
     parser.add_argument("--config", default="configs/experiments.yaml")
     parser.add_argument("--dry-run", action="store_true")
+    new = parser.add_argument_group("evaluate: any model on the paper's cohort and settings")
+    new.add_argument("--base", default="Qwen/Qwen3-VL-8B-Instruct", help="base model, or a Gemini model id")
+    new.add_argument("--adapter", help="LoRA adapter: a local directory or a Hugging Face repo")
+    new.add_argument(
+        "--profile", default="instruct",
+        choices=("instruct", "thinking", "thinking_no_rationale", "gemini"),
+        help="decoding profile and vLLM parsers (configs/experiments.yaml)",
+    )
+    new.add_argument("--communication-mode", default="full",
+                     choices=("none", "unguided", "minimal", "intermediate", "full"))
+    new.add_argument("--name", help="output name under outputs/eval/ (default: adapter directory name)")
     Reproducer(parser.parse_args()).run()
 
 

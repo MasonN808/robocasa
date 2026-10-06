@@ -58,7 +58,7 @@ def test_dry_run_resolves_every_cell(tmp_path, args):
 PAPER_PARSERS = {
     "instruct": ["--tool-call-parser", "hermes"],
     "thinking": ["--tool-call-parser", "qwen3_xml", "--reasoning-parser", "qwen3"],
-    "thinking_parser_recovery": ["--tool-call-parser", "qwen3_xml"],
+    "thinking_no_rationale": ["--tool-call-parser", "qwen3_xml"],
 }
 
 
@@ -90,3 +90,18 @@ def test_a_task_subset_spanning_both_splits_is_divided_between_them(tmp_path):
         for command in commands if "--cohort-split" in command
     }
     assert by_split == {"train_task_types": "add_lemon_to_fish", "heldout_task_types": "garnish_cake"}
+
+
+@pytest.mark.parametrize("model_id", ["instruct_s30", "thinking_rationale_s30", "thinking_noreason_s30"])
+def test_evaluate_on_a_released_adapter_matches_its_paper_cell(tmp_path, model_id):
+    model = CONFIG["models"][model_id]
+    cell = _dry_run(tmp_path / "cell", model["figures"][0], "--models", model_id)
+    custom = _dry_run(
+        tmp_path / "custom", "evaluate", "--adapter", model["adapter"], "--base", model["base"],
+        "--profile", model["profile"], "--name", model_id,
+    )
+
+    def normalize(commands, root):
+        return [[t.replace(str(root), "ROOT") for t in c] for c in commands if "serve" in c or "--cohort-split" in c]
+
+    assert normalize(custom, tmp_path / "custom") == normalize(cell, tmp_path / "cell")

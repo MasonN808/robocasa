@@ -21,67 +21,84 @@ rationales. Coordination follows a leader–follower planning protocol,
 wait–release synchronization and exclusive-workspace rules, and a
 finite-state machine (FSM) validates every trajectory.
 
-This repository contains:
-- the two-robot RoboCasa365 simulator and the FSM validator;
-- the generation pipeline (Gemini 3 Flash with a bounded retry cascade);
-- LoRA fine-tuning of Qwen3-VL-8B;
-- closed-loop live-simulation evaluation;
-- one command per paper figure (Figs. 3 and 5–7).
+## Contents
+
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+- [Repository structure](#repository-structure)
+- [Results and reproduction](#results-and-reproduction)
+- [Generating new data](#generating-new-data)
+- [Training new models](#training-new-models)
+- [Evaluating new models](#evaluating-new-models)
+- [Limitations](#limitations)
+- [License](#license) · [Citation](#citation) · [Acknowledgements](#acknowledgements)
 
 ## Installation
 
-Linux with Python 3.11. [uv](https://docs.astral.sh/uv/) installs the exact
-versions in `uv.lock`:
+Linux and Python 3.11, installed with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/DorianAtSchool/robotalk.git
 cd robotalk
-uv sync --all-extras          # or pick extras: --extra train --extra gen --extra flash
+uv sync --all-extras
 source .venv/bin/activate
 
 python -m robocasa.scripts.setup_macros
 python -m robocasa.scripts.download_kitchen_assets   # RoboCasa365 assets: ~10 GB download, 23 GB on disk
-cp .env.example .env          # optional: data/output roots, Gemini credentials, vLLM launcher
+cp .env.example .env    # data/output folders, Gemini key, vLLM launcher (all optional)
 ```
+
+`--all-extras` installs everything. To install only part, pick extras:
 
 | Extra | For |
 |---|---|
-| (none) | Simulator, FSM validator, dataset tools, live-sim evaluation client |
+| (none) | Simulator, FSM validator, dataset tools, live-simulation evaluation |
 | `train` | LoRA fine-tuning (`torch`, `transformers`, `peft`, `accelerate`) |
-| `flash` | FlashAttention-2, as used for the paper's training runs (prebuilt wheel for Python 3.11) |
-| `gen` | Trajectory generation and the Gemini evaluation cells (`google-genai`) |
+| `flash` | FlashAttention-2, used for training |
+| `gen` | Generating new data and the Gemini evaluations (`google-genai`) |
 | `dev` | `pytest` |
 
 robosuite is installed from
-[DorianAtSchool/robosuite](https://github.com/DorianAtSchool/robosuite) at the
-commit used for the paper. That is upstream robosuite plus one fix that gives
-each robot's mounting body a unique name, which scenes with two mobile
-manipulators need.
+[DorianAtSchool/robosuite](https://github.com/DorianAtSchool/robosuite):
+upstream robosuite plus one fix that lets two mobile manipulators share a
+scene.
+
+**FlashAttention.** Nothing extra to do: `uv sync --all-extras` installs a
+prebuilt FlashAttention-2 wheel, and training uses it by default. The wheel
+exists for Linux x86-64 with Python 3.11 only. Elsewhere, add
+`--attn-implementation sdpa` to the training command.
+
+**vLLM** (needed only to evaluate open-weight models). The models are served by
+a local [vLLM](https://github.com/vllm-project/vllm) 0.27.1 server running
+from the official container. vLLM brings its own torch and transformers, so it
+does not go in the environment above. With
+[Apptainer](https://apptainer.org) (or Singularity):
+
+```bash
+apptainer pull vllm-openai-v0.27.1.sif docker://vllm/vllm-openai:v0.27.1   # ~8 GB
+echo 'VLLM_LAUNCHER="apptainer exec --nv /path/to/vllm-openai-v0.27.1.sif"' >> .env
+```
+
+The evaluation scripts start and stop the server themselves. Apptainer gives
+the container your home directory and the current directory. If your
+Hugging Face cache (`HF_HOME`) or outputs (`ROBOTALK_OUTPUT_ROOT`) live
+elsewhere, add `--bind /that/path` after `--nv`.
 
 > [!IMPORTANT]
-> **GPU requirements.** `torch` comes from PyTorch's CUDA 12.8 package index,
-> as in the paper's environment. Those builds support NVIDIA GPUs of compute
-> capability 7.5–12.0 (Turing, Ampere, Hopper and Blackwell) and need a
-> driver that supports CUDA 12.8 (version 570 or newer). They are **required
-> on Blackwell GPUs** (e.g. RTX PRO 6000, B200): the default PyPI build of
-> torch 2.7.1 fails there with "no kernel image is available". Volta (V100)
-> and older GPUs are **not supported**. On those machines, point `torch` and
-> `torchvision` at `https://download.pytorch.org/whl/cu126` in
-> `pyproject.toml` (`[[tool.uv.index]]`). The paper trained on 4× B200 and
-> evaluated on single RTX PRO 6000 GPUs.
-
-**vLLM.** Open-weight models are evaluated through a local
-[vLLM](https://github.com/vllm-project/vllm) 0.27.1 server. It pins its own
-torch, so install it in a separate environment or run it from the official
-container. Set `VLLM_LAUNCHER` to the command prefix, for example
-`VLLM_LAUNCHER="apptainer exec --nv vllm-openai-v0.27.1.sif"`.
-
-**FlashAttention.** The `flash` extra installs a prebuilt wheel for CUDA 12,
-torch 2.7 and Python 3.11. Elsewhere, train with `--attn-implementation sdpa`.
+> **GPU requirements.**
+> - **Training:** `torch` comes from PyTorch's CUDA 12.8 builds, as in the
+>   paper's environment. These run on NVIDIA GPUs from Turing to Blackwell
+>   (compute capability 7.5–12.0, e.g. T4, A100, H100, RTX PRO 6000, B200)
+>   with a driver for CUDA 12.8 (570 or newer). Volta (V100) and older GPUs
+>   are not supported.
+> - **Evaluation:** the vLLM 0.27.1 container is built for CUDA 13.0 and needs
+>   a driver of version 580 or newer.
+>
+> The paper trained on 4× B200 and evaluated on single RTX PRO 6000 GPUs.
 
 ## Quickstart
 
-Load the dataset:
+**Load the dataset.** It has two tables (Hugging Face "configs"):
 
 ```python
 from datasets import load_dataset
@@ -90,25 +107,69 @@ trajectories = load_dataset("DorianAtSchool/RoboTalk", "trajectories", split="tr
 ticks = load_dataset("DorianAtSchool/RoboTalk", "ticks", split="train")
 ```
 
-Replay demonstrations in the simulator. This downloads one task, rebuilds the
-per-trajectory layout and replays two trajectories with the expert ("oracle")
-policy:
+- `trajectories` has one row per trajectory (7,950 rows). It holds the task and
+  its instruction, the coordinating robot, the initial state, how the
+  trajectory was generated, and summary counts (ticks, messages, physical
+  actions per robot).
+- `ticks` has one row per time step of a trajectory (66,592 rows). It holds
+  both robots' tool calls, arguments, rationales and messages at that step,
+  and the camera images each robot had seen by then.
+- The two tables join on `episode_key`. Here `split="train"` is simply the name
+  of each table, not the paper's train/held-out task split.
 
-```bash
-hf download DorianAtSchool/RoboTalk --repo-type dataset --revision v1.1 \
-    --include "data/trajectories.parquet" "raw/prepare_coffee/*" "media_archives/prepare_coffee__*" \
-    --local-dir data/hf
-python -m robotalk.release.materialize_training_layout \
-    --hf-dir data/hf --output data/robotalk_rendered --tasks prepare_coffee
-MUJOCO_GL=egl python -m robotalk.evaluation.live_sim_eval --backend oracle \
-    --concurrent-expert-replay --manifest configs/eval/oracle_smoke.json \
-    --tasks prepare_coffee --dataset-root data/robotalk_rendered --output-dir outputs/oracle
-```
+**Replay demonstrations in the simulator.** This checks that the simulator is
+installed correctly, in three steps.
 
-Episode outcomes go to `outputs/oracle/live_sim_trajectories.jsonl`, and
-videos of each robot's cameras to `outputs/oracle/recordings/`.
+1. Download one task (`prepare_coffee`) from the dataset, about 255 MB:
 
-Run a fine-tuned policy for one episode per task on two tasks. This needs a
+   ```bash
+   hf download DorianAtSchool/RoboTalk --repo-type dataset --revision v1.1 \
+       --include "data/trajectories.parquet" "raw/prepare_coffee/*" "media_archives/prepare_coffee__*" \
+       --local-dir data/hf
+   ```
+
+   - `data/trajectories.parquet` is the trajectory table, which holds each
+     task's instruction.
+   - `raw/prepare_coffee/*` contains the task's 150 trajectory records: the
+     tool calls, messages and rationales.
+   - `media_archives/prepare_coffee__*` contains one archive of rendered
+     camera images per trajectory.
+
+2. Unpack it into the per-trajectory layout that training and evaluation read:
+
+   ```bash
+   python -m robotalk.release.materialize_training_layout \
+       --hf-dir data/hf --output data/robotalk_rendered --tasks prepare_coffee
+   ```
+
+   This writes `data/robotalk_rendered/<task>/<trajectory>/` for each
+   trajectory. Each folder holds:
+   - the trajectory, with its observation calls inserted;
+   - the calls in the order the simulator executes them, with image paths;
+   - the execution record;
+   - the extracted images.
+
+3. Replay two of the trajectories in the simulator:
+
+   ```bash
+   MUJOCO_GL=egl python -m robotalk.evaluation.live_sim_eval --backend oracle \
+       --concurrent-expert-replay --manifest configs/eval/oracle_smoke.json \
+       --tasks prepare_coffee --dataset-root data/robotalk_rendered --output-dir outputs/oracle
+   ```
+
+   | Argument | Meaning |
+   |---|---|
+   | `--backend oracle` | Replay the recorded expert calls instead of querying a model. Every replayed trajectory should reach its goal. |
+   | `--concurrent-expert-replay` | Run the two robots' calls through the same concurrent scheduler used to evaluate models, with each robot advancing its own calls. |
+   | `--manifest configs/eval/oracle_smoke.json` | Which trajectories to replay: two per task, for four tasks. |
+   | `--tasks prepare_coffee` | Only the task downloaded in step 1. |
+   | `--dataset-root`, `--output-dir` | Where to read trajectories and write results. |
+   | `MUJOCO_GL=egl` | Render on the GPU without a display. |
+
+   Outcomes are written to `outputs/oracle/live_sim_trajectories.jsonl` and
+   camera videos to `outputs/oracle/recordings/`.
+
+**Run a fine-tuned model** for one episode on each of two tasks. This needs a
 GPU and vLLM:
 
 ```bash
@@ -116,7 +177,31 @@ python scripts/reproduce.py fig6 --models instruct_s30 \
     --tasks prepare_coffee,arrange_bread_bowl --episodes-per-task 1
 ```
 
-## Results
+## Repository structure
+
+```text
+robotalk/
+  tasks/        53 task specifications, symbolic state, concurrent FSM validator
+  tools/        the tool interface shared by generation, training and evaluation
+  generation/   Gemini trajectory generation, observation insertion, rendering
+  training/     example construction, preprocessing, LoRA fine-tuning
+  evaluation/   live-simulation evaluation (vLLM, Gemini and oracle backends)
+  analysis/     paper results and figures
+  release/      dataset export, training-layout rebuild, explorer Space
+robocasa/       RoboCasa365 with two-robot support and the skill executor (docs/FORK_CHANGES.md)
+configs/        experiment settings, task split, training subsets, evaluation cohort
+scripts/        reproduce.py and a SLURM wrapper
+tests/          unit tests (tests/unit) and simulator tests (tests/sim)
+docs/           paper PDF and technical notes
+```
+
+Technical notes:
+- [concurrency semantics](docs/concurrency_semantics.md)
+- [tool interface](docs/tool_interface.md)
+- [data format](docs/data_format.md)
+- [evaluation](docs/evaluation.md)
+
+## Results and reproduction
 
 Every number is closed-loop **error-free FSM success**: the episode reaches the
 task goal with no rejected or failed tool call, within a budget of four times
@@ -126,14 +211,15 @@ episodes of the 43 training tasks and 100 episodes of the 10 held-out tasks
 intervals.
 
 `scripts/reproduce.py` runs a figure end to end:
-- it downloads the dataset (v1.1) and the released adapters;
-- it starts vLLM and evaluates every cell on both splits;
+- it downloads the dataset (v1.1) and the released models;
+- it starts vLLM and evaluates every model on both task splits;
 - it plots the figure into `outputs/figures/43_10/`.
 
-Finished cells are skipped, so an interrupted run resumes when you rerun the
-same command. `--dry-run` prints the commands without running them.
-`--train` retrains the adapters instead of downloading them.
-`scripts/slurm/reproduce.sbatch` wraps it for SLURM.
+Finished evaluations are skipped, so an interrupted run resumes when you rerun
+the same command. `--dry-run` prints the commands without running them, and
+`--train` retrains the models instead of downloading them.
+`scripts/slurm/reproduce.sbatch` wraps it for SLURM. The settings of every
+model are in `configs/experiments.yaml`.
 
 ### Fig. 3: task phases
 
@@ -161,12 +247,10 @@ python scripts/reproduce.py fig3        # seconds, CPU only
 python scripts/reproduce.py fig5
 ```
 
-Fig. 5 needs Gemini credentials (see `.env.example`) and one GPU for Qwen.
-- **Workload:** 10 cells of 530 two-robot episodes each. The 5 Qwen cells run on one GPU, like the Fig. 6 cells; the 5 Gemini cells make 2,650 episodes' worth of API calls, for which no cost was recorded.
-- **Gemini outcomes vary:** Gemini is not deterministic through the API, so expect rates within the confidence intervals rather than identical episodes.
-- **Cohort difference:** the paper ran this ablation on an earlier 47/6 task split and regrouped the results to 43/10. A rerun on the 43/10 cohort draws different episodes for the 4 tasks that moved to the held-out split.
+Fig. 5 needs a Gemini API key (see `.env.example`) and one GPU for Qwen. It
+runs 10 conditions of 530 episodes each.
 
-### Fig. 6: SFT scaling (trajectories per training task)
+### Fig. 6: fine-tuning with more data (trajectories per training task)
 
 | Model | 30 | 60 | 90 | 120 | 150 |
 |---|---:|---:|---:|---:|---:|
@@ -176,80 +260,125 @@ Fig. 5 needs Gemini credentials (see `.env.example`) and one GPU for Qwen.
 | Thinking + rationale, held-out tasks | 71% | 72% | 66% | 77% | 73% |
 
 ```bash
-python scripts/reproduce.py fig6                         # released adapters
+python scripts/reproduce.py fig6                         # released models
 python scripts/reproduce.py fig6 --train                 # retrain first
-python scripts/reproduce.py fig6 --models instruct_s30   # one cell
+python scripts/reproduce.py fig6 --models instruct_s30   # one model
 ```
 
-**Compute for Fig. 6:**
-- **Evaluation:** about 1 hour per model on one GPU, with 4 simulator workers sharing the vLLM server. Thinking models take about 30% longer.
-- **Retraining:** about 2 hours per 30 trajectories per task on 4× B200. That is 2 h for the 30/task models and 9.7 h for the 150/task models: about 59 h of wall time, or 235 B200 GPU-hours, for all ten adapters.
-- **Variance:** Thinking models are evaluated with sampling (temperature 0.6), so their rates vary from run to run.
+**Compute:**
+- **Evaluation:** about 1 hour per model on one GPU (Thinking models about 30%
+  longer).
+- **Training:** about 2 hours per 30 trajectories per task on 4× B200. That
+  ranges from 2 h (30/task) to 9.7 h (150/task), or about 235 B200 GPU-hours
+  for all ten models.
+- **Variation:** Thinking models are evaluated with sampling (temperature 0.6),
+  so their rates vary slightly from run to run.
 
-### Fig. 7: rationale ablation at 30 trajectories per task
+### Fig. 7: rationales, at 30 trajectories per task
 
 | Model and targets | Train tasks | Held-out tasks |
 |---|---:|---:|
 | Instruct, tool calls | 81.9% | 45% |
 | Instruct, rationale + tool calls | 82.6% | 58% |
-| Thinking, tool calls† | 71.6% | 50% |
+| Thinking, tool calls | 71.6% | 50% |
 | Thinking, rationale + tool calls | 80.2% | 71% |
 
 ```bash
 python scripts/reproduce.py fig7 [--train]
 ```
 
-† Evaluated with `--recover-missing-open-tool-tag`, which accepts a tool call
-whose opening `<tool_call>` tag is missing.
-
-Exact settings for every cell are in `configs/experiments.yaml`:
-training hyperparameters, decoding profiles, vLLM arguments, splits and
-seeds. The adapters were trained on dataset v1.0.
-
-**Dataset versions.** v1.1 replaces 95 trajectories (1.2%) that failed in
-simulation; see the dataset card. Retraining on v1.1 should match the paper
-within its confidence intervals.
-
-## Repository structure
-
-```text
-robotalk/
-  tasks/        53 task specifications, symbolic state, concurrent FSM validator
-  tools/        the tool interface shared by generation, training and evaluation
-  generation/   Gemini trajectory generation, observation insertion, rendering sweep
-  training/     example construction, preprocessing, LoRA SFT
-  evaluation/   live-simulation evaluation (vLLM, Gemini, oracle backends)
-  analysis/     paper result aggregation and figures
-  release/      Hugging Face export, training-layout rebuild, explorer Space
-robocasa/       RoboCasa365 with two-robot support and the skill executor (docs/FORK_CHANGES.md)
-configs/        experiment settings, task split, scale subsets, evaluation cohort
-scripts/        reproduce.py and a SLURM wrapper
-tests/          unit and simulator tests
-docs/           paper PDF and technical notes
-```
-
-Technical notes:
-- [concurrency semantics](docs/concurrency_semantics.md)
-- [tool interface](docs/tool_interface.md)
-- [data format](docs/data_format.md)
-- [evaluation](docs/evaluation.md)
+**Dataset versions.** The released models were trained on dataset v1.0. v1.1
+replaces 95 trajectories (1.2%) that failed in simulation (see the dataset
+card). Retraining on v1.1 should match the paper within its confidence
+intervals.
 
 ## Generating new data
 
-Generation needs the `gen` extra and Gemini access, either `GOOGLE_API_KEY` or
-Vertex AI credentials. It runs in three stages:
-1. **Generate** symbolic trajectories with the production cascade.
-2. **Insert observations.** This adds `get_image` calls and revalidates.
-3. **Render** the trajectories in the simulator.
+Generation needs a Gemini API key (`GOOGLE_API_KEY`) or Vertex AI credentials.
+It runs in three stages, shown here for one task:
 
 ```bash
-python -m robotalk.generation.raw.production_cascade --help
-python -m robotalk.generation.image.cli --help
-python -m robotalk.generation.sweep_trajectories --help
+# 1. Generate and validate trajectories with Gemini (150 per task in the dataset).
+python -m robotalk.generation.raw.production_cascade --task PrepareCoffee --num-runs 150 \
+    --output-root data/my_raw
+
+# 2. Insert the observation (get_image) calls and revalidate.
+python -m robotalk.generation.image.cli --revalidate \
+    --dataset data/my_raw/prepare_coffee/summary.json \
+    --output-dataset data/my_image/prepare_coffee/summary.json
+
+# 3. Replay each trajectory in a certified scene and render the camera views.
+MUJOCO_GL=egl python -m robotalk.generation.sweep_trajectories \
+    --input-dir data/my_image --output-dir data/my_rendered \
+    --scene-compatibility-cache configs/eval/scene_compatibility_cache_v2.json \
+    --scene-sampling-seed 20260819 --gl-backend egl
 ```
 
-`robotalk.release.export_robotalk` converts the result to the published
-dataset layout.
+The last stage writes the same per-trajectory layout as the Quickstart, so the
+result can be used directly for training (`--dataset-root data/my_rendered`).
+`python -m robotalk.release.export_robotalk` converts it into the published
+dataset format.
+
+## Training new models
+
+Training defaults are the paper's settings: LoRA rank 16, learning rate 1e-4,
+one epoch, effective batch 64 over 4 GPUs, and the 43 training tasks. Training
+reads the per-trajectory layout in `data/robotalk_rendered`, as built in the
+Quickstart or by `reproduce.py`. Change the folder with `--dataset-root` or
+`ROBOTALK_DATA_ROOT`.
+
+```bash
+# 1. Build the training examples (CPU).
+python -m robotalk.training.preprocess --output-dir outputs/preprocessed/my_run
+
+# 2. Fine-tune with LoRA on 4 GPUs.
+accelerate launch --config_file configs/train/accelerate_multigpu.yaml --num_processes 4 \
+    -m robotalk.training.main --preprocessed-data-dir outputs/preprocessed/my_run \
+    --model-name-or-path Qwen/Qwen3-VL-8B-Instruct --output-dir outputs/train/my_run
+```
+
+- **Rationales:** add `--train-reasoning` to both commands to train with
+  rationales (`<think>…</think>` before each tool call).
+- **Thinking model:** use `--model-name-or-path Qwen/Qwen3-VL-8B-Thinking`.
+- **Paper's training subsets:** to train on 30–150 trajectories per task as
+  in Fig. 6, run `python -m robotalk.training.materialize_scale_artifacts
+  --master outputs/preprocessed/my_run --selection configs/splits/selection_30.json
+  --output outputs/preprocessed/my_run_s30` between the two steps, and train on
+  that folder.
+- **GPU memory:** the paper's 8 examples per GPU fit 180 GB B200s. On 80–96 GB
+  GPUs, add `--per-device-batch-size 4 --grad-accum 4`, which keeps the
+  effective batch at 64.
+- **Other settings:** see `python -m robotalk.training.main --help`.
+
+## Evaluating new models
+
+`reproduce.py evaluate` runs any model on the paper's evaluation cohort with
+the paper's settings: 10 episodes per task on both task splits.
+
+```bash
+# Your adapter (a training output folder, or a Hugging Face model repo):
+python scripts/reproduce.py evaluate --adapter outputs/train/my_run
+
+# A Thinking model trained with rationales:
+python scripts/reproduce.py evaluate --adapter outputs/train/my_run \
+    --base Qwen/Qwen3-VL-8B-Thinking --profile thinking
+
+# An untuned model under another communication condition:
+python scripts/reproduce.py evaluate --base Qwen/Qwen3-VL-8B-Instruct --communication-mode minimal
+
+# Gemini (needs the API key):
+python scripts/reproduce.py evaluate --profile gemini --base gemini-3-flash-preview
+```
+
+- **Profiles:** `--profile` sets decoding and vLLM's output parsers.
+  - `instruct`: Instruct models.
+  - `thinking`: Thinking models trained with rationales.
+  - `thinking_no_rationale`: Thinking models trained without rationales.
+  - `gemini`: Gemini models.
+- **Results:** they go to `outputs/eval/<name>/<split>/`, and the command
+  prints the error-free success counts per split.
+- **Quick tests:** `--tasks a,b --episodes-per-task 1` runs a short smoke test
+  instead, written to `outputs/eval_smoke/`.
 
 ## Limitations
 
@@ -259,9 +388,6 @@ dataset layout.
   example, placing the spatula in the pot counts as stirring in CheeseMixing.
 - There are two robots, 53 tasks and a certified set of 60 kitchen scenes.
   Held-out generalization is measured on 10 task types.
-- Each result comes from one training run per configuration. The confidence
-  intervals do not capture variation across training seeds.
-- Messages and rationales are written by Gemini and inherit its style.
 
 ## License
 
@@ -270,7 +396,7 @@ dataset layout.
 | RoboTalk code | [Apache-2.0](LICENSE) |
 | RoboCasa365 code in `robocasa/` | MIT, © the RoboCasa Team ([robocasa/LICENSE](robocasa/LICENSE)) |
 | RoboCasa365 assets (downloaded separately) | CC BY 4.0 |
-| Dataset and adapters | Apache-2.0 |
+| Dataset and models | Apache-2.0 |
 
 See [NOTICE](NOTICE). The trajectories were generated with Google Gemini, and
 users are responsible for complying with the applicable model terms of

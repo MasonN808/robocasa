@@ -53,13 +53,12 @@ evaluation:
       --vllm-top-p: 0.95
       --vllm-top-k: 20
       --enable-thinking: true
-    thinking_parser_recovery:
+    thinking_no_rationale:
       --max-new-tokens: 2048
       --vllm-temperature: 0.6
       --vllm-top-p: 0.95
       --vllm-top-k: 20
       --enable-thinking: true
-      --recover-missing-open-tool-tag: true
     gemini:
       --max-new-tokens: 256
   vllm:
@@ -86,7 +85,7 @@ evaluation:
     profile_serve_args:
       instruct: [--tool-call-parser, hermes]
       thinking: [--tool-call-parser, qwen3_xml, --reasoning-parser, qwen3]
-      thinking_parser_recovery: [--tool-call-parser, qwen3_xml]
+      thinking_no_rationale: [--tool-call-parser, qwen3_xml]
     # Environment of the paper's vLLM server process.
     env:
       VLLM_USE_FLASHINFER_SAMPLER: "0"
@@ -135,7 +134,7 @@ models:
   thinking_rationale_s120: {label: "Thinking + rationale SFT 120/task", base: Qwen/Qwen3-VL-8B-Thinking, scale: 120, train_reasoning: true, profile: thinking, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-120traj, figures: [fig6]}
   thinking_rationale_s150: {label: "Thinking + rationale SFT 150/task", base: Qwen/Qwen3-VL-8B-Thinking, scale: 150, train_reasoning: true, profile: thinking, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-Rationale-150traj, figures: [fig6]}
   instruct_rationale_s30:  {label: "Instruct + rationale SFT 30/task",   base: Qwen/Qwen3-VL-8B-Instruct, scale: 30, train_reasoning: true,  profile: instruct, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Instruct-Rationale-30traj, figures: [fig7]}
-  thinking_noreason_s30:   {label: "Thinking + no rationale SFT 30/task", base: Qwen/Qwen3-VL-8B-Thinking, scale: 30, train_reasoning: false, profile: thinking_parser_recovery, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-30traj, figures: [fig7]}
+  thinking_noreason_s30:   {label: "Thinking + no rationale SFT 30/task", base: Qwen/Qwen3-VL-8B-Thinking, scale: 30, train_reasoning: false, profile: thinking_no_rationale, adapter: DorianAtSchool/RoboTalk-Qwen3-VL-8B-Thinking-30traj, figures: [fig7]}
 
   # --- Fig. 5 (communication ablation, untuned models) ---------------------
   qwen_base_none:          {label: "Base Qwen3-VL-8B", base: Qwen/Qwen3-VL-8B-Instruct, profile: instruct, communication_mode: none,         figures: [fig5]}
