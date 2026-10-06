@@ -526,3 +526,11 @@ The vLLM server logs confirm the paper's parsers for each profile.
 - vLLM parsers (`cef8e03`);
 - dependency pins and the Fig. 3 output directory (`7a827d0`);
 - partial-figure plotting (`916acca` and this commit).
+
+**Gemini smoke** (requested 2026-10-06; minimal API use):
+- Command: `reproduce.py fig5 --models gemini_full --tasks add_lemon_to_fish,garnish_cake --episodes-per-task 1`, i.e. 2 episodes, one per split.
+- First attempt: it failed before any API call. `reproduce.py` passed the whole `--tasks` list to each split's evaluator, which rejects tasks outside its split. Each split now gets only its own tasks; a dry-run test covers this.
+- Second attempt: both episodes ran with native function calling, the full opening handshake and FSM checks.
+  - `add_lemon_to_fish` reached the goal, with 1 rejected call.
+  - `garnish_cake` ended in a mutual-wait deadlock.
+- No token usage is recorded by the evaluator.

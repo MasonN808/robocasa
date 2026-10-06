@@ -76,3 +76,17 @@ def test_vllm_server_uses_the_paper_parsers(tmp_path, model_id):
         or (i and serve[i - 1] in ("--tool-call-parser", "--reasoning-parser"))
     ]
     assert parser_args == PAPER_PARSERS[model["profile"]]
+
+
+def test_a_task_subset_spanning_both_splits_is_divided_between_them(tmp_path):
+    """Each split's evaluator only accepts that split's tasks."""
+
+    commands = _dry_run(
+        tmp_path, "fig5", "--models", "gemini_full",
+        "--tasks", "add_lemon_to_fish,garnish_cake", "--episodes-per-task", "1",
+    )
+    by_split = {
+        command[command.index("--cohort-split") + 1]: command[command.index("--tasks") + 1]
+        for command in commands if "--cohort-split" in command
+    }
+    assert by_split == {"train_task_types": "add_lemon_to_fish", "heldout_task_types": "garnish_cake"}

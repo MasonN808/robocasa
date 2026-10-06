@@ -202,7 +202,7 @@ class Reproducer:
         if model.get("backend") == "gemini":
             args += ["--model", model["base"]]
         if self.args.tasks:
-            args += ["--tasks", self.args.tasks]
+            args += ["--tasks", ",".join(self.tasks_in_split(split))]
         return args
 
     def cell_done(self, model_id: str, split: str) -> bool:
@@ -215,10 +215,14 @@ class Reproducer:
         ]
         if self.args.tasks:
             # A task subset may fall entirely in one split; skip the other.
-            cohort = json.loads((ROOT / self.config["evaluation"]["cohort"]).read_text())
-            wanted = set(self.args.tasks.split(","))
-            splits = [s for s in splits if wanted & set(cohort["configurations"][s])]
+            splits = [s for s in splits if self.tasks_in_split(s)]
         return splits
+
+    def tasks_in_split(self, split: str) -> list[str]:
+        """The --tasks that belong to a cohort split, in the order given."""
+        cohort = json.loads((ROOT / self.config["evaluation"]["cohort"]).read_text())
+        members = set(cohort["configurations"][split])
+        return [t for t in self.args.tasks.split(",") if t in members]
 
     def evaluate(self, model_id: str) -> None:
         splits = self.splits_to_run(model_id)
