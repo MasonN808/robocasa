@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - optional in lightweight test envs
 from robotalk.generation.runtime.client import load_dotenv_file
 from robotalk.training.dataset import (
     build_batched_pretokenized_tensors,
-    build_centralized_examples,
+    build_agent_turn_examples,
     build_example_cache_fingerprint,
     build_example_cache_path,
     build_same_task_trajectory_split,
@@ -82,9 +82,7 @@ def _resolve_validation_task_list(
     if validation_split_mode == "none":
         return []
     if raw_value is None or raw_value.strip() in {"", "same_as_train", "train"}:
-        if validation_split_mode == "same-task":
-            return list(train_tasks)
-        return [resolve_task_name("prepare_coffee")]
+        return list(train_tasks)
     return _resolve_task_list(raw_value)
 
 
@@ -131,11 +129,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--validation-split-mode",
-        choices=("none", "same-task", "task-holdout"),
+        choices=("none", "same-task"),
         default="none",
         help=(
-            "Disable validation, use held-out trajectories from training tasks, "
-            "or use the legacy leave-task-out validation mode."
+            "No validation set (as for the paper), or hold out a fraction of "
+            "each training task's trajectories for validation."
         ),
     )
     parser.add_argument(
@@ -654,7 +652,7 @@ def _build_examples_for_tasks(
             try:
                 if task_examples is None:
                     _log(f"Building {task_label}")
-                    task_examples = build_centralized_examples(
+                    task_examples = build_agent_turn_examples(
                         dataset_root=dataset_root,
                         task_names=[task_name],
                         trajectory_ids_by_task=None
@@ -804,14 +802,6 @@ def main() -> None:
         )
         train_trajectory_ids_by_task = trajectory_split.train_trajectory_ids_by_task
         val_trajectory_ids_by_task = trajectory_split.validation_trajectory_ids_by_task
-    elif args.validation_split_mode == "task-holdout":
-        overlapping_tasks = sorted(set(train_tasks).intersection(val_tasks))
-        if overlapping_tasks:
-            overlap_text = ", ".join(overlapping_tasks)
-            raise ValueError(
-                "Train and validation tasks must be disjoint. "
-                f"Overlap: {overlap_text}."
-            )
 
     training_samples_cache_dir = _resolve_training_samples_cache_dir(
         args.training_samples_cache_dir

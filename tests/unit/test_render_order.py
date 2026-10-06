@@ -26,32 +26,30 @@ def _sample(count: int = 12) -> list[Path]:
 
 def test_a_trajectory_with_one_step_is_left_alone():
     trajectory = {"composite_task": "nope", "steps": [{"step": 0}]}
-    assert concurrent_step_order(trajectory) == ([0], None)
+    assert concurrent_step_order(trajectory) == [0]
 
 
-def test_an_unloadable_task_falls_back_to_file_order_with_a_reason():
+def test_an_unloadable_task_is_an_error_not_a_file_order_render():
     trajectory = {
         "composite_task": "definitely_not_a_task",
         "agents": ["agent_0"],
         "steps": [{"step": 0}, {"step": 1}],
     }
-    order, reason = concurrent_step_order(trajectory)
-    assert order == [0, 1]
-    assert reason
+    with pytest.raises(ValueError, match="cannot load task"):
+        concurrent_step_order(trajectory)
 
 
 @pytest.mark.parametrize("path", _sample(), ids=lambda p: f"{p.parent.parent.name}/{p.parent.name}")
 def test_the_order_is_a_permutation_that_loses_no_step(path):
     trajectory = json.loads(path.read_text())
-    order, reason = concurrent_step_order(trajectory)
-    assert reason is None, reason
+    order = concurrent_step_order(trajectory)
     assert sorted(order) == list(range(len(trajectory["steps"])))
 
 
 @pytest.mark.parametrize("path", _sample(), ids=lambda p: f"{p.parent.parent.name}/{p.parent.name}")
 def test_reordering_preserves_every_step_object_and_its_step_field(path):
     trajectory = json.loads(path.read_text())
-    reordered, order, _ = reorder_for_concurrent_render(trajectory)
+    reordered, order = reorder_for_concurrent_render(trajectory)
     original = trajectory["steps"]
     assert len(reordered["steps"]) == len(original)
     # Same objects, same `step` labels -- only the sequence differs, so image
@@ -66,7 +64,7 @@ def test_each_agents_own_steps_keep_their_relative_order(path):
     """Reordering interleaves the agents; it never reshuffles one agent's plan."""
 
     trajectory = json.loads(path.read_text())
-    reordered, _, _ = reorder_for_concurrent_render(trajectory)
+    reordered, _ = reorder_for_concurrent_render(trajectory)
     for agent in trajectory.get("agents", []):
         agent_id = agent if isinstance(agent, str) else agent.get("agent_id")
         before = [s["step"] for s in trajectory["steps"] if s.get("agent") == agent_id]
@@ -84,6 +82,5 @@ def test_published_trajectories_are_already_in_concurrent_order():
         pytest.skip(f"corpus not present at {CORPUS}")
     for path in paths:
         trajectory = json.loads(path.read_text())
-        order, reason = concurrent_step_order(trajectory)
-        assert reason is None, reason
+        order = concurrent_step_order(trajectory)
         assert order == list(range(len(trajectory["steps"])))

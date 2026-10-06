@@ -9,7 +9,6 @@ and are never rewritten; combined outputs are derived under ``aggregate/``.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -205,19 +204,6 @@ def _selected_mapping(
             ]
             for task, configurations in source.items()
         }
-    elif manifest_type == "fixed_live_sim":
-        if cohort_split is None:
-            raise ParallelEvalError("fixed_live_sim requires --cohort-split")
-        try:
-            raw_episodes = manifest["splits"][cohort_split]
-        except KeyError as exc:
-            raise ParallelEvalError(f"manifest has no split {cohort_split!r}") from exc
-        mapping = {}
-        for task, episodes in raw_episodes.items():
-            ordered = sorted(episodes, key=lambda row: int(row["episode_rank"]))
-            if episodes_per_task is not None:
-                ordered = [row for row in ordered if int(row["episode_rank"]) < episodes_per_task]
-            mapping[str(task)] = [str(row["trajectory_id"]) for row in ordered]
     else:
         try:
             raw_mapping = manifest["trajectory_ids_by_task"]
@@ -248,23 +234,9 @@ def _selected_mapping(
 def _task_weights(
     manifest: dict[str, Any], mapping: dict[str, list[str]]
 ) -> dict[str, int]:
-    """Estimate task cost from manifest samples, falling back to trajectory count."""
+    """Estimate each task's cost by its number of episodes."""
 
-    allowed = {
-        (task, trajectory_id)
-        for task, trajectory_ids in mapping.items()
-        for trajectory_id in trajectory_ids
-    }
-    sample_counts = Counter(
-        (str(sample.get("task_name")), str(sample.get("trajectory_id")))
-        for sample in manifest.get("samples", [])
-        if (str(sample.get("task_name")), str(sample.get("trajectory_id")))
-        in allowed
-    )
-    return {
-        task: sum(max(1, sample_counts[(task, trajectory_id)]) for trajectory_id in ids)
-        for task, ids in mapping.items()
-    }
+    return {task: len(ids) for task, ids in mapping.items()}
 
 
 def shard_task_mapping(
@@ -312,19 +284,6 @@ def build_shard_manifest(
                 for task, rows in configurations.items()
                 if task in mapping
             }
-    elif shard.get("manifest_type") == "fixed_live_sim":
-        for split_name in list(shard.get("splits", {})):
-            if split_name not in shard["splits"]:
-                continue
-            shard["splits"][split_name] = {
-                task: [
-                    episode
-                    for episode in episodes
-                    if task in mapping and episode["trajectory_id"] in mapping[task]
-                ]
-                for task, episodes in shard["splits"][split_name].items()
-                if task in mapping
-            }
     else:
         shard["trajectory_ids_by_task"] = mapping
     allowed = {
@@ -332,28 +291,8 @@ def build_shard_manifest(
         for task, trajectory_ids in mapping.items()
         for trajectory_id in trajectory_ids
     }
-    if "samples" in shard:
-        shard["samples"] = [
-            sample
-            for sample in shard["samples"]
-            if (str(sample.get("task_name")), str(sample.get("trajectory_id")))
-            in allowed
-        ]
-    samples = shard.get("samples", [])
     summary = dict(shard.get("summary") or {})
-    summary.update(
-        {
-            "num_samples": len(samples),
-            "num_trajectories": len(allowed),
-            "num_tasks": len(mapping),
-            "samples_per_task": dict(
-                sorted(Counter(str(row.get("task_name")) for row in samples).items())
-            ),
-            "samples_per_target_tool": dict(
-                sorted(Counter(str(row.get("target_tool")) for row in samples).items())
-            ),
-        }
-    )
+    summary.update({"num_trajectories": len(allowed), "num_tasks": len(mapping)})
     shard["summary"] = summary
     shard["parallel_shard"] = {
         "schema_version": SCHEMA_VERSION,

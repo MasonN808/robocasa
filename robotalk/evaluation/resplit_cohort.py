@@ -19,8 +19,7 @@ import argparse
 import json
 from pathlib import Path
 
-from robotalk.evaluation.fixed_live_sim_cohort import _sha256
-from robotalk.utils import REPO_ROOT
+from robotalk.utils import REPO_ROOT, stable_json_sha256 as _sha256
 
 SPLITS = {"train_tasks": "train_task_types", "held_out_tasks": "heldout_task_types"}
 

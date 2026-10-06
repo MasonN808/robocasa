@@ -34,7 +34,6 @@ evaluation:
     --scene-sampling-seed: 20260819
     --success-criterion: fsm
     --uniform-durations: true
-    --no-forced-json: true
     --map-renderer: raster
     --map-dpi: 60
     --gl-backend: egl

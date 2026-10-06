@@ -120,8 +120,8 @@ def _require_dependency(dependency: Any, module_name: str) -> Any:
 
 
 @dataclass(frozen=True)
-class CentralizedExample:
-    """One supervised next-step prediction example in centralized mode."""
+class AgentTurnExample:
+    """One agent turn: the acting agent's private context and its next tool call."""
 
     sample_id: str
     task_name: str
@@ -156,7 +156,7 @@ class CentralizedExample:
         }
 
     def to_feature_dict(self) -> dict[str, Any]:
-        """Builds the trainer-facing feature dict for one centralized example."""
+        """Builds the trainer-facing feature dict for one example."""
 
         return {
             "sample_id": self.sample_id,
@@ -177,8 +177,8 @@ class CentralizedExample:
         }
 
 
-def estimate_centralized_example_length(
-    example: CentralizedExample,
+def estimate_example_length(
+    example: AgentTurnExample,
     *,
     max_images_per_sample: int | None = None,
     estimated_visual_tokens_per_image: int = 256,
@@ -208,7 +208,6 @@ def estimate_centralized_example_length(
     return estimated_text_tokens + image_count * estimated_visual_tokens_per_image
 
 
-ManifestExample = CentralizedExample
 
 
 @dataclass(frozen=True)
@@ -576,7 +575,7 @@ def _order_raw_steps_as_executed(
     """``raw_steps`` permuted into the order the sim actually ran them.
 
     ``original_trajectory.json`` is always stored in file order, but the sweep
-    runs the plan in concurrent-executor order (``--step-order concurrent``), so
+    runs the plan in concurrent-executor order, so
     ``plan.json`` and ``metadata.json`` come back permuted. Zipping the three
     positionally would pair each raw step with a different step's execution
     result and its images. ``plan.json`` carries the source index of every call,
@@ -810,7 +809,7 @@ def _build_target_metadata(
     return target_payload, target_tool_call, target_text
 
 
-def _build_centralized_examples_for_trajectory(
+def _build_agent_turn_examples_for_trajectory(
     *,
     task_name: str,
     trajectory_dir: Path,
@@ -818,7 +817,7 @@ def _build_centralized_examples_for_trajectory(
     tool_schemas: list[dict[str, Any]],
     model_tool_specs: dict[str, dict[str, Any]],
     train_reasoning: bool = False,
-) -> list[CentralizedExample]:
+) -> list[AgentTurnExample]:
     task_metadata = get_task_metadata(task_name)
     allowed_tool_specs = augment_tool_specs_with_get_image(
         task_metadata.allowed_tool_specs
@@ -852,16 +851,19 @@ def _build_centralized_examples_for_trajectory(
         executed_steps=executed_steps,
     )
 
-    examples: list[CentralizedExample] = []
+    examples: list[AgentTurnExample] = []
     private_history: dict[str, list[dict[str, Any]]] = {
         agent_id: [] for agent_id in AGENT_IDS
     }
     latest_observations_by_agent: dict[str, tuple[list[str], list[str]]] = {}
     # Unconsumed observation per agent (consume-once semantics).
     pending_observation_by_agent: dict[str, tuple[list[str], list[str]] | None] = {}
+    tick_rows = original_trajectory.get("tick_rows")
+    if not isinstance(tick_rows, list):
+        raise ValueError(f"{original_trajectory_path} has no tick_rows (concurrent ticks)")
     tick_by_step: dict[int, int] = {}
     flat_index = 0
-    for tick_index, row in enumerate(original_trajectory.get("tick_rows") or []):
+    for tick_index, row in enumerate(tick_rows):
         if not isinstance(row, dict):
             continue
         for agent_id in AGENT_IDS:
@@ -891,7 +893,11 @@ def _build_centralized_examples_for_trajectory(
         strict=True,
     ):
         raw_tick = tick_by_step.get(raw_step.get("step"))
-        if raw_tick is not None and raw_tick != current_tick:
+        if raw_tick is None:
+            raise ValueError(
+                f"{original_trajectory_path}: step {raw_step.get('step')} is in no tick"
+            )
+        if raw_tick != current_tick:
             flush_tick_history()
             current_tick = raw_tick
 
@@ -927,7 +933,7 @@ def _build_centralized_examples_for_trajectory(
             f"step_{raw_step['step']:06d}"
         )
         examples.append(
-            CentralizedExample(
+            AgentTurnExample(
                 sample_id=sample_id,
                 task_name=task_metadata.dataset_name,
                 composite_task=task_metadata.composite_task,
@@ -957,9 +963,6 @@ def _build_centralized_examples_for_trajectory(
             )
         )
         pending_tick_history.append(_normalize_history_step(effective_raw_step))
-        if raw_tick is None:
-            # Legacy trajectories have no canonical simultaneity metadata.
-            flush_tick_history()
         _record_latest_observation(
             latest_observations_by_agent=latest_observations_by_agent,
             plan_step=plan_step, task_name=task_name,
@@ -978,7 +981,7 @@ def _build_centralized_examples_for_trajectory(
 
 
 
-def build_centralized_examples(
+def build_agent_turn_examples(
     *,
     dataset_root: Path,
     task_names: list[str],
@@ -987,7 +990,7 @@ def build_centralized_examples(
     trajectory_ids_by_task: dict[str, set[str]] | None = None,
     example_build_workers: int = 1,
     train_reasoning: bool = False,
-) -> list[CentralizedExample]:
+) -> list[AgentTurnExample]:
     """Builds one supervised example per executed agent call.
 
     Each example's prompt is the acting agent's private context; the target
@@ -997,7 +1000,7 @@ def build_centralized_examples(
     """
 
     example_build_workers = max(example_build_workers, 1)
-    examples: list[CentralizedExample] = []
+    examples: list[AgentTurnExample] = []
 
     for task_name in task_names:
         task_metadata = get_task_metadata(task_name)
@@ -1026,8 +1029,8 @@ def build_centralized_examples(
             include_trajectory_ids=include_trajectory_ids,
         )
 
-        def build_one(trajectory_dir: Path) -> list[CentralizedExample]:
-            return _build_centralized_examples_for_trajectory(
+        def build_one(trajectory_dir: Path) -> list[AgentTurnExample]:
+            return _build_agent_turn_examples_for_trajectory(
                 task_name=task_metadata.dataset_name,
                 trajectory_dir=trajectory_dir,
                 response_schema=response_schema,
@@ -1137,7 +1140,7 @@ def build_example_cache_path(
     dataset_root: Path,
     task_name: str,
 ) -> Path:
-    """Returns the on-disk cache path for one centralized task-example cache."""
+    """Returns the on-disk cache path for one task's example cache."""
 
     dataset_key = sha256(str(dataset_root.resolve()).encode("utf-8")).hexdigest()[:16]
     normalized_task_name = get_task_metadata(task_name).dataset_name
@@ -1145,7 +1148,7 @@ def build_example_cache_path(
         character if character.isalnum() or character in {"-", "_"} else "_"
         for character in normalized_task_name
     )
-    return cache_dir / dataset_key / "centralized" / f"{safe_task_name}.json"
+    return cache_dir / dataset_key / "agent_turns" / f"{safe_task_name}.json"
 
 
 def _example_cache_path_with_suffix(cache_path: Path, suffix: str) -> Path:
@@ -1214,7 +1217,7 @@ def _save_compressed_example_cache_payload(
     *,
     cache_path: Path,
     fingerprint: dict[str, Any],
-    examples: list[CentralizedExample],
+    examples: list[AgentTurnExample],
 ) -> Path:
     payload = {
         "cache_format_version": _EXAMPLE_CACHE_FORMAT_VERSION,
@@ -1250,7 +1253,7 @@ def _examples_from_cache_payload(
     payload: dict[str, Any],
     *,
     expected_fingerprint: dict[str, Any] | None,
-) -> list[CentralizedExample] | None:
+) -> list[AgentTurnExample] | None:
     if payload.get("cache_format_version") != _EXAMPLE_CACHE_FORMAT_VERSION:
         return None
     if expected_fingerprint is not None and not _example_cache_fingerprints_match(
@@ -1263,11 +1266,11 @@ def _examples_from_cache_payload(
     if not isinstance(raw_examples, list):
         return None
 
-    if all(isinstance(raw_example, CentralizedExample) for raw_example in raw_examples):
+    if all(isinstance(raw_example, AgentTurnExample) for raw_example in raw_examples):
         return list(raw_examples)
 
     try:
-        return [CentralizedExample(**raw_example) for raw_example in raw_examples]
+        return [AgentTurnExample(**raw_example) for raw_example in raw_examples]
     except TypeError:
         return None
 
@@ -1298,9 +1301,9 @@ def _example_cache_fingerprints_match(
 
 
 def _filter_cached_examples(
-    examples: list[CentralizedExample],
+    examples: list[AgentTurnExample],
     sample_id_filter: Any | None,
-) -> list[CentralizedExample]:
+) -> list[AgentTurnExample]:
     if sample_id_filter is None:
         return examples
     return [example for example in examples if sample_id_filter(example.sample_id)]
@@ -1311,7 +1314,7 @@ def load_examples_from_cache(
     cache_path: Path,
     expected_fingerprint: dict[str, Any] | None,
     sample_id_filter: Any | None = None,
-) -> list[CentralizedExample] | None:
+) -> list[AgentTurnExample] | None:
     """Loads cached task examples, optionally requiring a fingerprint match."""
 
     for compressed_cache_path in _compressed_example_cache_candidate_paths(cache_path):
@@ -1358,7 +1361,7 @@ def save_examples_to_cache(
     *,
     cache_path: Path,
     fingerprint: dict[str, Any],
-    examples: list[CentralizedExample],
+    examples: list[AgentTurnExample],
 ) -> None:
     """Persists task examples to the fastest available compressed binary cache."""
 
@@ -1369,10 +1372,10 @@ def save_examples_to_cache(
     )
 
 
-class CentralizedDataset(Dataset):
-    """Thin PyTorch dataset wrapper around centralized training examples."""
+class AgentTurnDataset(Dataset):
+    """Thin PyTorch dataset wrapper around agent-turn training examples."""
 
-    def __init__(self, examples: list[CentralizedExample]) -> None:
+    def __init__(self, examples: list[AgentTurnExample]) -> None:
         self.examples = list(examples)
 
     def __len__(self) -> int:
@@ -1382,19 +1385,19 @@ class CentralizedDataset(Dataset):
         return self.examples[index].to_feature_dict()
 
 
-def _num_supervised_actions(example: ManifestExample) -> int:
+def _num_supervised_actions(example: AgentTurnExample) -> int:
     return 1
 
 
 def build_split_manifest(
     *,
     dataset_root: Path,
-    train_examples: list[ManifestExample],
-    val_examples: list[ManifestExample],
+    train_examples: list[AgentTurnExample],
+    val_examples: list[AgentTurnExample],
 ) -> dict[str, Any]:
     """Builds a compact manifest describing the train/validation split."""
 
-    def summarize_split(examples: list[ManifestExample]) -> dict[str, Any]:
+    def summarize_split(examples: list[AgentTurnExample]) -> dict[str, Any]:
         counts_by_task: dict[str, dict[str, Any]] = {}
         for example in examples:
             entry = counts_by_task.setdefault(

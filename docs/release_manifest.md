@@ -594,3 +594,33 @@ Changes made in response to the manual review.
 - New `robotalk.evaluation.resplit_cohort` regroups the cohort's tasks under another split.
 - New `reproduce.py --task-split/--cohort` options pass it to both training and evaluation, and `reproduce.py --record-videos` turns on episode videos.
 - The README now states the 43/10 split and the held-out task list, explains the training subsets, `--train-tasks`, and the video flags, and mentions weight decay and the cosine schedule.
+
+## 18. Removal of centralized and legacy-compatibility code (2026-10-06)
+
+Requested: "only concurrent execution". Removed:
+
+| Area | Removed |
+|---|---|
+| Oracle | Ordered (joint-order) replay and `--concurrent-expert-replay`; concurrent replay is the only mode. |
+| Evaluator | The unused sequential `FsmMirror.step` and `ConcurrentTaskValidator._apply`, and the dead `--no-forced-json` flag. |
+| Cohort format | The old trajectory-carrier `fixed_live_sim` format in both evaluators, and its builder `fixed_live_sim_cohort.py`. |
+| Parallel evaluator | The old offline `samples` manifests. |
+| Validator | `validate_flat_legacy`. |
+| Observation insertion | The flat (non-tick) injector, the `get_env_image`/`get_agent_image` names and the `w_images` folder. `tick_rows` is now required. |
+| Render sweep | `--step-order`. |
+| Render order | The file-order fallback, which is now an error. |
+| Training | The fallback for trajectories without ticks; preprocessing's leave-task-out validation mode. |
+
+Renamed: `Centralized*` / `ManifestExample` → `AgentTurnExample`, `AgentTurnDataset`, `build_agent_turn_examples`, `estimate_example_length`. The builder was always the private-history (decentralized) one.
+
+Kept on purpose:
+- task-spec symbol aliases and model-boundary argument canonicalization, which are applied to model outputs in concurrent evaluation;
+- the no-coordinator branch, used by the non-Full communication modes of Fig. 5.
+
+Verification:
+- golden g1, g2 and g3 byte-identical;
+- oracle replay of 8 trajectories identical to the earlier concurrent run;
+- a sweep render identical;
+- unit tests 630 passed, sim tests 172 passed, ruff clean.
+
+Test fixtures without ticks were converted to one call per tick, which is the old delivery semantics; the two tests of flat-only behaviour were deleted.

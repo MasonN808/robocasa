@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from robotalk.training.dataset import (
     build_same_task_trajectory_split,
-    estimate_centralized_example_length,
+    estimate_example_length,
 )
 
 
@@ -51,7 +51,7 @@ FIXTURE_TRAJECTORY_ID = "traj_000000"
 SOURCE_TRAJECTORY_DIR = FIXTURE_ROOT / FIXTURE_TASK / FIXTURE_TRAJECTORY_ID
 
 
-class CentralizedExampleTests(unittest.TestCase):
+class AgentTurnExampleTests(unittest.TestCase):
     def setUp(self) -> None:
         # The fixture's image paths point at the render that produced it, which
         # is not part of the repo. These tests are about example construction,
@@ -80,8 +80,8 @@ class CentralizedExampleTests(unittest.TestCase):
             image_paths=["one.png", "two.png", "three.png"],
         )
 
-        uncapped = estimate_centralized_example_length(example)
-        capped = estimate_centralized_example_length(
+        uncapped = estimate_example_length(example)
+        capped = estimate_example_length(
             example,
             max_images_per_sample=1,
         )

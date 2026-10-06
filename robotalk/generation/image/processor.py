@@ -18,8 +18,6 @@ from tqdm import tqdm
 TICK_ROWS_KEY = "tick_rows"
 TICK_KEY = "tick"
 GET_IMAGE_TOOL_NAME = "get_image"
-LEGACY_ENV_IMAGE_TOOL_NAME = "get_env_image"
-LEGACY_AGENT_IMAGE_TOOL_NAME = "get_agent_image"
 COMMUNICATE_TOOL_NAME = "communicate"
 TOP_VIEW_CAMERA = "top_view"
 ROOM_VIEW_CAMERA = "room_view"
@@ -41,13 +39,6 @@ NAVIGATION_OBSERVATION_VIEWS = (
 ACTION_OBSERVATION_VIEWS = (
     WRIST_CAMERA,
     AGENT_VIEW_CENTER_CAMERA,
-)
-LEGACY_INSERTED_OBSERVATION_TOOL_NAMES = frozenset(
-    {
-        GET_IMAGE_TOOL_NAME,
-        LEGACY_ENV_IMAGE_TOOL_NAME,
-        LEGACY_AGENT_IMAGE_TOOL_NAME,
-    }
 )
 VIEW_REASONING_LABELS = {
     TOP_VIEW_CAMERA: "top-view",
@@ -76,13 +67,11 @@ POST_PROCESS_VALIDATION_ERROR = (
 RAW_DATASET_DIRECTORY_NAME = "raw"
 PRE_IMAGE_DATASET_DIRECTORY_NAME = "pre_image"
 IMAGE_DATASET_DIRECTORY_NAME = "image"
-LEGACY_IMAGE_OUTPUT_DIRECTORY_NAME = "w_images"
 POST_PROCESS_OUTPUT_DIRECTORY_NAMES = frozenset(
     {
         RAW_DATASET_DIRECTORY_NAME,
         PRE_IMAGE_DATASET_DIRECTORY_NAME,
         IMAGE_DATASET_DIRECTORY_NAME,
-        LEGACY_IMAGE_OUTPUT_DIRECTORY_NAME,
     }
 )
 
@@ -240,78 +229,6 @@ def _resolve_observation_step_view_names(step: dict[str, Any]) -> tuple[str, ...
     return tuple(view_names)
 
 
-def rebuild_steps_with_image_observations(
-    steps: list[dict[str, Any]],
-    *,
-    initial_image_agent_ids: Sequence[str],
-    trajectory_id: str,
-) -> list[dict[str, Any]]:
-    """Rebuilds one step list with deterministic inserted observation steps."""
-
-    cleaned_steps: list[dict[str, Any]] = []
-    for step in steps:
-        tool_name = step.get("tool")
-        if tool_name in LEGACY_INSERTED_OBSERVATION_TOOL_NAMES:
-            # Drop existing synthetic observation steps so reruns stay idempotent
-            # and old split-tool outputs can be upgraded in one pass.
-            continue
-
-        cleaned_steps.append(_copy_step_without_generated_fields(step))
-
-    # Keep the shared scene-inspection steps at the very front so each agent
-    # captures the initial state before any coordination messages are emitted.
-    rebuilt_steps: list[dict[str, Any]] = []
-    rebuilt_steps.extend(
-        _build_initial_observation_step(agent_id)
-        for agent_id in initial_image_agent_ids
-    )
-    for copied_step in cleaned_steps:
-        tool_name = copied_step.get("tool")
-        if tool_name == COMMUNICATE_TOOL_NAME:
-            rebuilt_steps.append(copied_step)
-            continue
-
-        agent_id = copied_step.get("agent")
-        if not isinstance(agent_id, str) or not agent_id:
-            raise ValueError(
-                "Every non-communicate step must contain a non-empty agent."
-            )
-
-        rebuilt_steps.append(
-            _build_action_observation_step(
-                agent_id,
-                tool_name=tool_name,
-                timing="before",
-            )
-        )
-        rebuilt_steps.append(copied_step)
-        rebuilt_steps.append(
-            _build_action_observation_step(
-                agent_id,
-                tool_name=tool_name,
-                timing="after",
-            )
-        )
-
-    # Renumber after insertion so saved step indices and image filenames stay
-    # deterministic regardless of the input shape.
-    for step_index, step in enumerate(rebuilt_steps):
-        step["step"] = step_index
-        if step["tool"] == GET_IMAGE_TOOL_NAME:
-            view_names = _resolve_observation_step_view_names(step)
-            step["image_paths"] = _build_step_image_paths(
-                trajectory_id,
-                step["step"],
-                step["agent"],
-                view_names,
-            )
-            step.pop("image_path", None)
-            continue
-        step.pop("image_path", None)
-        step.pop("image_paths", None)
-    return rebuilt_steps
-
-
 def _tick_row_agent_ids(rows: Sequence[dict[str, Any]]) -> tuple[str, ...]:
     """Collects the agents appearing in tick rows, in first-seen order."""
 
@@ -362,7 +279,7 @@ def rebuild_tick_rows_with_image_observations(
             action = row.get(agent_id)
             if not isinstance(action, dict) or not action.get("tool"):
                 continue
-            if action["tool"] in LEGACY_INSERTED_OBSERVATION_TOOL_NAMES:
+            if action["tool"] in {GET_IMAGE_TOOL_NAME}:
                 # Keeps reruns idempotent, exactly as the flat path does.
                 continue
             actions[agent_id] = _copy_step_without_generated_fields(action)
@@ -468,7 +385,7 @@ def _resolve_initial_image_agent_ids(trajectory: dict[str, Any]) -> tuple[str, .
         )
 
     for step in trajectory.get("steps", ()):
-        if step.get("tool") in LEGACY_INSERTED_OBSERVATION_TOOL_NAMES:
+        if step.get("tool") in {GET_IMAGE_TOOL_NAME}:
             continue
         _append_unique_agent_id(
             resolved_agent_ids,
@@ -587,36 +504,28 @@ def post_process_trajectory(
 
     updated_trajectory = dict(trajectory)
     tick_rows = updated_trajectory.get(TICK_ROWS_KEY)
-    if isinstance(tick_rows, list):
-        # Tick output carries its own schedule, and the flat injector would
-        # scramble it. Rebuild the rows and re-derive the flat list from them so
-        # the two stay the same plan.
-        from robotalk.generation.tick_format import to_steps
+    if not isinstance(tick_rows, list):
+        raise ValueError("Trajectory records must contain tick_rows (concurrent ticks).")
+    # Rebuild the rows and re-derive the flat step list from them, so the
+    # two stay the same plan.
+    from robotalk.generation.tick_format import to_steps
 
-        agent_ids = _resolve_initial_image_agent_ids(updated_trajectory)
-        row_agent_ids = _tick_row_agent_ids(tick_rows)
-        ordered_agent_ids = tuple(agent_ids) + tuple(
-            agent_id for agent_id in row_agent_ids if agent_id not in set(agent_ids)
-        )
-        rebuilt_rows = rebuild_tick_rows_with_image_observations(
-            tick_rows,
-            agent_ids=ordered_agent_ids,
-        )
-        updated_trajectory[TICK_ROWS_KEY] = rebuilt_rows
-        updated_trajectory["steps"] = to_steps(rebuilt_rows, ordered_agent_ids)
-        _attach_tick_step_images(
-            updated_trajectory["steps"],
-            trajectory_id=trajectory_id,
-        )
-    else:
-        updated_trajectory["steps"] = rebuild_steps_with_image_observations(
-            updated_trajectory["steps"],
-            initial_image_agent_ids=_resolve_initial_image_agent_ids(
-                updated_trajectory
-            ),
-            trajectory_id=trajectory_id,
-        )
-    if revalidate and isinstance(tick_rows, list):
+    agent_ids = _resolve_initial_image_agent_ids(updated_trajectory)
+    row_agent_ids = _tick_row_agent_ids(tick_rows)
+    ordered_agent_ids = tuple(agent_ids) + tuple(
+        agent_id for agent_id in row_agent_ids if agent_id not in set(agent_ids)
+    )
+    rebuilt_rows = rebuild_tick_rows_with_image_observations(
+        tick_rows,
+        agent_ids=ordered_agent_ids,
+    )
+    updated_trajectory[TICK_ROWS_KEY] = rebuilt_rows
+    updated_trajectory["steps"] = to_steps(rebuilt_rows, ordered_agent_ids)
+    _attach_tick_step_images(
+        updated_trajectory["steps"],
+        trajectory_id=trajectory_id,
+    )
+    if revalidate:
         revalidate_tick_trajectory(updated_trajectory)
         from robotalk.tasks.shared.validation_contract import (
             require_current_validation,

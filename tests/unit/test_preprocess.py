@@ -218,7 +218,7 @@ class PreprocessProgressTests(unittest.TestCase):
             dataset_root=dataset_root,
             train_tasks="hot_dog_setup",
             val_tasks="prepare_coffee",
-            validation_split_mode="task-holdout",
+            validation_split_mode="none",
             validation_trajectory_fraction=0.1,
             validation_min_trajectories_per_task=1,
             output_dir=output_dir,

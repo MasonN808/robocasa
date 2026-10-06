@@ -156,7 +156,7 @@ def _build_subatomic_allowed_tool_specs() -> dict[str, dict[str, Any]]:
     return subatomic_allowed_tool_specs
 
 
-# Keep the shared tool metadata centralized so individual task files only add
+# Keep the shared tool metadata in one place so individual task files only add
 # task-specific symbolic constraints such as allowed fixture or object IDs.
 SUBATOMIC_ALLOWED_TOOL_SPECS = _build_subatomic_allowed_tool_specs()
 

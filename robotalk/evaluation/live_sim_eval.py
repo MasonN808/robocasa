@@ -631,29 +631,6 @@ class FsmMirror:
                 self.validator._task_spec = original
         return satisfied / len(conditions)
 
-    def step(self, step: dict[str, Any]) -> tuple[bool, str | None]:
-        """Applies one symbolic step; returns (legal, reason_if_not)."""
-
-        validator = self.validator
-        state = self.runtime_state
-        try:
-            if step["tool"] == WAIT_TOOL_NAME:
-                # A wait is a scheduling primitive, not a world action: it
-                # touches nothing, so no transition rule applies to it. The
-                # linear validator disagrees -- its held-object rule exempts
-                # navigation, release, observation and give_space but not
-                # waiting, so an agent holding a mug is forbidden to wait,
-                # which is nonsense. Oracle replay of 18 tick trajectories hit
-                # that on 3 of 282 steps, every one with sim_success=True.
-                # The parallel path already intercepts waits before they reach
-                # the mirror; this is the sequential path doing the same.
-                return True, None
-            self._concurrent._apply(step, state)
-            self.goal_satisfied = validator.is_goal_state_satisfied(state)
-            return True, None
-        except Exception as exc:  # validator raises typed validation errors
-            return False, f"{type(exc).__name__}: {exc}"
-
 
 # ---------------------------------------------------------------------------
 # Sim session: one env per task, rewound per trajectory
@@ -1338,17 +1315,8 @@ def run_trajectory_partial(
 
     scheduler = ConcurrentScheduler(AGENT_IDS, states=agents)
     is_model_policy = _uses_model_generation(policy)
-    # Non-model policies (oracle/degenerate) replay a JOINT expert sequence, but
-    # a per-agent scheduler asks a specific agent what it wants to do. Split the
-    # expert steps into per-agent queues so "agent A's next expert action" is
-    # well defined regardless of the order the scheduler picks agents in.
-    # ORDER-PRESERVING REPLAY. Splitting the joint expert plan into per-agent
-    # queues let the scheduler interleave it differently from how it was
-    # written, which invalidates plans that depend on their own ordering. In
-    # arrange_bread_bowl/traj_000009 agent_1 picked up the bowl and carried it
-    # to dining_counter before agent_0 could place bread into it, so a correct
-    # plan was rejected for "missing navigation". Non-model policies now follow
-    # the recorded joint order exactly; only model policies are scheduled.
+    # The oracle replays each agent's recorded calls as its own queue, through
+    # the same concurrent scheduler that models are evaluated with.
     expert_sequence: list[dict[str, Any]] = []
     if not is_model_policy:
         for raw in trajectory["steps"]:
@@ -1386,28 +1354,18 @@ def run_trajectory_partial(
     )
     opening_phase = 0
 
-    # Concurrent replay lets each agent advance its own stream under the timing
-    # scheduler, the regime a model actually meets at eval, and is the default.
-    # Ordered replay (the recorded joint order, bypassing the scheduler) is only
-    # for old flat records: it does not advance the opening protocol's phases.
-    concurrent_replay = bool(getattr(args, "concurrent_expert_replay", True))
     expert_queues: dict[str, list[dict[str, Any]]] = {}
-    if concurrent_replay:
-        for entry in expert_sequence:
-            expert_queues.setdefault(entry["agent"], []).append(entry)
+    for entry in expert_sequence:
+        expert_queues.setdefault(entry["agent"], []).append(entry)
 
     def _propose(agent: AgentRuntime) -> tuple[dict[str, Any], tuple[str, ...] | None]:
         """One decision for one agent, using only that agent's private state."""
 
         if not is_model_policy:
-            if concurrent_replay:
-                queue = expert_queues.get(agent.agent_id) or []
-                if not queue:
-                    return {"exhausted": True}, None
-                return queue.pop(0), None
-            if not expert_sequence or expert_sequence[0]["agent"] != agent.agent_id:
+            queue = expert_queues.get(agent.agent_id) or []
+            if not queue:
                 return {"exhausted": True}, None
-            return expert_sequence.pop(0), None
+            return queue.pop(0), None
         image_paths, view_names = agent.take_observation()
         render_dir = frames_dir or Path(args.output_dir) / "_tmp_views"
         proposal = _generate_once(
@@ -1434,82 +1392,70 @@ def run_trajectory_partial(
     # pathological trajectory to generate forever (jobs 284515/284516).
     max_proposals = step_budget + max_rejected
     while turn_index < step_budget and proposal_index < max_proposals:
-        if not is_model_policy and not concurrent_replay:
-            # Replay follows the recorded joint order; the timing scheduler is
-            # bypassed entirely so the plan cannot be re-interleaved.
-            if not expert_sequence:
-                termination = "policy_exhausted"
+        if not is_model_policy and not any(expert_queues.values()):
+            termination = "policy_exhausted"
+            break
+        if all(a.ready_at == float("inf") for a in agents.values()):
+            termination = "policy_exhausted"
+            break
+        # A waiting agent is not polled and only a matching release may
+        # wake it.  If every agent is waiting, the episode has reached a
+        # real mutual-wait deadlock.  Never silently clear the waits: that
+        # would manufacture actions which the agents could not take under
+        # the protocol and would corrupt both evaluation and DAgger logs.
+        if agents and all(scheduler.blocked(a) for a in agents):
+            mutual_wait_deadlocks += 1
+            termination = "mutual_wait_deadlock"
+            break
+        # A blocked agent must not drive the clock. Its ready_at is stale
+        # -- the moment its wait WOULD have expired -- so including it here
+        # pulled the clock back every iteration and the loop never
+        # advanced past a partner that was merely busy.
+        next_ready = scheduler.next_ready_time()
+        runnable_times = (
+            [next_ready] if next_ready is not None
+            else [a.ready_at for a in agents.values()]
+        )
+        # Monotonic, but only over agents that still have work. `inf` is the
+        # sentinel for an EXHAUSTED agent, and clamping upward against it
+        # pins the clock at infinity forever -- after which the catch-up
+        # below hands every other agent an infinite ready_at and nothing is
+        # ever schedulable again. Without work to order there is no time to
+        # advance to, so leave the clock where it is and let the
+        # nobody-is-ready branch decide what happens next.
+        finite = [t for t in runnable_times if t != float("inf")]
+        if finite:
+            clock = max(clock, min(finite))
+        # A wait is released by a message, so the agent resumes at the
+        # moment of release. Leaving its stale ready_at -- the time the
+        # wait would have expired -- let it act "in the past", inverting
+        # sim_time against the real execution order.
+        for a in agents.values():
+            if a.waiting_for is None and a.ready_at < clock:
+                a.ready_at = clock
+        ready = [agents[a] for a in scheduler.ready_agents(clock=clock)]
+        if not ready:
+            # A partner that is merely BUSY must not cancel a wait. This
+            # fired whenever nobody was runnable at the current instant,
+            # so every wait expired as soon as the other agent was
+            # mid-action -- waits behaved as a 2s pause rather than a
+            # block, which is why inserting them changed nothing.
+            busy = [
+                a for a in agents.values()
+                if a.waiting_for is None and a.ready_at != float("inf")
+            ]
+            if busy:
+                clock = max(clock, min(a.ready_at for a in busy))
+                continue
+            waiting = [a for a in agents.values() if a.waiting_for is not None]
+            if not waiting:
                 break
-            actor = agents[expert_sequence[0]["agent"]]
-            if actor.ready_at == float("inf"):
-                actor.ready_at = clock
-            clock = max(clock, actor.ready_at)
-            ready = [actor]
-        else:
-            if concurrent_replay and not any(expert_queues.values()):
-                termination = "policy_exhausted"
-                break
-            if all(a.ready_at == float("inf") for a in agents.values()):
-                termination = "policy_exhausted"
-                break
-            # A waiting agent is not polled and only a matching release may
-            # wake it.  If every agent is waiting, the episode has reached a
-            # real mutual-wait deadlock.  Never silently clear the waits: that
-            # would manufacture actions which the agents could not take under
-            # the protocol and would corrupt both evaluation and DAgger logs.
-            if agents and all(scheduler.blocked(a) for a in agents):
-                mutual_wait_deadlocks += 1
-                termination = "mutual_wait_deadlock"
-                break
-            # A blocked agent must not drive the clock. Its ready_at is stale
-            # -- the moment its wait WOULD have expired -- so including it here
-            # pulled the clock back every iteration and the loop never
-            # advanced past a partner that was merely busy.
-            next_ready = scheduler.next_ready_time()
-            runnable_times = (
-                [next_ready] if next_ready is not None
-                else [a.ready_at for a in agents.values()]
-            )
-            # Monotonic, but only over agents that still have work. `inf` is the
-            # sentinel for an EXHAUSTED agent, and clamping upward against it
-            # pins the clock at infinity forever -- after which the catch-up
-            # below hands every other agent an infinite ready_at and nothing is
-            # ever schedulable again. Without work to order there is no time to
-            # advance to, so leave the clock where it is and let the
-            # nobody-is-ready branch decide what happens next.
-            finite = [t for t in runnable_times if t != float("inf")]
-            if finite:
-                clock = max(clock, min(finite))
-            # A wait is released by a message, so the agent resumes at the
-            # moment of release. Leaving its stale ready_at -- the time the
-            # wait would have expired -- let it act "in the past", inverting
-            # sim_time against the real execution order.
-            for a in agents.values():
-                if a.waiting_for is None and a.ready_at < clock:
-                    a.ready_at = clock
-            ready = [agents[a] for a in scheduler.ready_agents(clock=clock)]
-            if not ready:
-                # A partner that is merely BUSY must not cancel a wait. This
-                # fired whenever nobody was runnable at the current instant,
-                # so every wait expired as soon as the other agent was
-                # mid-action -- waits behaved as a 2s pause rather than a
-                # block, which is why inserting them changed nothing.
-                busy = [
-                    a for a in agents.values()
-                    if a.waiting_for is None and a.ready_at != float("inf")
-                ]
-                if busy:
-                    clock = max(clock, min(a.ready_at for a in busy))
-                    continue
-                waiting = [a for a in agents.values() if a.waiting_for is not None]
-                if not waiting:
-                    break
-                # No non-waiting agent remains that could send a release.
-                # Waiting is permanent regardless of the communication
-                # ablation; modes differ in guidance/tool exposure, not in
-                # the runtime meaning of wait_for_signal.
-                termination = "permanent_wait_no_runnable_agents"
-                break
+            # No non-waiting agent remains that could send a release.
+            # Waiting is permanent regardless of the communication
+            # ablation; modes differ in guidance/tool exposure, not in
+            # the runtime meaning of wait_for_signal.
+            termination = "permanent_wait_no_runnable_agents"
+            break
         if len(ready) > 1:
             simultaneous_cycles += 1
 
@@ -1788,10 +1734,7 @@ def run_trajectory_partial(
                     }
                 )
                 record.update(legal=True, executed=True, reason=None)
-                # Persist the exact observation files used by this turn. This
-                # is backward-compatible evaluation metadata and lets DAgger
-                # replay materialize multimodal training examples without
-                # guessing filenames from requested view names.
+                # Persist the exact observation files used by this turn.
                 record["image_paths"] = list(image_paths)
                 agent.ready_at, agent.consecutive_obs, capped = observation_ready_at(
                     clock,
@@ -2480,7 +2423,6 @@ def parse_args() -> argparse.Namespace:
             "eval-time guidance and tool exposure."
         ),
     )
-    parser.add_argument("--no-forced-json", action="store_true")
     parser.add_argument("--model", default="gemini-3.5-flash-preview")
     parser.add_argument("--project", default=None)
     parser.add_argument("--location", default=None)
@@ -2573,17 +2515,6 @@ def parse_args() -> argparse.Namespace:
         "for productive work.",
     )
     partial.add_argument(
-        "--concurrent-expert-replay",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Oracle backend: replay each agent's recorded calls through the "
-            "concurrent scheduler that models are evaluated with (default). "
-            "--no-concurrent-expert-replay replays the recorded joint order "
-            "instead, which only suits old flat (non-tick) records."
-        ),
-    )
-    partial.add_argument(
         "--success-criterion",
         choices=("fsm", "native-and-fsm"),
         default="fsm",
@@ -2644,19 +2575,6 @@ def _manifest_episodes(
             )
             normalized[task] = rows
         return normalized
-    if manifest.get("manifest_type") == "fixed_live_sim":
-        if cohort_split is None:
-            raise ValueError("fixed_live_sim manifests require --cohort-split")
-        source = manifest.get("splits", {}).get(cohort_split)
-        if source is None:
-            raise ValueError(f"manifest has no split {cohort_split!r}")
-        normalized = {}
-        for task, episodes in source.items():
-            ordered = sorted(episodes, key=lambda row: row["episode_rank"])
-            if episodes_per_task is not None:
-                ordered = [row for row in ordered if row["episode_rank"] < episodes_per_task]
-            normalized[task] = ordered
-        return normalized
     if cohort_split is not None:
         raise ValueError("--cohort-split is only valid with fixed_live_sim manifests")
     normalized = {
@@ -2698,9 +2616,7 @@ def main() -> None:
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    if manifest.get("manifest_type") in {
-        "fixed_live_sim", "fixed_live_sim_configuration_targets"
-    }:
+    if manifest.get("manifest_type") == "fixed_live_sim_configuration_targets":
         # The evaluator runs one fixed contract (private history, no step
         # indices); refuse a cohort frozen for any other.
         contract = manifest.get("contract", {})
@@ -3224,8 +3140,7 @@ def _write_metrics(
     )
     metrics["same_agent_run_lengths"] = run_lengths
 
-    # Partial-observability scheduler metrics. Only emitted for partial runs so
-    # centralized outputs keep their existing shape.
+    # Scheduler metrics of the decentralized (private-context) episodes.
     partial_records = [r for r in records if r.get("partial_history")]
     if partial_records:
         conflicts = sum(r.get("resource_conflicts", 0) for r in partial_records)

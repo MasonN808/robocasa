@@ -5,7 +5,6 @@ import tempfile
 import unittest
 
 from robotalk.generation.image import (
-    POST_PROCESS_VALIDATION_ERROR,
     POST_PROCESS_VALIDATION_ERROR_TYPE,
     parse_args,
     post_process_dataset,
@@ -22,14 +21,14 @@ from robotalk.tasks import (
 def make_sample_trajectory():
     """Builds a compact saved trajectory fixture for post-processing tests."""
 
-    return {
+    trajectory = {
         "trajectory_id": "traj_000000",
         "composite_task": "PrepareCoffee",
         "agents": [
             {"agent": "agent_0"},
             {"agent": "agent_1"},
         ],
-        "steps": [
+        "steps": (steps := [
             {
                 "step": 0,
                 "agent": "agent_0",
@@ -67,135 +66,19 @@ def make_sample_trajectory():
                 },
                 "reasoning": "I should pick up the mug.",
             },
-        ],
+        ]),
         "validation": {"signature": "old-signature"},
     }
+    # Concurrent ticks: both agents talk, then agent_0 works alone.
+    trajectory["tick_rows"] = [
+        {"tick": 0, "agent_0": steps[0], "agent_1": steps[1]},
+        {"tick": 1, "agent_0": steps[2]},
+        {"tick": 2, "agent_0": steps[3]},
+    ]
+    return trajectory
 
 
 class PostTrajectoryGenerationTests(unittest.TestCase):
-    def test_post_process_trajectory_wraps_actions_with_multiview_get_image(self):
-        trajectory = post_process_trajectory(make_sample_trajectory())
-
-        self.assertEqual(
-            [step["tool"] for step in trajectory["steps"]],
-            [
-                "get_image",
-                "get_image",
-                "communicate",
-                "communicate",
-                "get_image",
-                "navigate_to_fixture",
-                "get_image",
-                "get_image",
-                "pick_up_object",
-                "get_image",
-            ],
-        )
-        self.assertEqual(
-            [step["step"] for step in trajectory["steps"]],
-            list(range(10)),
-        )
-        self.assertEqual(
-            trajectory["steps"][0]["args"],
-            {"views": ["top_view", "room_view", "map"]},
-        )
-        self.assertEqual(
-            trajectory["steps"][0]["image_paths"],
-            [
-                "images/traj_000000/0_top_view_agent_0.png",
-                "images/traj_000000/0_room_view_agent_0.png",
-                "images/traj_000000/0_map_agent_0.png",
-            ],
-        )
-        self.assertEqual(
-            trajectory["steps"][1]["args"],
-            {"views": ["top_view", "room_view", "map"]},
-        )
-        self.assertEqual(
-            trajectory["steps"][1]["image_paths"],
-            [
-                "images/traj_000000/1_top_view_agent_1.png",
-                "images/traj_000000/1_room_view_agent_1.png",
-                "images/traj_000000/1_map_agent_1.png",
-            ],
-        )
-        self.assertEqual(
-            trajectory["steps"][4]["args"],
-            {
-                "views": [
-                    "agentview_center",
-                    "agentview_left",
-                    "agentview_right",
-                ]
-            },
-        )
-        self.assertEqual(
-            trajectory["steps"][4]["image_paths"],
-            [
-                "images/traj_000000/4_agentview_center_agent_0.png",
-                "images/traj_000000/4_agentview_left_agent_0.png",
-                "images/traj_000000/4_agentview_right_agent_0.png",
-            ],
-        )
-        self.assertEqual(
-            trajectory["steps"][0]["reasoning"],
-            "I need top-view, room-view, and map images before the task begins.",
-        )
-        self.assertEqual(
-            trajectory["steps"][1]["reasoning"],
-            "I need top-view, room-view, and map images before the task begins.",
-        )
-        self.assertEqual(
-            trajectory["steps"][4]["reasoning"],
-            (
-                "I need center agent-view, left agent-view, and right agent-view "
-                "images to observe the current scene before I execute "
-                "navigate_to_fixture."
-            ),
-        )
-        self.assertEqual(
-            trajectory["steps"][5]["reasoning"],
-            "I need to reach the cabinet.",
-        )
-        self.assertEqual(
-            trajectory["steps"][6]["reasoning"],
-            (
-                "I need center agent-view, left agent-view, and right agent-view "
-                "images to observe the current scene after I executed "
-                "navigate_to_fixture."
-            ),
-        )
-        self.assertEqual(
-            trajectory["steps"][7]["reasoning"],
-            (
-                "I need wrist and center agent-view images to observe the current "
-                "scene before I execute pick_up_object."
-            ),
-        )
-        self.assertEqual(trajectory["steps"][2]["tool"], "communicate")
-        self.assertEqual(trajectory["steps"][3]["tool"], "communicate")
-        self.assertEqual(
-            trajectory["steps"][9]["reasoning"],
-            (
-                "I need wrist and center agent-view images to observe the current "
-                "scene after I executed pick_up_object."
-            ),
-        )
-        self.assertNotIn("image_path", trajectory["steps"][0])
-        self.assertFalse(trajectory["validation"]["is_valid"])
-        self.assertEqual(trajectory["validation"]["checks"], [])
-        self.assertIsNone(trajectory["validation"]["final_state"])
-        self.assertEqual(
-            trajectory["validation"]["error_type"],
-            POST_PROCESS_VALIDATION_ERROR_TYPE,
-        )
-        self.assertEqual(
-            trajectory["validation"]["error"],
-            POST_PROCESS_VALIDATION_ERROR,
-        )
-        self.assertIsNone(trajectory["validation"]["step"])
-        self.assertNotEqual(trajectory["validation"]["signature"], "old-signature")
-
     def test_post_process_trajectory_keeps_rewritten_steps_schema_valid(self):
         trajectory = post_process_trajectory(make_sample_trajectory())
         validator = get_task_definition("PrepareCoffee").validator_factory(None)

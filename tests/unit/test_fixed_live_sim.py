@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +9,6 @@ from robotalk.tasks.shared.concurrent_fsm import (
     simultaneous_contentions,
 )
 
-from robotalk.evaluation.fixed_live_sim_cohort import freeze_manifest
 from robotalk.evaluation.live_sim_eval import (
     _budget_reference_action_count,
     _manifest_episodes,
@@ -27,35 +25,6 @@ from robotalk.evaluation.live_sim_parallel_eval import (
     build_shard_manifest,
     shard_task_mapping,
 )
-
-
-def _manifest() -> dict:
-    episodes = [
-        {
-            "episode_id": f"train_task_types:t:{rank}",
-            "episode_rank": rank,
-            "task_name": "t",
-            "trajectory_id": f"traj_{rank:06d}",
-        }
-        for rank in range(3)
-    ]
-    return {
-        "manifest_type": "fixed_live_sim",
-        "frozen": False,
-        "splits": {"train_task_types": {"t": episodes}, "heldout_task_types": {}},
-    }
-
-
-def test_fixed_manifest_uses_nested_rank_prefix() -> None:
-    selected = _manifest_episodes(
-        _manifest(), cohort_split="train_task_types", episodes_per_task=2
-    )
-    assert [row["episode_rank"] for row in selected["t"]] == [0, 1]
-
-
-def test_fixed_manifest_requires_named_split() -> None:
-    with pytest.raises(ValueError, match="require --cohort-split"):
-        _manifest_episodes(_manifest(), cohort_split=None, episodes_per_task=None)
 
 
 def test_configuration_cohort_defaults_to_ten_uniform_unique_episodes() -> None:
@@ -152,27 +121,6 @@ def test_exclusive_fixture_incumbent_wins_over_lower_id_entrant() -> None:
 
     assert pairwise_conflicted == {"agent_0"}
     assert set(occupancy_conflicted) == {"agent_0"}
-
-
-def test_oracle_gate_requires_success_without_rejection(tmp_path) -> None:
-    path = tmp_path / "results.jsonl"
-    rows = []
-    for episode in _manifest()["splits"]["train_task_types"]["t"]:
-        rows.append(
-            {
-                "episode_id": episode["episode_id"],
-                "fsm_goal_satisfied": True,
-                "termination": "fsm_goal_satisfied",
-                "rejected_steps": 0,
-            }
-        )
-    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
-    frozen = freeze_manifest(_manifest(), [path])
-    assert frozen["frozen"] is True
-    rows[0]["rejected_steps"] = 1
-    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
-    with pytest.raises(ValueError, match="oracle gate failed"):
-        freeze_manifest(_manifest(), [path])
 
 
 def test_summary_reports_micro_and_macro() -> None:

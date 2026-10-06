@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - optional in lightweight test envs
     tqdm = None
 
 from robotalk.training.dataset import (
-    ManifestExample,
+    AgentTurnExample,
     _PRETOKENIZED_FIELD_NAME,
     deserialize_pretokenized_tensors,
 )
@@ -198,7 +198,7 @@ class PretokenizedShard:
     manifest: dict[str, Any]
 
 
-def _num_supervised_actions(example: ManifestExample) -> int:
+def _num_supervised_actions(example: AgentTurnExample) -> int:
     return 1
 
 
@@ -456,7 +456,7 @@ def _artifact_image_relpath(image_path: str) -> str:
 
 def _collect_artifact_image_entries(
     *,
-    examples: list[ManifestExample],
+    examples: list[AgentTurnExample],
     output_dir: Path,
 ) -> list[_ArtifactImageEntry]:
     image_entries: list[_ArtifactImageEntry] = []
@@ -686,7 +686,7 @@ def _stage_artifact_images(
 
 def stage_artifact_images_for_examples(
     *,
-    examples: list[ManifestExample],
+    examples: list[AgentTurnExample],
     output_dir: Path,
     artifact_image_size: tuple[int, int] | None = None,
     progress_callback: ProgressCallback | None = None,
@@ -706,7 +706,7 @@ def stage_artifact_images_for_examples(
 
 def existing_artifact_image_relpaths_for_examples(
     *,
-    examples: list[ManifestExample],
+    examples: list[AgentTurnExample],
     output_dir: Path,
     validate: bool = True,
     progress_callback: ProgressCallback | None = None,
@@ -1266,7 +1266,7 @@ def _feature_json_from_feature(
 
 
 def _row_from_example(
-    example: ManifestExample,
+    example: AgentTurnExample,
     *,
     feature: dict[str, Any],
     image_relpaths_by_source: dict[str, str],
@@ -1292,7 +1292,7 @@ def _row_from_example(
 def _serialize_split_rows(
     *,
     split_name: str,
-    examples: list[ManifestExample],
+    examples: list[AgentTurnExample],
     image_relpaths_by_source: dict[str, str],
     pretokenized_blobs_by_sample_id: dict[str, bytes] | None,
     progress_callback: ProgressCallback | None,
@@ -1549,8 +1549,8 @@ def _build_split_dataset(rows: list[dict[str, Any]]):
 
 def build_preprocessed_dataset_dict(
     *,
-    train_examples: list[ManifestExample],
-    validation_examples: list[ManifestExample],
+    train_examples: list[AgentTurnExample],
+    validation_examples: list[AgentTurnExample],
     output_dir: Path,
     train_pretokenized_blobs_by_sample_id: dict[str, bytes] | None = None,
     validation_pretokenized_blobs_by_sample_id: dict[str, bytes] | None = None,
@@ -2054,7 +2054,7 @@ class PretokenizedShardFeatureDataset(Dataset):
 
     def __init__(
         self,
-        examples: list[ManifestExample],
+        examples: list[AgentTurnExample],
         *,
         shard_dir: Path,
         split_name: str,

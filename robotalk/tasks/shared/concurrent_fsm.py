@@ -742,12 +742,6 @@ class ConcurrentTaskValidator:
         validator._apply_generic_effects(step, state)
         validator.apply_task_effects(step, state)
 
-    def _apply(self, step: dict[str, Any], state: Any) -> None:
-        """Validate and commit one step for legacy/sequential callers."""
-
-        self._validate_only(step, state)
-        self._commit(step, state)
-
     # -- the two contention invariants ------------------------------------
 
     def _exclusive(self, fixture_id: str | None) -> bool:
@@ -1167,7 +1161,7 @@ class ConcurrentTaskValidator:
 
         coordinator = getattr(self.validator, "coordinator_id", None)
         if coordinator not in self.agent_ids:
-            return  # legacy/fake validators have no coordinator contract
+            return  # no coordinator: a communication mode without the planning protocol
         follower = next(a for a in self.agent_ids if a != coordinator)
         # Rendering inserts observation-only rows. They are instrumentation,
         # not authored protocol turns, so locate the first two meaningful
@@ -1412,18 +1406,6 @@ class ConcurrentTaskValidator:
         canonical["steps"] = steps
         return canonical
 
-    def validate_flat_legacy(
-        self,
-        candidate: dict[str, Any],
-        *,
-        models: Sequence[str] | None = None,
-    ) -> dict[str, Any]:
-        """Validate a legacy flat stream without claiming live-policy parity."""
-
-        return self._validate_canonical(
-            candidate, models=models, live_policy_certified=False
-        )
-
     def validate(
         self,
         candidate: dict[str, Any],
@@ -1439,16 +1421,13 @@ class ConcurrentTaskValidator:
         """
 
         candidate = self.canonicalize(candidate)
-        return self._validate_canonical(
-            candidate, models=models, live_policy_certified=True
-        )
+        return self._validate_canonical(candidate, models=models)
 
     def _validate_canonical(
         self,
         candidate: dict[str, Any],
         *,
         models: Sequence[str] | None = None,
-        live_policy_certified: bool,
     ) -> dict[str, Any]:
         """Validate an already canonicalized plan."""
 
@@ -1505,14 +1484,10 @@ class ConcurrentTaskValidator:
         return {
             "is_valid": True,
             "validator_contract_version": VALIDATOR_CONTRACT_VERSION,
-            "live_policy_certified": live_policy_certified,
+            "live_policy_certified": True,
             "checks": list(validator._all_checks) + [
                 "concurrent_replay",
-                (
-                    "canonical_tick_invocations"
-                    if live_policy_certified
-                    else "legacy_flat_stream_only"
-                ),
+                "canonical_tick_invocations",
             ],
             "final_state": validator._build_final_state(primary.runtime_state),
             "normalized_candidate": {

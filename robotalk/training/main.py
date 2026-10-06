@@ -30,13 +30,13 @@ except ImportError:  # pragma: no cover - compatibility with older transformers
     from transformers import AutoModelForVision2Seq as AutoVisionLanguageModel
 
 from robotalk.training.dataset import (
-    CentralizedDataset,
+    AgentTurnDataset,
     LazyVisionSFTCollator,
     build_example_cache_fingerprint,
     build_example_cache_path,
-    build_centralized_examples,
+    build_agent_turn_examples,
     build_split_manifest,
-    estimate_centralized_example_length,
+    estimate_example_length,
     list_available_task_names,
     list_task_trajectory_ids,
     load_examples_from_cache,
@@ -994,10 +994,10 @@ def _build_examples_for_tasks(
     for task_index, task_name in enumerate(task_names, start=1):
         task_start = time.perf_counter()
         task_label = (
-            f"{split_name} centralized examples for task {task_name} "
+            f"{split_name} examples for task {task_name} "
             f"({task_index}/{total_tasks})"
         )
-        progress_description = f"{split_name} centralized {task_name}"
+        progress_description = f"{split_name} {task_name}"
         fingerprint: dict[str, Any] | None = None
         cache_path: Path | None = None
         task_examples: list[Any] | None = None
@@ -1076,7 +1076,7 @@ def _build_examples_for_tasks(
                     if task_examples is not None:
                         task_source = "cache"
             else:
-                task_examples = build_centralized_examples(
+                task_examples = build_agent_turn_examples(
                     dataset_root=dataset_root,
                     task_names=[task_name],
                     show_progress=state.is_main_process,
@@ -1106,7 +1106,7 @@ def _build_examples_for_tasks(
                     state.wait_for_everyone()
 
             if task_examples is None:
-                task_examples = build_centralized_examples(
+                task_examples = build_agent_turn_examples(
                     dataset_root=dataset_root,
                     task_names=[task_name],
                     show_progress=False,
@@ -1717,8 +1717,8 @@ def main() -> None:
         )
         if not train_examples:
             raise ValueError("Training split is empty after validation holdout filtering.")
-        train_dataset = CentralizedDataset(train_examples)
-        val_dataset = CentralizedDataset(val_examples)
+        train_dataset = AgentTurnDataset(train_examples)
+        val_dataset = AgentTurnDataset(val_examples)
         _log_startup("Building split manifest", state=distributed_state)
         split_manifest = build_split_manifest(
             dataset_root=dataset_root,
@@ -1737,7 +1737,7 @@ def main() -> None:
             ]
         else:
             train_example_lengths = [
-                estimate_centralized_example_length(
+                estimate_example_length(
                     example,
                     max_images_per_sample=config.max_images_per_sample,
                 )

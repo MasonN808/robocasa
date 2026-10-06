@@ -55,6 +55,10 @@ def _build_loaded_trajectory(raw_steps: list[dict]) -> dict:
                 "validator_contract_version": VALIDATOR_CONTRACT_VERSION,
             },
             "steps": raw_steps,
+            # One call per tick: each call is delivered before the next one.
+            "tick_rows": [
+                {"tick": tick, step["agent"]: step} for tick, step in enumerate(raw_steps)
+            ],
         },
         "plan.json": plan_steps,
         "metadata.json": {
@@ -87,7 +91,7 @@ def _build_examples(monkeypatch, tmp_path, raw_steps, **build_kwargs):
             side_effect=lambda path: loaded[path.name],
         ),
     ):
-        examples = dataset._build_centralized_examples_for_trajectory(
+        examples = dataset._build_agent_turn_examples_for_trajectory(
             task_name="synthetic_task",
             trajectory_dir=tmp_path,
             response_schema={},

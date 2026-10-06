@@ -19,29 +19,14 @@ from robotalk.evaluation.live_sim_parallel_eval import (
 
 
 def _manifest() -> dict:
-    mapping = {
-        "task_a": ["a1", "a2"],
-        "task_b": ["b1"],
-        "task_c": ["c1"],
-    }
-    samples = []
-    counts = {("task_a", "a1"): 3, ("task_a", "a2"): 1, ("task_b", "b1"): 2}
-    for (task, trajectory_id), count in counts.items():
-        for step_index in range(count):
-            samples.append(
-                {
-                    "sample_id": f"{task}/{trajectory_id}/{step_index}",
-                    "task_name": task,
-                    "trajectory_id": trajectory_id,
-                    "step_index": step_index,
-                    "target_tool": "communicate" if step_index == 0 else "pick_up_object",
-                }
-            )
     return {
         "split": "test",
-        "trajectory_ids_by_task": mapping,
-        "samples": samples,
-        "summary": {"num_samples": len(samples), "stale_field": "preserved"},
+        "trajectory_ids_by_task": {
+            "task_a": ["a1", "a2"],
+            "task_b": ["b1"],
+            "task_c": ["c1"],
+        },
+        "summary": {"stale_field": "preserved"},
     }
 
 
@@ -116,7 +101,7 @@ def test_sharding_balances_whole_tasks_deterministically():
     assert sum(len(shard) for shard in first) == len(mapping)
 
 
-def test_shard_manifest_filters_samples_and_recomputes_summary():
+def test_shard_manifest_keeps_only_its_tasks_and_recomputes_summary():
     shard = build_shard_manifest(
         _manifest(),
         {"task_b": ["b1"]},
@@ -125,15 +110,9 @@ def test_shard_manifest_filters_samples_and_recomputes_summary():
     )
 
     assert shard["trajectory_ids_by_task"] == {"task_b": ["b1"]}
-    assert {(row["task_name"], row["trajectory_id"]) for row in shard["samples"]} == {
-        ("task_b", "b1")
-    }
     assert shard["summary"] == {
-        "num_samples": 2,
         "num_trajectories": 1,
         "num_tasks": 1,
-        "samples_per_task": {"task_b": 2},
-        "samples_per_target_tool": {"communicate": 1, "pick_up_object": 1},
         "stale_field": "preserved",
     }
     assert shard["parallel_shard"]["worker_index"] == 1

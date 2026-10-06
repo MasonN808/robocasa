@@ -177,23 +177,6 @@ class RecordTests(unittest.TestCase):
             else:
                 self.assertNotIn("image_paths", step)
 
-    def test_flat_records_still_take_the_flat_path(self) -> None:
-        record = {
-            "trajectory_id": "traj_000000",
-            "agents": [{"agent": "agent_0"}],
-            "steps": [
-                {"step": 0, "agent": "agent_0", "tool": "pick_up_object",
-                 "args": {"object_id": "mug"}, "reasoning": "because"},
-            ],
-        }
-        out = post_process_trajectory(record)
-        self.assertNotIn("tick_rows", out)
-        self.assertEqual(
-            [step["tool"] for step in out["steps"]],
-            [GET_IMAGE_TOOL_NAME, GET_IMAGE_TOOL_NAME, "pick_up_object",
-             GET_IMAGE_TOOL_NAME],
-        )
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

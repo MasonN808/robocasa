@@ -71,10 +71,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--revalidate",
         action="store_true",
         help=(
-            "Replay each post-processed tick trajectory with the concurrent "
+            "Replay each post-processed trajectory with the concurrent "
             "validator and record the real verdict, instead of the placeholder "
-            "that says the record still needs revalidating. Tick records only; "
-            "flat records keep the placeholder."
+            "that says the record still needs revalidating."
         ),
     )
     args = parser.parse_args(argv)

@@ -1070,7 +1070,6 @@ def run_one(
     render_height: int = 512,
     map_dpi: int = DEFAULT_MAP_DPI,
     map_renderer: str = DEFAULT_MAP_RENDERER,
-    step_order: str = "concurrent",
 ) -> dict:
     """Execute a single trajectory and return summary info."""
     from robocasa.utils.trajectory_adapter import execute_trajectory
@@ -1161,25 +1160,16 @@ def run_one(
     # the order the sim runs the steps in, never what is stored.
     shutil.copy2(traj_file, output_dir / "original_trajectory.json")
 
-    order_reason: str | None = None
-    reordered_steps = 0
-    if step_order == "concurrent":
-        from robotalk.tasks.shared.render_order import (
-            reorder_for_concurrent_render,
-        )
+    # Run the steps in the order the concurrent executor applies them.
+    from robotalk.tasks.shared.render_order import reorder_for_concurrent_render
 
-        trajectory, order, order_reason = reorder_for_concurrent_render(trajectory)
-        reordered_steps = sum(1 for i, j in enumerate(order) if i != j)
-        with open(output_dir / "render_order.json", "w") as f:
-            json.dump(
-                {
-                    "step_order": step_order,
-                    "order": order,
-                    "reordered_steps": reordered_steps,
-                    "fallback_reason": order_reason,
-                },
-                f,
-            )
+    trajectory, order = reorder_for_concurrent_render(trajectory)
+    reordered_steps = sum(1 for i, j in enumerate(order) if i != j)
+    with open(output_dir / "render_order.json", "w") as f:
+        json.dump(
+            {"step_order": "concurrent", "order": order, "reordered_steps": reordered_steps},
+            f,
+        )
 
     metadata = execute_trajectory(
         executor=executor,
@@ -1201,9 +1191,7 @@ def run_one(
         "images_rendered": n_images,
         "used_pruning_fallback": used_pruning_fallback,
         "pruning_fallback_reason": pruning_fallback_reason,
-        "step_order": step_order,
         "reordered_steps": reordered_steps,
-        "step_order_fallback_reason": order_reason,
     }
 
 
@@ -1227,7 +1215,6 @@ def run_trajectory_entry(
     render_height: int = 512,
     map_dpi: int = DEFAULT_MAP_DPI,
     map_renderer: str = DEFAULT_MAP_RENDERER,
-    step_order: str = "concurrent",
 ) -> dict[str, Any]:
     """Execute one discovered trajectory across every requested scene combo."""
 
@@ -1296,7 +1283,6 @@ def run_trajectory_entry(
                         render_height=render_height,
                         map_dpi=map_dpi,
                         map_renderer=map_renderer,
-                        step_order=step_order,
                     )
                 elapsed_seconds = time.time() - started_at
                 result["elapsed_s"] = round(elapsed_seconds, 1)
@@ -1474,7 +1460,6 @@ def execute_sweep(
     render_height: int = 512,
     map_dpi: int = DEFAULT_MAP_DPI,
     map_renderer: str = DEFAULT_MAP_RENDERER,
-    step_order: str = "concurrent",
     cancellation_controller: SweepCancellationController | None = None,
 ) -> list[dict[str, Any]]:
     """Execute the discovered trajectories and preserve summary ordering."""
@@ -1537,7 +1522,6 @@ def execute_sweep(
                     render_height=render_height,
                     map_dpi=map_dpi,
                     map_renderer=map_renderer,
-                    step_order=step_order,
                     progress_reporter=(
                         partial(
                             _record_local_progress_event,
@@ -1634,7 +1618,6 @@ def execute_sweep(
                                 render_height=render_height,
                                 map_dpi=map_dpi,
                                 map_renderer=map_renderer,
-                                step_order=step_order,
                                 progress_reporter=progress_reporter,
                             )
                             future_to_context[future] = (
@@ -2318,19 +2301,6 @@ def main() -> None:
         help="Placement-map renderer (default: raster, matching live evaluation).",
     )
     parser.add_argument(
-        "--step-order",
-        choices=("concurrent", "file"),
-        default="concurrent",
-        help=(
-            "Order to run a trajectory's steps in. 'concurrent' (default) uses "
-            "the schedule the concurrent executor produces -- ticks on a clock, "
-            "agent-id order within a tick -- so rendered observations show the "
-            "world the model will actually see at that point. 'file' walks the "
-            "stored step list top to bottom, which differs inside a tick. The "
-            "stored trajectory is never modified either way."
-        ),
-    )
-    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -2524,7 +2494,6 @@ def main() -> None:
             print(f"GPU allocation by worker slot: {gpu_allocation}")
         print(f"Render size: {args.render_width}x{args.render_height}")
         print(f"Map rendering: {args.map_renderer}@{args.map_dpi}dpi")
-        print(f"Step order: {args.step_order}")
         if len(combos) > 1:
             print(f"  layouts: {args.layouts}")
             print(f"  styles:  {args.styles}")
@@ -2580,7 +2549,6 @@ def main() -> None:
             render_height=args.render_height,
             map_dpi=args.map_dpi,
             map_renderer=args.map_renderer,
-            step_order=args.step_order,
             cancellation_controller=cancellation_controller,
         )
 
@@ -2605,7 +2573,6 @@ def main() -> None:
         "render_height": args.render_height,
         "map_dpi": args.map_dpi,
         "map_renderer": args.map_renderer,
-        "step_order": args.step_order,
         "results": results,
     }
     summary_path.parent.mkdir(parents=True, exist_ok=True)

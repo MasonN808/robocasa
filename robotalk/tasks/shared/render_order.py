@@ -24,38 +24,34 @@ from copy import deepcopy
 from typing import Any
 
 
-def concurrent_step_order(trajectory: dict[str, Any]) -> tuple[list[int], str | None]:
+def concurrent_step_order(trajectory: dict[str, Any]) -> list[int]:
     """Positions into ``trajectory["steps"]``, in concurrent-executor order.
 
-    Returns ``(order, fallback_reason)``. ``fallback_reason`` is None when the
-    replay covered every step; otherwise it says why, and ``order`` still
-    contains every position exactly once -- steps the replay never reached are
-    appended in file order so rendering drops nothing.
+    Raises ``ValueError`` when the concurrent replay cannot place every step
+    (an unknown task, or a plan that blocks), rather than rendering in another
+    order.
     """
 
     steps = trajectory.get("steps") or []
-    identity = list(range(len(steps)))
     if len(steps) < 2:
-        return identity, None
+        return list(range(len(steps)))
+
+    from robotalk.tasks.shared import concurrent_fsm as cf
+    from robotalk.tasks.specs import load_task_spec
+    from robotalk.tasks.specs.runtime import SpecDrivenTaskValidator
 
     try:
-        from robotalk.tasks.shared import concurrent_fsm as cf
-        from robotalk.tasks.specs import load_task_spec
-        from robotalk.tasks.specs.runtime import (
-            SpecDrivenTaskValidator,
-        )
-
         inner = SpecDrivenTaskValidator(load_task_spec(trajectory["composite_task"]))
-        inner.initial_state = deepcopy(trajectory.get("initial_state") or {})
-        replay = cf.ConcurrentTaskValidator(inner, models=(cf.LOCK_STEP,)).replay(
-            {"agents": trajectory.get("agents"), "steps": steps},
-            model=cf.LOCK_STEP,
-            # A step error must not truncate the render: the sim is the
-            # authority on what physically happens, and it runs the whole plan.
-            stop_on_step_error=False,
-        )
     except Exception as exc:
-        return identity, f"{type(exc).__name__}: {exc}"
+        raise ValueError(f"cannot load task {trajectory.get('composite_task')!r}: {exc}") from exc
+    inner.initial_state = deepcopy(trajectory.get("initial_state") or {})
+    replay = cf.ConcurrentTaskValidator(inner, models=(cf.LOCK_STEP,)).replay(
+        {"agents": trajectory.get("agents"), "steps": steps},
+        model=cf.LOCK_STEP,
+        # A step error must not truncate the render: the sim is the
+        # authority on what physically happens, and it runs the whole plan.
+        stop_on_step_error=False,
+    )
 
     order: list[int] = []
     seen: set[int] = set()
@@ -63,36 +59,31 @@ def concurrent_step_order(trajectory: dict[str, Any]) -> tuple[list[int], str | 
         if 0 <= event.index < len(steps) and event.index not in seen:
             seen.add(event.index)
             order.append(event.index)
-
-    if len(order) == len(steps):
-        return order, None
-
-    missing = [index for index in identity if index not in seen]
-    order.extend(missing)
-    return order, (
-        f"replay covered {len(seen)}/{len(steps)} steps "
-        f"(blocked: {', '.join(replay.blocked) or 'none'}); "
-        f"{len(missing)} appended in file order"
-    )
+    if len(order) != len(steps):
+        raise ValueError(
+            f"concurrent replay placed {len(order)}/{len(steps)} steps "
+            f"(blocked: {', '.join(replay.blocked) or 'none'})"
+        )
+    return order
 
 
 def reorder_for_concurrent_render(
     trajectory: dict[str, Any],
-) -> tuple[dict[str, Any], list[int], str | None]:
+) -> tuple[dict[str, Any], list[int]]:
     """A copy of ``trajectory`` whose steps are in concurrent-executor order.
 
     Each step keeps its original ``step`` field, so image paths, reasoning, and
     any downstream join on step identity survive the permutation intact.
     """
 
-    order, reason = concurrent_step_order(trajectory)
+    order = concurrent_step_order(trajectory)
     steps = trajectory.get("steps") or []
     if order == list(range(len(steps))):
-        return trajectory, order, reason
+        return trajectory, order
 
     reordered = dict(trajectory)
     reordered["steps"] = [steps[index] for index in order]
-    return reordered, order, reason
+    return reordered, order
 
 
 __all__ = ["concurrent_step_order", "reorder_for_concurrent_render"]

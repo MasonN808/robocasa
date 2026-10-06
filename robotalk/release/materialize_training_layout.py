@@ -57,7 +57,7 @@ def materialize_one(raw_path: Path, hf_dir: Path, output: Path, instruction: str
                 files[Path(name).stem] = name
 
     trajectory = post_process_trajectory(raw, revalidate=True)
-    order, _ = concurrent_step_order(trajectory)
+    order = concurrent_step_order(trajectory)
     steps = trajectory["steps"]
     plan, executed = [], []
     for position, index in enumerate(order):
