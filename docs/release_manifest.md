@@ -575,3 +575,22 @@ Changes made in response to the manual review.
 - The output root is now created with `parents=True`.
 
 **Generation chain checked without API calls.** Observation insertion (`image.cli --revalidate`) on real cascade output, then a render sweep of one trajectory, produced the training layout with all 34 steps succeeding. The sweep docstring and README use the production render arguments (`--scene-compatibility-cache`, `--scene-sampling-seed 20260819`).
+
+## 17. Second README review (2026-10-06)
+
+**`--concurrent-expert-replay` is now the oracle default.**
+- Without it, the oracle replays the recorded joint order and bypasses the scheduler, which is what advances the opening-protocol phases.
+- On the published tick data, both test trajectories then stop after 3 rejections; with it, both reach the goal with 0 rejections.
+- `--no-concurrent-expert-replay` keeps the ordered mode for old flat records.
+
+**The Quickstart replay command failed as written.**
+- `live_sim_eval` defaulted to `--gl-backend osmesa` and the sweep's import-time render bootstrap to OSMesa, while the README set only `MUJOCO_GL=egl`. Earlier verification had passed `--gl-backend egl` explicitly.
+- Both now default to EGL, as every paper run used; `--gl-backend osmesa` selects CPU rendering.
+- Verified with no render environment variables set: the README replay (2/2 goals, videos written), a sweep render (34/34 steps), and the sim tests (172).
+
+**Certified scenes are now the sweep default.** The sweep defaults to `configs/eval/scene_compatibility_cache_v2.json`, i.e. one certified scene per trajectory as for the dataset. `--scene-compatibility-cache none` renders the `--layouts × --styles × --seeds` grid instead, whose own default is a single scene (11/34/42).
+
+**Changing the task split.**
+- New `robotalk.evaluation.resplit_cohort` regroups the cohort's tasks under another split.
+- New `reproduce.py --task-split/--cohort` options pass it to both training and evaluation, and `reproduce.py --record-videos` turns on episode videos.
+- The README now states the 43/10 split and the held-out task list, explains the training subsets, `--train-tasks`, and the video flags, and mentions weight decay and the cosine schedule.

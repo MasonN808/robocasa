@@ -73,6 +73,14 @@ class Reproducer:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.config = yaml.safe_load((ROOT / args.config).read_text(encoding="utf-8"))
+        # A different train/held-out split (see robotalk.evaluation.resplit_cohort).
+        if args.task_split:
+            self.config["splits"]["task_split"] = str(Path(args.task_split).resolve())
+        if args.cohort:
+            self.config["evaluation"]["cohort"] = str(Path(args.cohort).resolve())
+        if args.record_videos:
+            self.config["evaluation"]["common_args"].pop("--no-record-firsts", None)
+            self.config["evaluation"]["common_args"]["--record-firsts"] = True
         self.out = Path(os.environ.get("ROBOTALK_OUTPUT_ROOT", ROOT / "outputs"))
         # Partial (smoke) runs never count as finished paper cells.
         self.smoke = bool(args.tasks or args.episodes_per_task)
@@ -366,6 +374,12 @@ def main() -> None:
     parser.add_argument("--wandb-mode", default="disabled", choices=("online", "offline", "disabled"))
     parser.add_argument("--config", default="configs/experiments.yaml")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--record-videos", action="store_true",
+        help="save videos of the first success and first failure of each task",
+    )
+    parser.add_argument("--task-split", help="train/held-out task split JSON (default: the paper's 43/10)")
+    parser.add_argument("--cohort", help="evaluation cohort JSON matching --task-split")
     new = parser.add_argument_group("evaluate: any model on the paper's cohort and settings")
     new.add_argument("--base", default="Qwen/Qwen3-VL-8B-Instruct", help="base model, or a Gemini model id")
     new.add_argument("--adapter", help="LoRA adapter: a local directory or a Hugging Face repo")

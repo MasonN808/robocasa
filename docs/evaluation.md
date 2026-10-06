@@ -33,6 +33,18 @@ held-out tasks.
 
 ## Running
 
+The simplest route is `scripts/reproduce.py`, which starts the vLLM server
+with the right parsers and passes the paper's settings from
+`configs/experiments.yaml`:
+
+```bash
+python scripts/reproduce.py evaluate --adapter outputs/train/my_run   # any model
+python scripts/reproduce.py fig6 --models instruct_s30                # a paper cell
+```
+
+Underneath, each split is one call of the parallel evaluator, which runs 4
+simulator workers against the shared server:
+
 ```bash
 python -m robotalk.evaluation.live_sim_parallel_eval --workers 4 -- \
     --backend vllm --manifest configs/eval/fixed_live_sim_cohort.json \
@@ -42,11 +54,7 @@ python -m robotalk.evaluation.live_sim_parallel_eval --workers 4 -- \
     ...
 ```
 
-`scripts/reproduce.py` builds the full command for every paper cell from
-`configs/experiments.yaml`:
-- the shared settings;
-- the decoding profile;
-- the vLLM server arguments.
+`python scripts/reproduce.py <figure> --dry-run` prints the complete commands.
 
 Backends:
 - `vllm` for open-weight models, optionally with a LoRA adapter;

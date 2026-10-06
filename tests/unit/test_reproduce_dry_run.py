@@ -1,5 +1,6 @@
 """`scripts/reproduce.py --dry-run` must resolve every paper cell offline."""
 
+import json
 import os
 import shlex
 import subprocess
@@ -105,3 +106,23 @@ def test_evaluate_on_a_released_adapter_matches_its_paper_cell(tmp_path, model_i
         return [[t.replace(str(root), "ROOT") for t in c] for c in commands if "serve" in c or "--cohort-split" in c]
 
     assert normalize(custom, tmp_path / "custom") == normalize(cell, tmp_path / "cell")
+
+
+def test_record_videos_turns_on_episode_recordings(tmp_path):
+    commands = _dry_run(tmp_path, "evaluate", "--adapter", "x/y", "--record-videos")
+    evals = [c for c in commands if "--cohort-split" in c]
+    assert evals and all("--record-firsts" in c and "--no-record-firsts" not in c for c in evals)
+
+
+def test_a_custom_split_and_cohort_reach_training_and_evaluation(tmp_path):
+    split = {"train_tasks": ["prepare_coffee"], "held_out_tasks": ["garnish_cake"]}
+    (tmp_path / "split.json").write_text(json.dumps(split))
+    (tmp_path / "cohort.json").write_text("{}")
+    commands = _dry_run(
+        tmp_path, "fig6", "--models", "instruct_s30", "--train",
+        "--task-split", str(tmp_path / "split.json"), "--cohort", str(tmp_path / "cohort.json"),
+    )
+    train = next(c for c in commands if "robotalk.training.main" in c)
+    assert train[train.index("--train-tasks") + 1] == "prepare_coffee"
+    evals = [c for c in commands if "--cohort-split" in c]
+    assert evals and all(c[c.index("--manifest") + 1] == str(tmp_path / "cohort.json") for c in evals)

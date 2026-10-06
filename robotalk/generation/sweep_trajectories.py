@@ -10,9 +10,7 @@ Usage:
     # Render every trajectory once in a certified scene, as for the dataset:
     python -m robotalk.generation.sweep_trajectories \
         --input-dir data/robotalk_image \
-        --output-dir data/robotalk_rendered \
-        --scene-compatibility-cache configs/eval/scene_compatibility_cache_v2.json \
-        --scene-sampling-seed 20260819 --gl-backend egl
+        --output-dir data/robotalk_rendered
 
     # Limit to specific tasks or trajectory indices; --dry-run lists the jobs:
     python -m robotalk.generation.sweep_trajectories \
@@ -20,10 +18,10 @@ Usage:
         --output-dir data/robotalk_rendered \
         --tasks hot_dog_setup prepare_coffee --indices 0 1 2 --dry-run
 
-    # Sweep across several layouts, styles and seeds:
+    # Render in every combination of chosen layouts, styles and seeds instead:
     python -m robotalk.generation.sweep_trajectories \
         --input-dir data/robotalk_image \
-        --output-dir data/robotalk_sweep \
+        --output-dir data/robotalk_sweep --scene-compatibility-cache none \
         --workers 4 --layouts 11 56 --styles 34 42 --seeds 42 99
 """
 
@@ -101,19 +99,18 @@ TextColumn = raw_progress.TextColumn
 CLI_EPILOG = textwrap.dedent(
     """\
     Examples:
+      # One certified scene per trajectory (how the dataset was rendered):
       python -m robotalk.generation.sweep_trajectories \\
         --input-dir data/robotalk_image \\
-        --output-dir data/robotalk_rendered \\
-        --step-order concurrent
+        --output-dir data/robotalk_rendered
 
+      # Every combination of chosen layouts, styles and seeds:
       python -m robotalk.generation.sweep_trajectories \\
         --input-dir data/robotalk_image \\
         --output-dir data/robotalk_sweep \\
-        --workers 4 \\
+        --scene-compatibility-cache none \\
         --tasks hot_dog_setup prepare_coffee \\
-        --layouts 11 42 56 \\
-        --styles 34 42 \\
-        --seeds 1 2 3 4 5 6 7
+        --layouts 11 42 56 --styles 34 42 --seeds 1 2 3
     """
 )
 
@@ -2256,29 +2253,31 @@ def main() -> None:
         type=int,
         nargs="+",
         default=[11],
-        help="Kitchen layout ids (default: 11)",
+        help="Kitchen layout ids for --scene-compatibility-cache none (default: 11)",
     )
     parser.add_argument(
         "--styles",
         type=int,
         nargs="+",
         default=[34],
-        help="Kitchen style ids (default: 34)",
+        help="Kitchen style ids for --scene-compatibility-cache none (default: 34)",
     )
     parser.add_argument(
         "--seeds",
         type=int,
         nargs="+",
         default=[42],
-        help="Environment seeds (default: 42)",
+        help="Environment seeds for --scene-compatibility-cache none (default: 42)",
     )
     parser.add_argument(
         "--scene-compatibility-cache",
-        type=Path,
-        default=None,
+        default=str(REPO_ROOT / "configs/eval/scene_compatibility_cache_v2.json"),
         help=(
-            "Select one certified compatible scene per trajectory instead of "
-            "executing the layouts/styles/seeds Cartesian product."
+            "Render each trajectory in one certified scene, sampled from the "
+            "scenes this cache lists as compatible with its task and initial "
+            "configuration (how the dataset was rendered). Pass 'none' to "
+            "render every trajectory in each --layouts x --styles x --seeds "
+            "combination instead."
         ),
     )
     parser.add_argument("--scene-sampling-seed", type=int, default=20260819)
@@ -2369,11 +2368,8 @@ def main() -> None:
     parser.add_argument(
         "--gl-backend",
         choices=["osmesa", "egl"],
-        default=None,
-        help=(
-            "OpenGL backend. Defaults to 'egl' when --gpu-ids is set, "
-            "otherwise 'osmesa'."
-        ),
+        default="egl",
+        help="OpenGL backend: 'egl' (headless GPU rendering) or 'osmesa' (CPU).",
     )
     parser.add_argument(
         "--robot-spawn",
@@ -2461,6 +2457,8 @@ def main() -> None:
         parser.error(str(exc))
 
     combos = list(itertools.product(args.layouts, args.styles, args.seeds))
+    if str(args.scene_compatibility_cache).lower() == "none":
+        args.scene_compatibility_cache = None
     if args.scene_compatibility_cache is not None:
         from robotalk.scene_sampling import (
             load_compatibility_cache,

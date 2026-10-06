@@ -15,8 +15,8 @@ def normalize_mujoco_render_env(
 
     Linux commonly uses either `egl` or `osmesa`, and those backends require
     `PYOPENGL_PLATFORM` to match. If the backend is otherwise unspecified, we
-    preserve an inherited EGL choice and only default to OSMesa when no better
-    signal is available.
+    default to EGL (headless GPU rendering, as for the dataset) unless
+    `PYOPENGL_PLATFORM=osmesa` asks for CPU rendering.
     """
 
     resolved_platform = (platform or sys.platform).lower()
@@ -35,7 +35,7 @@ def normalize_mujoco_render_env(
         return env
 
     if not mujoco_gl:
-        mujoco_gl = "egl" if pyopengl_platform == "egl" else "osmesa"
+        mujoco_gl = "osmesa" if pyopengl_platform == "osmesa" else "egl"
         env["MUJOCO_GL"] = mujoco_gl
 
     if mujoco_gl == "egl":

@@ -152,22 +152,24 @@ installed correctly, in three steps.
 3. Replay two of the trajectories in the simulator:
 
    ```bash
-   MUJOCO_GL=egl python -m robotalk.evaluation.live_sim_eval --backend oracle \
-       --concurrent-expert-replay --manifest configs/eval/oracle_smoke.json \
-       --tasks prepare_coffee --dataset-root data/robotalk_rendered --output-dir outputs/oracle
+   python -m robotalk.evaluation.live_sim_eval --backend oracle \
+       --manifest configs/eval/oracle_smoke.json --tasks prepare_coffee \
+       --dataset-root data/robotalk_rendered --output-dir outputs/oracle
    ```
 
    | Argument | Meaning |
    |---|---|
-   | `--backend oracle` | Replay the recorded expert calls instead of querying a model. Every replayed trajectory should reach its goal. |
-   | `--concurrent-expert-replay` | Run the two robots' calls through the same concurrent scheduler used to evaluate models, with each robot advancing its own calls. |
+   | `--backend oracle` | Replay the recorded demonstration calls instead of querying a model. The calls go through the same concurrent scheduler, validator and simulator used to evaluate models, so every replayed trajectory should reach its goal. |
    | `--manifest configs/eval/oracle_smoke.json` | Which trajectories to replay: two per task, for four tasks. |
    | `--tasks prepare_coffee` | Only the task downloaded in step 1. |
    | `--dataset-root`, `--output-dir` | Where to read trajectories and write results. |
-   | `MUJOCO_GL=egl` | Render on the GPU without a display. |
 
-   Outcomes are written to `outputs/oracle/live_sim_trajectories.jsonl` and
-   camera videos to `outputs/oracle/recordings/`.
+   Outcomes are written to `outputs/oracle/live_sim_trajectories.jsonl`.
+   Videos of each robot's cameras for the first successful and the first
+   failed episode of each task go to `outputs/oracle/recordings/`. Use
+   `--no-record-firsts` to turn videos off, or `--save-frames` to keep camera
+   images of every episode instead. Rendering uses EGL (headless GPU);
+   `--gl-backend osmesa` renders on the CPU instead.
 
 **Run a fine-tuned model** for one episode on each of two tasks. This needs a
 GPU and vLLM:
@@ -194,6 +196,18 @@ scripts/        reproduce.py and a SLURM wrapper
 tests/          unit tests (tests/unit) and simulator tests (tests/sim)
 docs/           paper PDF and technical notes
 ```
+
+### Task split
+
+The paper trains on 43 tasks and holds out 10 to test generalization to new
+tasks. The split is `configs/splits/43_train_10_heldout.json`. The held-out
+tasks are `arrange_bread_bowl`, `beverage_organization`,
+`cluster_items_for_clearing`, `distribute_chicken`, `garnish_cake`,
+`hot_dog_setup`, `meat_skewer_assembly`, `prepare_cheese_station`,
+`prepare_sandwich_station` and `serve_meal_juice`. Training uses the 43 by
+default, and evaluation reports both groups separately. To use another split,
+see [Training new models](#training-new-models) and
+[Evaluating new models](#evaluating-new-models).
 
 Technical notes:
 - [concurrency semantics](docs/concurrency_semantics.md)
@@ -271,8 +285,6 @@ python scripts/reproduce.py fig6 --models instruct_s30   # one model
 - **Training:** about 2 hours per 30 trajectories per task on 4× B200. That
   ranges from 2 h (30/task) to 9.7 h (150/task), or about 235 B200 GPU-hours
   for all ten models.
-- **Variation:** Thinking models are evaluated with sampling (temperature 0.6),
-  so their rates vary slightly from run to run.
 
 ### Fig. 7: rationales, at 30 trajectories per task
 
@@ -307,12 +319,16 @@ python -m robotalk.generation.image.cli --revalidate \
     --dataset data/my_raw/prepare_coffee/summary.json \
     --output-dataset data/my_image/prepare_coffee/summary.json
 
-# 3. Replay each trajectory in a certified scene and render the camera views.
-MUJOCO_GL=egl python -m robotalk.generation.sweep_trajectories \
-    --input-dir data/my_image --output-dir data/my_rendered \
-    --scene-compatibility-cache configs/eval/scene_compatibility_cache_v2.json \
-    --scene-sampling-seed 20260819 --gl-backend egl
+# 3. Replay each trajectory in a kitchen scene and render the camera views.
+python -m robotalk.generation.sweep_trajectories --input-dir data/my_image --output-dir data/my_rendered
 ```
+
+In stage 3 each trajectory is rendered in one kitchen scene. The scene is drawn
+from the scenes known to work for its task and starting configuration
+(`configs/eval/scene_compatibility_cache_v2.json`, seeded by
+`--scene-sampling-seed`), as for the dataset. Alternatively,
+`--scene-compatibility-cache none --layouts 11 40 --styles 14 34 --seeds 42`
+renders every trajectory in each listed layout, style and seed combination.
 
 The last stage writes the same per-trajectory layout as the Quickstart, so the
 result can be used directly for training (`--dataset-root data/my_rendered`).
@@ -321,8 +337,9 @@ dataset format.
 
 ## Training new models
 
-Training defaults are the paper's settings: LoRA rank 16, learning rate 1e-4,
-one epoch, effective batch 64 over 4 GPUs, and the 43 training tasks. Training
+Training defaults are the paper's settings: LoRA rank 16 (alpha 32, dropout
+0.05), learning rate 1e-4 with weight decay 0.01 and a cosine schedule, one
+epoch, effective batch 64 over 4 GPUs, and the 43 training tasks. Training
 reads the per-trajectory layout in `data/robotalk_rendered`, as built in the
 Quickstart or by `reproduce.py`. Change the folder with `--dataset-root` or
 `ROBOTALK_DATA_ROOT`.
@@ -340,11 +357,19 @@ accelerate launch --config_file configs/train/accelerate_multigpu.yaml --num_pro
 - **Rationales:** add `--train-reasoning` to both commands to train with
   rationales (`<think>…</think>` before each tool call).
 - **Thinking model:** use `--model-name-or-path Qwen/Qwen3-VL-8B-Thinking`.
-- **Paper's training subsets:** to train on 30–150 trajectories per task as
-  in Fig. 6, run `python -m robotalk.training.materialize_scale_artifacts
-  --master outputs/preprocessed/my_run --selection configs/splits/selection_30.json
-  --output outputs/preprocessed/my_run_s30` between the two steps, and train on
-  that folder.
+- **Fewer trajectories per task (Fig. 6):** step 1 builds examples from all
+  150 trajectories of each task. The paper's smaller training sets are fixed,
+  nested subsets listed in `configs/splits/selection_{30,60,90,120,150}.json`.
+  To train on one, cut the step-1 output down to it, then pass the new folder
+  to step 2:
+
+  ```bash
+  python -m robotalk.training.materialize_scale_artifacts \
+      --master outputs/preprocessed/my_run --selection configs/splits/selection_30.json \
+      --output outputs/preprocessed/my_run_30
+  ```
+- **Other tasks:** `--train-tasks a,b,c` on both commands trains on other
+  tasks, for example the training half of your own split.
 - **GPU memory:** the paper's 8 examples per GPU fit 180 GB B200s. On 80–96 GB
   GPUs, add `--per-device-batch-size 4 --grad-accum 4`, which keeps the
   effective batch at 64.
@@ -379,6 +404,20 @@ python scripts/reproduce.py evaluate --profile gemini --base gemini-3-flash-prev
   prints the error-free success counts per split.
 - **Quick tests:** `--tasks a,b --episodes-per-task 1` runs a short smoke test
   instead, written to `outputs/eval_smoke/`.
+- **Videos:** `--record-videos` saves videos of the first successful and the
+  first failed episode of each task (off by default, as for the paper).
+- **Another task split:** write a split file like
+  `configs/splits/43_train_10_heldout.json`, regroup the evaluation episodes
+  under it, and pass both:
+
+  ```bash
+  python -m robotalk.evaluation.resplit_cohort --task-split my_split.json --output my_cohort.json
+  python scripts/reproduce.py evaluate --adapter outputs/train/my_run \
+      --task-split my_split.json --cohort my_cohort.json
+  ```
+
+  A task keeps its evaluation configurations when it changes group. Its 10
+  episodes are drawn anew, because the draw is seeded by the group name.
 
 ## Limitations
 
@@ -386,8 +425,6 @@ python scripts/reproduce.py evaluate --profile gemini --base gemini-3-flash-prev
   planning, communication and coordination, not low-level motor control.
 - Success is judged by a symbolic FSM that abstracts some physical details. For
   example, placing the spatula in the pot counts as stirring in CheeseMixing.
-- There are two robots, 53 tasks and a certified set of 60 kitchen scenes.
-  Held-out generalization is measured on 10 task types.
 
 ## License
 

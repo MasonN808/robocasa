@@ -1387,11 +1387,10 @@ def run_trajectory_partial(
     opening_phase = 0
 
     # Concurrent replay lets each agent advance its own stream under the timing
-    # scheduler, the regime a model actually meets at eval. It is only sound
-    # when cross-agent ordering is explicit (wait_for_signal); with implicit
-    # ordering the scheduler re-interleaves and breaks correct plans, which is
-    # why ordered replay is the default.
-    concurrent_replay = bool(getattr(args, "concurrent_expert_replay", False))
+    # scheduler, the regime a model actually meets at eval, and is the default.
+    # Ordered replay (the recorded joint order, bypassing the scheduler) is only
+    # for old flat records: it does not advance the opening protocol's phases.
+    concurrent_replay = bool(getattr(args, "concurrent_expert_replay", True))
     expert_queues: dict[str, list[dict[str, Any]]] = {}
     if concurrent_replay:
         for entry in expert_sequence:
@@ -2358,7 +2357,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--layout", type=int, default=11)
     parser.add_argument("--style", type=int, default=34)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--gl-backend", default="osmesa")
+    parser.add_argument(
+        "--gl-backend", default="egl", choices=("egl", "osmesa"),
+        help="OpenGL backend: 'egl' (headless GPU rendering) or 'osmesa' (CPU).",
+    )
     parser.add_argument("--render-size", type=int, default=512)
     parser.add_argument(
         "--map-dpi",
@@ -2572,12 +2574,13 @@ def parse_args() -> argparse.Namespace:
     )
     partial.add_argument(
         "--concurrent-expert-replay",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "Replay expert trajectories through the timing scheduler instead of "
-            "in recorded joint order, so each agent advances its own stream. "
-            "Only sound when cross-agent ordering is explicit (wait_for_signal); "
-            "with implicit ordering the scheduler re-interleaves correct plans."
+            "Oracle backend: replay each agent's recorded calls through the "
+            "concurrent scheduler that models are evaluated with (default). "
+            "--no-concurrent-expert-replay replays the recorded joint order "
+            "instead, which only suits old flat (non-tick) records."
         ),
     )
     partial.add_argument(
