@@ -1,146 +1,42 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
-
-# dotenv
-.env
-
-# virtualenv
-.venv
-.venv_d
-venv/
-ENV/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
 .mypy_cache/
+.ipynb_checkpoints/
+.cache/
 
-# mac
+# Environments and local settings
+.venv/
+venv/
+.env
+.python-version
+.idea/
+.vscode/
 .DS_Store
-__MACOSX
 
-# mujoco-key
-mjkey.txt
-
+# MuJoCo / RoboCasa runtime files
+MUJOCO_LOG.TXT
+macros_private.py
 .mujocomanip_temp_model.xml
 
-#*.jpg
-.idea
+# Reproduction data and outputs (see README)
+/data/
+/outputs/
 
-.pytest_cache/
-
-MUJOCO_LOG.TXT
-
-macros_private.py
-robocasa/models/assets/demonstrations_private
-datasets
-!docs/**/datasets
-
-# model zoo
-v-hacd
-robocasa/models/assets/model_zoo_assets
-
-# object assets
-robocasa/models/assets/objects/**/*.glb
-robocasa/models/assets/objects/**/*.obj
-robocasa/models/assets/objects/**/*.mtl
-robocasa/models/assets/objects/**/*.blend
-robocasa/models/assets/objects/**/*.blend1
-robocasa/models/assets/objects/**/*.mp4
-robocasa/models/assets/objects/**/*.png
-robocasa/models/assets/objects/**/*.jpeg
-robocasa/models/assets/objects/**/model.xml
-
-# don't track any files in objects folder
+# RoboCasa365 kitchen assets, installed by
+# `python -m robocasa.scripts.download_kitchen_assets`
+robocasa/models/assets/README.md
+robocasa/models/assets/textures
+robocasa/models/assets/generative_textures
 robocasa/models/assets/objects
-
-# Ignore all fixture asset files
+robocasa/models/assets/model_zoo_assets
+robocasa/models/assets/demonstrations_private
 robocasa/models/assets/fixtures/**/*.glb
 robocasa/models/assets/fixtures/**/*.obj
 robocasa/models/assets/fixtures/**/*.mtl
@@ -150,137 +46,9 @@ robocasa/models/assets/fixtures/**/*.mp4
 robocasa/models/assets/fixtures/**/*.png
 robocasa/models/assets/fixtures/**/*.jpeg
 robocasa/models/assets/fixtures/**/model.xml
-# Re-include selected directories
 !robocasa/models/assets/fixtures/fixture_registry/**
 !robocasa/models/assets/fixtures/accessories/**
 !robocasa/models/assets/fixtures/counters/**
-
-# default textures
-robocasa/models/assets/textures
-
-# midjourney-generated textures
-robocasa/models/assets/generative_textures
-
-# taskgen outputs
-robocasa/scripts/internal/taskgen/activity_prompting/outputs/
-robocasa/scripts/internal/taskgen/task_prompting/outputs/
-robocasa/scripts/taskgen/activity_prompting/outputs/
-robocasa/scripts/taskgen/task_prompting/outputs/
-
-# task-level generated data
-data_generation/task_level/data/**/*.jsonl
-
-# Always ignore macOS junk
-**/.DS_Store
-
-videos/
-videos_batch/
-data_generation/task_level/data
-data_generation/task_level/data_k3
-
-# Cluster commands
-CLUSTER.md
-
-# Vertex AI
-google-cloud-sdk
-google-cloud-cli-linux-x86_64.tar.gz
-
-AGENTS.md
-
-tmp/
-.codex
-
-slurm_logs/
-training/bc_task_vlm/runs/
-
-training/bc_task_vlm/preprocessed/*
-
-PROGRESS.md
-training/bc_task_vlm/staged_hf*
-*hf_cache/
-data_analysis/raw_gemini_pro_traj
-
-data_analysis/model_sampling_comparison
-
-data_generation/task_level/data_probe/
-
-# model evaluation outputs
-logs/
-
-# Optional external VLA repos are tracked as submodule gitlinks. Keep any other
-# local external checkout ignored, and keep local env/build outputs ignored.
-external/*
-!external/openpi/
-!external/rldx-1/
-!external/Isaac-GR00T/
-external/*/.venv/
-external/*/.pixi/
-external/*/*.egg-info/
-external/*/build/
-external/*/dist/
-
-model_evals/backends/*/assets/
-model_evals/backends/*/ckpts/
-model_evals/backends/*/logs/
-
-# --- bc_task_vlm experiment data & artifacts (large / regenerable) ---
-# Staged datasets (hundreds of GB) and derived data subsets
-training/bc_task_vlm/staged_tars/
-training/bc_task_vlm/staged_hf/
-training/bc_task_vlm/eval_data_subset/
-training/bc_task_vlm/local_train_subset/
-# Eval run outputs (predictions/judge jsonl, per-run metrics, figures)
-training/bc_task_vlm/eval_runs/
-# Generated eval manifests (rebuild via build_eval_manifest.py)
-training/bc_task_vlm/eval_manifests/
-# Model checkpoints / adapters
-training/bc_task_vlm/runs/
-# Stray SLURM logs written to repo root
-slurm-*.out
-
-# Local agent config
-.claude/
-model_evals/data/
-*.orig
-
-# Generated communication-ablation videos and previews
-artifacts/
-
-# Bulk generated prompt exemplars (regenerable)
-training/bc_task_vlm/reports/all_config_exemplar_bank/
-
-# Experimental RL implementation and outputs (kept local for now)
-training/bc_task_vlm/rl/
-training/bc_task_vlm/rl_cohorts/
-training/bc_task_vlm/rl_runs/
-training/scripts/rl/
-tests/rl/
-
-# Experimental DAgger implementation (kept local for now)
-training/bc_task_vlm/dagger/
-training/bc_task_vlm/plans/dagger_resynchronization_plan.md
-tests/test_bc_task_vlm_dagger.py
-launch_dagger_*.sbatch
-
-# RoboTalk bulk exports (contents live on the Hugging Face Hub; see upload_receipt.json files)
-training/bc_task_vlm/reports/robotalk_hf_full/
-training/bc_task_vlm/reports/robotalk_hf_smoke/
-training/bc_task_vlm/reports/robotalk_anonymous_review/*
-!training/bc_task_vlm/reports/robotalk_anonymous_review/README.md
-!training/bc_task_vlm/reports/robotalk_anonymous_review/audit.json
-!training/bc_task_vlm/reports/robotalk_anonymous_review/upload_receipt.json
-training/bc_task_vlm/reports/robotalk_model_release/upload/
-training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/*
-!training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/plate_store_dinner_traj088_initial_interior_lower.png
-!training/bc_task_vlm/reports/plate_store_dinner_traj088_overview/camera_configs.json
-training/bc_task_vlm/reports/communication_waitfix_v3/email_monitor.log
-
-# Reproduction outputs (evaluations, figures, checkpoints)
-/outputs/
-/data/
-
-# Kitchen assets installed by `python -m robocasa.scripts.download_kitchen_assets`
-robocasa/models/assets/README.md
 robocasa/models/assets/fixtures/cabinets/cabinet_panels/CabinetDoorPanel*
 robocasa/models/assets/fixtures/handles/CabinetHandle*
 robocasa/models/assets/fixtures/blenders
