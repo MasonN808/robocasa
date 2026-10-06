@@ -534,3 +534,7 @@ The vLLM server logs confirm the paper's parsers for each profile.
   - `add_lemon_to_fish` reached the goal, with 1 rejected call.
   - `garnish_cake` ended in a mutual-wait deadlock.
 - No token usage is recorded by the evaluator.
+- **Consecutive episodes:** the same command with `--episodes-per-task 2`, 4 episodes. Each task's two episodes ran in one worker process.
+  - `add_lemon_to_fish`: success, then success in a new scene.
+  - `garnish_cake`: mutual-wait deadlock, then success in a new scene with 0 rejections.
+  - Episode 2 starts from a clean state: a fresh handshake under the other coordinator, and no waits left over from the deadlocked episode.
